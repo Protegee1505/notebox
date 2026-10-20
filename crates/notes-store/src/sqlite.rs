@@ -15,8 +15,9 @@ use std::io::Cursor;
 use std::path::Path;
 
 use notes_core::{
-    normalize_tags, read_export_zip, write_export_zip, ExportAttachment, ExportBundle, ExportNote,
-    Note, NoteMeta, WorkspaceDocument,
+    decode_version_vector, encode_version_vector, normalize_tags, read_export_zip,
+    write_export_zip, ExportAttachment, ExportBundle, ExportNote, Note, NoteMeta, VersionVector,
+    WorkspaceDocument,
 };
 use notes_proto::{NoteId, Notebook, NotebookId};
 use rusqlite::types::Value;
@@ -25,11 +26,15 @@ use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use crate::error::StoreError;
 use crate::{
     ImportReport, NewNote, NoteQuery, NoteStore, NoteSummary, NoteView, SearchHit, SearchQuery,
-    SyncState, TagCount,
+    SyncState, TagCount, WorkspacePush,
 };
 
 /// Schema version written to `PRAGMA user_version`.
-pub const SCHEMA_VERSION: i32 = 1;
+pub const SCHEMA_VERSION: i32 = 2;
+
+/// Workspace columns read by [`NoteStore::workspace_pending`]:
+/// snapshot, local version vector, last pushed version vector.
+type WorkspaceRow = (Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>);
 
 /// Database file name used by native builds and by the browser build.
 pub const APP_DB_NAME: &str = "notebox.db";
@@ -55,7 +60,8 @@ CREATE TABLE IF NOT EXISTS note (
     created_at  INTEGER NOT NULL,
     updated_at  INTEGER NOT NULL,
     trashed_at  INTEGER NOT NULL DEFAULT 0,
-    last_pushed BLOB
+    last_pushed BLOB,
+    local_vv    BLOB
 );
 CREATE INDEX IF NOT EXISTS note_list ON note (trashed_at, archived, updated_at DESC);
 CREATE INDEX IF NOT EXISTS note_notebook ON note (notebook_id);
@@ -82,8 +88,10 @@ CREATE TABLE IF NOT EXISTS notebook (
 );
 
 CREATE TABLE IF NOT EXISTS workspace (
-    id       INTEGER PRIMARY KEY CHECK (id = 1),
-    snapshot BLOB NOT NULL
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    snapshot    BLOB NOT NULL,
+    local_vv    BLOB,
+    last_pushed BLOB
 );
 
 CREATE TABLE IF NOT EXISTS attachment (
@@ -98,17 +106,40 @@ CREATE INDEX IF NOT EXISTS attachment_note ON attachment (note_id);
 
 CREATE TABLE IF NOT EXISTS sync_state (
     id         INTEGER PRIMARY KEY CHECK (id = 1),
-    cursor     BLOB,
+    cursor     INTEGER,
     updated_at INTEGER NOT NULL DEFAULT 0
 );
 INSERT OR IGNORE INTO sync_state (id, cursor, updated_at) VALUES (1, NULL, 0);
 "#;
 
+/// Schema v1 to v2: per-row sync bookkeeping and an integer pull cursor.
+///
+/// `local_vv` and `last_pushed` are encoded Loro version vectors kept as
+/// bytes: the sync engine compares them, so it can find unsynced notes
+/// without parsing every snapshot. A row written by v1 has no `local_vv`,
+/// which reads as "not synced" — the engine then pushes it once and fills
+/// the column, so an upgraded database heals itself.
+const MIGRATION_V2: &str = r#"
+ALTER TABLE note ADD COLUMN local_vv BLOB;
+ALTER TABLE workspace ADD COLUMN local_vv BLOB;
+ALTER TABLE workspace ADD COLUMN last_pushed BLOB;
+
+CREATE TABLE sync_state_v2 (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    cursor     INTEGER,
+    updated_at INTEGER NOT NULL DEFAULT 0
+);
+INSERT INTO sync_state_v2 (id, cursor, updated_at)
+    SELECT id, NULL, updated_at FROM sync_state;
+DROP TABLE sync_state;
+ALTER TABLE sync_state_v2 RENAME TO sync_state;
+"#;
+
 const UPSERT_NOTE: &str = r#"
 INSERT INTO note (
     id, snapshot, title, preview, notebook_id, pinned, archived, color,
-    created_at, updated_at, trashed_at
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+    created_at, updated_at, trashed_at, local_vv
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
 ON CONFLICT(id) DO UPDATE SET
     snapshot    = excluded.snapshot,
     title       = excluded.title,
@@ -119,7 +150,8 @@ ON CONFLICT(id) DO UPDATE SET
     color       = excluded.color,
     created_at  = excluded.created_at,
     updated_at  = excluded.updated_at,
-    trashed_at  = excluded.trashed_at
+    trashed_at  = excluded.trashed_at,
+    local_vv    = excluded.local_vv
 "#;
 
 const SUMMARY_COLUMNS: &str = "n.id, n.title, n.preview, n.notebook_id, n.pinned, n.archived, \
@@ -213,6 +245,11 @@ impl NoteStore for SqliteStore {
     }
 
     fn save_note(&self, note: &Note, updated_at: i64) -> Result<NoteSummary, StoreError> {
+        // Persist the edit as one change at the time the caller saved it. A
+        // pending, uncommitted insert cannot be exported as a sync update, so
+        // saving without this commit would queue a change the server never
+        // receives.
+        note.commit_at(updated_at);
         let mut conn = self.connection();
         let tx = conn.transaction()?;
         let summary = save_note_with(&tx, note, updated_at)?;
@@ -302,15 +339,57 @@ impl NoteStore for SqliteStore {
     fn apply_update(&self, id: &NoteId, update: &[u8], at: i64) -> Result<Note, StoreError> {
         let mut conn = self.connection();
         let tx = conn.transaction()?;
+        // Whether the server already had everything this note had. If it did,
+        // the imported update comes back from the server and must not be
+        // queued for a push of its own.
+        let was_clean = note_was_clean(&tx, id)?;
         let note = match load_note(&tx, id)? {
             Some(note) => note,
-            None => Note::new(*id, at)?,
+            None => Note::empty(*id),
         };
-        note.document().import(update)?;
+        let status = note.document().import(update)?;
+        if status.pending.is_some() {
+            // The server sends a note's updates in log order, so a missing
+            // dependency means the log is not what this build expects.
+            // Accepting it would advance the cursor past an edit that never
+            // applied.
+            return Err(StoreError::Corrupt(format!(
+                "note {id} arrived without the history it builds on"
+            )));
+        }
         note.commit_at(at);
         save_note_with(&tx, &note, at)?;
+        if was_clean {
+            // The note now holds exactly what the server confirmed plus what
+            // the server just sent, so no push is owed.
+            let version = encode_version_vector(&note.document().version());
+            tx.execute(
+                "UPDATE note SET last_pushed = ?2 WHERE id = ?1",
+                params![id.to_string(), version],
+            )?;
+        }
         tx.commit()?;
         Ok(note)
+    }
+
+    fn unsynced_notes(&self, limit: usize) -> Result<Vec<NoteId>, StoreError> {
+        let conn = self.conn.borrow();
+        let mut statement = conn.prepare(
+            "SELECT id FROM note
+             WHERE local_vv IS NULL OR local_vv IS NOT last_pushed
+             ORDER BY updated_at DESC, id
+             LIMIT ?1",
+        )?;
+        let limit = if limit == 0 { -1 } else { limit as i64 };
+        let rows = statement.query_map(params![limit], |row| row.get::<_, String>(0))?;
+        let mut ids = Vec::new();
+        for row in rows {
+            let text = row?;
+            ids.push(
+                NoteId::parse(&text).map_err(|_| StoreError::Corrupt(format!("note id {text}")))?,
+            );
+        }
+        Ok(ids)
     }
 
     fn last_pushed(&self, id: &NoteId) -> Result<Option<Vec<u8>>, StoreError> {
@@ -411,8 +490,21 @@ impl NoteStore for SqliteStore {
         let mut conn = self.connection();
         let tx = conn.transaction()?;
         let workspace = load_workspace(&tx)?;
-        workspace.import(bytes)?;
+        let was_clean = workspace_was_clean(&tx)?;
+        let status = workspace.import(bytes)?;
+        if status.pending.is_some() {
+            return Err(StoreError::Corrupt(
+                "the notebook list arrived without the history it builds on".to_string(),
+            ));
+        }
         save_workspace(&tx, &workspace)?;
+        if was_clean {
+            let version = encode_version_vector(&workspace.version());
+            tx.execute(
+                "UPDATE workspace SET last_pushed = ?1 WHERE id = 1",
+                params![version],
+            )?;
+        }
         tx.execute("DELETE FROM notebook", [])?;
         let notebooks = workspace.notebooks();
         {
@@ -428,6 +520,39 @@ impl NoteStore for SqliteStore {
         }
         tx.commit()?;
         Ok(notebooks)
+    }
+
+    fn workspace_pending(&self) -> Result<Option<WorkspacePush>, StoreError> {
+        let conn = self.conn.borrow();
+        let row: Option<WorkspaceRow> = conn
+            .query_row(
+                "SELECT snapshot, local_vv, last_pushed FROM workspace WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let Some((snapshot, local_vv, last_pushed)) = row else {
+            return Ok(None);
+        };
+        let synced = matches!(&local_vv, Some(version) if last_pushed.as_ref() == Some(version));
+        if synced {
+            return Ok(None);
+        }
+        let workspace = WorkspaceDocument::from_snapshot(&snapshot)?;
+        let since = decode_version(last_pushed.as_deref())?;
+        Ok(Some(WorkspacePush {
+            updates: workspace.updates_since(&since)?,
+            version: encode_version_vector(&workspace.version()),
+        }))
+    }
+
+    fn mark_workspace_pushed(&self, version: &[u8]) -> Result<(), StoreError> {
+        let conn = self.conn.borrow();
+        conn.execute(
+            "UPDATE workspace SET last_pushed = ?1 WHERE id = 1",
+            params![version],
+        )?;
+        Ok(())
     }
 
     fn list_tags(&self) -> Result<Vec<TagCount>, StoreError> {
@@ -559,6 +684,11 @@ fn migrate(conn: &Connection) -> Result<(), StoreError> {
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             Ok(())
         }
+        1 => {
+            conn.execute_batch(MIGRATION_V2)?;
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            Ok(())
+        }
         v if v == SCHEMA_VERSION => Ok(()),
         v if v > SCHEMA_VERSION => Err(StoreError::Invalid(format!(
             "database schema {v} is newer than this build's {SCHEMA_VERSION}"
@@ -604,6 +734,7 @@ fn save_note_with(
     };
     let trashed_at = meta.trashed_at.unwrap_or(0);
     let notebook_id = meta.notebook_id.map(|id| id.to_string());
+    let local_vv = encode_version_vector(&note.document().version());
 
     conn.execute(
         UPSERT_NOTE,
@@ -618,7 +749,8 @@ fn save_note_with(
             meta.color,
             created_at,
             updated_at,
-            trashed_at
+            trashed_at,
+            local_vv
         ],
     )?;
 
@@ -926,12 +1058,51 @@ fn load_workspace(conn: &Connection) -> Result<WorkspaceDocument, StoreError> {
 
 fn save_workspace(conn: &Connection, workspace: &WorkspaceDocument) -> Result<(), StoreError> {
     let snapshot = workspace.snapshot()?;
+    let local_vv = encode_version_vector(&workspace.version());
     conn.execute(
-        "INSERT INTO workspace (id, snapshot) VALUES (1, ?1)
-         ON CONFLICT(id) DO UPDATE SET snapshot = excluded.snapshot",
-        params![snapshot],
+        "INSERT INTO workspace (id, snapshot, local_vv) VALUES (1, ?1, ?2)
+         ON CONFLICT(id) DO UPDATE SET snapshot = excluded.snapshot, local_vv = excluded.local_vv",
+        params![snapshot, local_vv],
     )?;
     Ok(())
+}
+
+/// Whether the server already had everything this note had.
+///
+/// A note written by schema v1 has no `local_vv`; that counts as not clean,
+/// so the first sync after an upgrade pushes it once and fills the column.
+fn note_was_clean(conn: &Connection, id: &NoteId) -> Result<bool, StoreError> {
+    let clean: Option<bool> = conn
+        .query_row(
+            "SELECT (local_vv IS NOT NULL AND local_vv IS last_pushed)
+             FROM note WHERE id = ?1",
+            params![id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    // No row yet: the note is new, so nothing local is owed to the server.
+    Ok(clean.unwrap_or(true))
+}
+
+/// Whether the server already had everything the workspace document had.
+fn workspace_was_clean(conn: &Connection) -> Result<bool, StoreError> {
+    let clean: Option<bool> = conn
+        .query_row(
+            "SELECT (local_vv IS NOT NULL AND local_vv IS last_pushed)
+             FROM workspace WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(clean.unwrap_or(true))
+}
+
+/// Decode an encoded `VersionVector`, treating a missing one as "nothing yet".
+fn decode_version(bytes: Option<&[u8]>) -> Result<VersionVector, StoreError> {
+    match bytes {
+        Some(bytes) => decode_version_vector(bytes).map_err(StoreError::Note),
+        None => Ok(VersionVector::default()),
+    }
 }
 
 /// Gather every note, notebook and attachment for an export.

@@ -2,7 +2,7 @@
 
 use std::time::Instant;
 
-use notes_core::Note;
+use notes_core::{encode_version_vector, Note};
 use notes_proto::{NoteId, NotebookId};
 use notes_store::{
     ImportReport, NewNote, NoteQuery, NoteStore, NoteView, SearchQuery, SqliteStore, SyncState,
@@ -374,12 +374,66 @@ fn an_update_for_an_unknown_note_creates_it() {
 }
 
 #[test]
+fn an_imported_note_carries_no_local_history_of_its_own() {
+    let source = store();
+    let note = create(&source, "shared text", 1_000);
+    let update = note.document().all_updates().expect("updates");
+
+    let target = store();
+    let created = target
+        .apply_update(&note.id(), &update, 2_000)
+        .expect("apply");
+    assert_eq!(
+        created.document().version(),
+        note.document().version(),
+        "an import must not add operations the server never sees"
+    );
+
+    // The importer edits; the creator must be able to apply that edit without
+    // having received any local skeleton from the importer.
+    let edited = target.open_note(&note.id()).expect("open");
+    edited
+        .insert(edited.char_len(), " and mine")
+        .expect("insert");
+    target.save_note(&edited, 2_100).expect("save");
+    let diff = edited
+        .document()
+        .updates_since(&note.document().version())
+        .expect("updates");
+    let merged = source
+        .apply_update(&note.id(), &diff, 2_200)
+        .expect("apply");
+    assert_eq!(merged.text(), "shared text and mine");
+}
+
+#[test]
+fn saving_commits_a_pending_edit_so_it_can_be_pushed() {
+    let store = store();
+    let note = create(&store, "start", 1_000);
+    let base = note.document().version();
+
+    let edited = store.open_note(&note.id()).expect("open");
+    edited.insert(edited.char_len(), " more").expect("insert");
+    store.save_note(&edited, 1_100).expect("save");
+
+    // The saved note exports the edit as a complete update: a replica at the
+    // base version applies it without waiting for anything.
+    let saved = store.open_note(&note.id()).expect("open");
+    let diff = saved.document().updates_since(&base).expect("updates");
+    let receiver = Note::from_snapshot(note.id(), &note.document().snapshot().expect("snapshot"))
+        .expect("restore");
+    let status = receiver.document().import(&diff).expect("import");
+    assert!(status.pending.is_none(), "the edit is missing its commit");
+    assert_eq!(receiver.text(), "start more");
+}
+
+#[test]
 fn the_last_pushed_version_vector_round_trips() {
     let store = store();
     let note = create(&store, "sync me", 1_000);
     assert_eq!(store.last_pushed(&note.id()).expect("last pushed"), None);
 
-    let version = note.document().version().encode();
+    let version = encode_version_vector(&note.document().version());
     store
         .set_last_pushed(&note.id(), &version)
         .expect("set last pushed");
@@ -391,12 +445,134 @@ fn the_last_pushed_version_vector_round_trips() {
 }
 
 #[test]
+fn the_offline_queue_lists_notes_until_the_server_has_them() {
+    let store = store();
+    assert!(store.unsynced_notes(0).expect("queue").is_empty());
+
+    let first = create(&store, "first", 1_000);
+    let second = create(&store, "second", 1_100);
+    assert_eq!(
+        store.unsynced_notes(0).expect("queue"),
+        vec![second.id(), first.id()],
+        "most recently saved first"
+    );
+    assert_eq!(store.unsynced_notes(1).expect("queue").len(), 1);
+
+    let version = encode_version_vector(
+        &store
+            .open_note(&first.id())
+            .expect("open")
+            .document()
+            .version(),
+    );
+    store
+        .set_last_pushed(&first.id(), &version)
+        .expect("mark pushed");
+    assert_eq!(store.unsynced_notes(0).expect("queue"), vec![second.id()]);
+
+    // An edit after a push puts the note back in the queue.
+    let note = store.open_note(&first.id()).expect("open");
+    note.insert(0, "edited ").expect("insert");
+    store.save_note(&note, 1_200).expect("save");
+    assert_eq!(
+        store.unsynced_notes(0).expect("queue"),
+        vec![first.id(), second.id()]
+    );
+}
+
+#[test]
+fn a_remote_update_does_not_add_a_clean_note_to_the_queue() {
+    let store = store();
+    let note = create(&store, "shared text", 1_000);
+    let pushed = encode_version_vector(&note.document().version());
+    store
+        .set_last_pushed(&note.id(), &pushed)
+        .expect("mark pushed");
+
+    // Another device edits the same note; the update arrives from the server.
+    let remote = note.document().fork();
+    remote.insert(0, "hello ").expect("insert");
+    let update = remote
+        .updates_since(&note.document().version())
+        .expect("updates");
+    store
+        .apply_update(&note.id(), &update, 2_000)
+        .expect("apply");
+
+    assert!(
+        store.unsynced_notes(0).expect("queue").is_empty(),
+        "an imported update is not a local change"
+    );
+    assert_eq!(
+        store.open_note(&note.id()).expect("open").text(),
+        "hello shared text"
+    );
+
+    // A note with local changes stays in the queue when a remote update lands.
+    let note = store.open_note(&note.id()).expect("open");
+    note.insert(0, "local ").expect("insert");
+    store.save_note(&note, 2_100).expect("save");
+    let remote = note.document().fork();
+    remote.insert(0, "remote ").expect("insert");
+    let update = remote
+        .updates_since(&note.document().version())
+        .expect("updates");
+    store
+        .apply_update(&note.id(), &update, 2_200)
+        .expect("apply");
+    assert_eq!(store.unsynced_notes(0).expect("queue"), vec![note.id()]);
+}
+
+#[test]
+fn the_workspace_push_queue_follows_notebook_changes() {
+    let store = store();
+    assert_eq!(store.workspace_pending().expect("pending"), None);
+
+    let notebook = store.create_notebook("Work", 1_000).expect("notebook");
+    let pending = store.workspace_pending().expect("pending").expect("push");
+    assert!(!pending.updates.is_empty());
+
+    store
+        .mark_workspace_pushed(&pending.version)
+        .expect("mark pushed");
+    assert_eq!(store.workspace_pending().expect("pending"), None);
+
+    store
+        .rename_notebook(&notebook.id, "Work notes")
+        .expect("rename");
+    let pending = store.workspace_pending().expect("pending").expect("push");
+    store
+        .mark_workspace_pushed(&pending.version)
+        .expect("mark pushed");
+
+    // A remote notebook list lands without queuing a push back.
+    let other = SqliteStore::open_in_memory().expect("in-memory store");
+    other.create_notebook("Home", 2_000).expect("notebook");
+    let pushed = other.workspace_pending().expect("pending").expect("push");
+    store
+        .import_workspace(&pushed.updates)
+        .expect("import workspace");
+    assert_eq!(store.workspace_pending().expect("pending"), None);
+    let names: Vec<String> = store
+        .list_notebooks()
+        .expect("notebooks")
+        .into_iter()
+        .map(|notebook| notebook.name)
+        .collect();
+    assert_eq!(
+        names,
+        vec!["Work notes".to_string(), "Home".to_string()],
+        "the remote notebook arrives, the local one stays"
+    );
+}
+
+#[test]
 fn the_sync_cursor_round_trips() {
     let store = store();
     assert_eq!(store.sync_state().expect("state"), SyncState::default());
 
     let state = SyncState {
-        cursor: Some(vec![9, 8, 7]),
+        cursor: Some(9_008_007),
         updated_at: 4_200,
     };
     store.set_sync_state(&state).expect("set");

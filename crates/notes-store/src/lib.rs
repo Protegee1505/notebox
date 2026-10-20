@@ -163,10 +163,23 @@ pub struct TagCount {
 /// The one-row sync cursor.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SyncState {
-    /// Encoded `VersionVector` of the last pulled update, if anything was pulled.
-    pub cursor: Option<Vec<u8>>,
+    /// Server sequence number of the last pulled update, or `None` before the
+    /// first pull. The server orders updates with a single increasing integer,
+    /// so the cursor is one integer, not a version vector.
+    pub cursor: Option<i64>,
     /// Unix seconds of the last successful sync.
     pub updated_at: i64,
+}
+
+/// Changes to the notebook-list document waiting for the server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspacePush {
+    /// Encoded Loro updates the server has not seen.
+    pub updates: Vec<u8>,
+    /// The version those updates bring the server to, encoded with
+    /// [`notes_core::encode_version_vector`]. Hand this back to
+    /// [`NoteStore::mark_workspace_pushed`] after the server accepts.
+    pub version: Vec<u8>,
 }
 
 /// What an import changed.
@@ -224,11 +237,25 @@ pub trait NoteStore {
     /// Import a remote update into a note, creating it if needed.
     fn apply_update(&self, id: &NoteId, update: &[u8], at: i64) -> Result<Note, StoreError>;
 
+    /// Notes whose local version the server has not seen yet.
+    ///
+    /// This is the offline queue: every note whose last save is newer than the
+    /// version last acknowledged by the server. `limit` caps the result;
+    /// `0` means all. Most recently edited notes come first, so a long queue
+    /// pushes what the user just typed before older edits.
+    fn unsynced_notes(&self, limit: usize) -> Result<Vec<NoteId>, StoreError>;
+
     /// Encoded `VersionVector` of the last pushed update for a note.
     fn last_pushed(&self, id: &NoteId) -> Result<Option<Vec<u8>>, StoreError>;
 
     /// Record the encoded `VersionVector` the server has for a note.
     fn set_last_pushed(&self, id: &NoteId, version: &[u8]) -> Result<(), StoreError>;
+
+    /// Notebook-list changes the server has not seen, if any.
+    fn workspace_pending(&self) -> Result<Option<WorkspacePush>, StoreError>;
+
+    /// Record that the server has the notebook-list document up to `version`.
+    fn mark_workspace_pushed(&self, version: &[u8]) -> Result<(), StoreError>;
 
     /// Notebooks, oldest first.
     fn list_notebooks(&self) -> Result<Vec<Notebook>, StoreError>;
