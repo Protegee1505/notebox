@@ -374,13 +374,14 @@ impl Note {
                 continue;
             }
             let plain = strip_line_markers(trimmed);
+            let plain = strip_images(plain);
             if plain.is_empty() {
                 continue;
             }
             if !body.is_empty() {
                 body.push(' ');
             }
-            body.push_str(plain);
+            body.push_str(&plain);
             if body.chars().count() > PREVIEW_MAX_CHARS {
                 break;
             }
@@ -479,6 +480,33 @@ fn strip_line_markers(line: &str) -> &str {
     line.trim_start_matches('#').trim()
 }
 
+/// Replace Markdown images with their alt text so a card never shows a long
+/// attachment URL. The note body remains the source of truth; this only
+/// affects the plain-text preview.
+fn strip_images(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut cursor = 0;
+    while let Some(offset) = line[cursor..].find("![") {
+        let start = cursor + offset;
+        let Some(bracket) = line[start + 2..].find("](") else {
+            break;
+        };
+        let bracket = start + 2 + bracket;
+        let Some(paren) = line[bracket + 2..].find(')') else {
+            break;
+        };
+        let paren = bracket + 2 + paren;
+        out.push_str(&line[cursor..start]);
+        let alt = line[start + 2..bracket].trim();
+        if !alt.is_empty() {
+            out.push_str(alt);
+        }
+        cursor = paren + 1;
+    }
+    out.push_str(&line[cursor..]);
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{normalize_tags, Note, NoteMeta, PREVIEW_MAX_CHARS, TITLE_MAX_CHARS};
@@ -508,6 +536,21 @@ mod tests {
     fn preview_skips_the_title_and_line_markers() {
         let note = note("# Title\n\n- [ ] buy milk\n> quote here\n1. and more");
         assert_eq!(note.preview(), "buy milk quote here and more");
+    }
+
+    #[test]
+    fn preview_replaces_images_with_their_alt_text() {
+        let note = note(
+            "Trip\n\n![coast](attachments/9f2c.webp)\n\
+             ![](attachments/empty.webp)\n\nA slow Saturday.",
+        );
+        assert_eq!(note.preview(), "coast A slow Saturday.");
+    }
+
+    #[test]
+    fn preview_keeps_text_when_an_image_is_unclosed() {
+        let note = note("Title\n\nBefore ![broken");
+        assert_eq!(note.preview(), "Before ![broken");
     }
 
     #[test]

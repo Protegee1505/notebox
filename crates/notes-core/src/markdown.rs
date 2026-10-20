@@ -12,20 +12,34 @@ use pulldown_cmark::{html, CowStr, Event, Options, Parser, Tag};
 /// Tables, strikethrough, task lists and footnotes are enabled, matching the
 /// toolbar in `PLAN.md`. Raw HTML is escaped.
 pub fn render_markdown(markdown: &str) -> String {
+    render_markdown_with_images(markdown, &|_| None)
+}
+
+/// Render a note body, resolving attachment image URLs through `resolve`.
+///
+/// `resolve` receives the destination as written in the note. Returning
+/// `Some(url)` replaces it, which lets the app show bytes from its local
+/// database. Only a `data:image/` result is accepted from the resolver; a
+/// resolver cannot turn an attachment into a `javascript:` URL. Everything
+/// else is rendered as before.
+pub fn render_markdown_with_images(
+    markdown: &str,
+    resolve: &dyn Fn(&str) -> Option<String>,
+) -> String {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TASKLISTS);
     options.insert(Options::ENABLE_FOOTNOTES);
 
-    let events = Parser::new_ext(markdown, options).map(neutralize);
+    let events = Parser::new_ext(markdown, options).map(|event| neutralize(event, resolve));
     let mut out = String::with_capacity(markdown.len() + markdown.len() / 2);
     html::push_html(&mut out, events);
     out
 }
 
 /// Turn anything the HTML renderer would emit verbatim into plain text.
-fn neutralize(event: Event<'_>) -> Event<'_> {
+fn neutralize<'a>(event: Event<'a>, resolve: &dyn Fn(&str) -> Option<String>) -> Event<'a> {
     match event {
         Event::Html(html) => Event::Text(html),
         Event::InlineHtml(html) => Event::Text(html),
@@ -47,11 +61,25 @@ fn neutralize(event: Event<'_>) -> Event<'_> {
             id,
         }) => Event::Start(Tag::Image {
             link_type,
-            dest_url: safe_url(&dest_url),
+            dest_url: resolve(&dest_url)
+                .map_or_else(|| safe_url(&dest_url), |url| safe_image_url(&url)),
             title,
             id,
         }),
         event => event,
+    }
+}
+
+/// Accept only an inline image from the attachment resolver.
+fn safe_image_url(url: &str) -> CowStr<'static> {
+    let trimmed = url.trim();
+    if trimmed
+        .get(..11)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("data:image/"))
+    {
+        CowStr::Boxed(trimmed.to_string().into_boxed_str())
+    } else {
+        safe_url(trimmed)
     }
 }
 
@@ -129,5 +157,29 @@ mod tests {
     fn code_blocks_are_escaped() {
         let html = render_markdown("```\n<b>not bold</b>\n```");
         assert!(html.contains("&lt;b&gt;"));
+    }
+
+    #[test]
+    fn attachment_images_can_be_resolved_to_inline_data() {
+        let html = super::render_markdown_with_images("![pic](attachments/abc.webp)", &|url| {
+            assert_eq!(url, "attachments/abc.webp");
+            Some("data:image/webp;base64,AAAA".to_string())
+        });
+        assert!(html.contains("src=\"data:image/webp;base64,AAAA\""));
+    }
+
+    #[test]
+    fn a_resolver_cannot_inject_script() {
+        let html = super::render_markdown_with_images("![pic](attachments/abc.webp)", &|_| {
+            Some("javascript:alert(1)".to_string())
+        });
+        assert!(!html.contains("javascript:"));
+        assert!(html.contains("src=\"#\""));
+    }
+
+    #[test]
+    fn unresolved_images_keep_their_relative_path() {
+        let html = super::render_markdown_with_images("![pic](attachments/abc.webp)", &|_| None);
+        assert!(html.contains("src=\"attachments/abc.webp\""));
     }
 }

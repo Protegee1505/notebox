@@ -32,7 +32,7 @@ pub use export::{
     EXPORT_FORMAT, EXPORT_VERSION, MANIFEST_PATH, NOTES_DIR,
 };
 pub use history::NoteVersion;
-pub use markdown::render_markdown;
+pub use markdown::{render_markdown, render_markdown_with_images};
 pub use note::{
     normalize_tags, Note, NoteMeta, META_CONTAINER, PREVIEW_MAX_CHARS, TITLE_MAX_CHARS,
 };
