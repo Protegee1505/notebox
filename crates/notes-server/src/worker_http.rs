@@ -54,6 +54,7 @@ pub async fn handle(req: Request, env: Env) -> worker::Result<Response> {
         .get_async("/", health)
         .post_async("/v1/auth/setup", setup)
         .post_async("/v1/auth/login", login)
+        .post_async("/v1/auth/logout", logout)
         .post_async("/v1/sync", sync)
         .put_async("/v1/blob/:hash", put_blob)
         .get_async("/v1/blob/:hash", get_blob)
@@ -81,7 +82,7 @@ async fn setup(mut req: Request, ctx: RouteContext<AppState>) -> worker::Result<
     }
     .await;
     match result {
-        Ok(response) => auth_response(response),
+        Ok(response) => auth_response(&req, response),
         Err(error) => error_response(error),
     }
 }
@@ -94,9 +95,24 @@ async fn login(mut req: Request, ctx: RouteContext<AppState>) -> worker::Result<
     }
     .await;
     match result {
-        Ok(response) => auth_response(response),
+        Ok(response) => auth_response(&req, response),
         Err(error) => error_response(error),
     }
+}
+
+async fn logout(req: Request, _ctx: RouteContext<AppState>) -> worker::Result<Response> {
+    // The cookie is the only browser credential. Clearing it here is what
+    // makes Sign out stick across a reload; the bearer token (native clients
+    // and the web client's in-memory copy) is forgotten by the caller.
+    let secure = req.url().map(|url| url.scheme() == "https").unwrap_or(true);
+    let secure = if secure { "; Secure" } else { "" };
+    let cookie = format!(
+        "{SESSION_COOKIE}=; HttpOnly{}; SameSite=Strict; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+        secure
+    );
+    let mut response = Response::empty()?.with_status(204);
+    response.headers_mut().set("set-cookie", &cookie)?;
+    Ok(response)
 }
 
 async fn sync(mut req: Request, ctx: RouteContext<AppState>) -> worker::Result<Response> {
@@ -249,10 +265,15 @@ async fn read_body<T: DeserializeOwned>(req: &mut Request) -> Result<T, ServerEr
     Ok(envelope.payload)
 }
 
-fn auth_response(response: notes_proto::AuthResponse) -> worker::Result<Response> {
+fn auth_response(req: &Request, response: notes_proto::AuthResponse) -> worker::Result<Response> {
+    // `Secure` is required in production. Local `wrangler dev` runs over plain
+    // http, where a Secure cookie would never be stored; leaving the flag off
+    // there keeps the browser session testable without weakening HTTPS.
+    let secure = req.url().map(|url| url.scheme() == "https").unwrap_or(true);
+    let secure = if secure { "; Secure" } else { "" };
     let cookie = format!(
-        "{SESSION_COOKIE}={}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=31536000",
-        response.token
+        "{SESSION_COOKIE}={}; HttpOnly{}; SameSite=Strict; Path=/; Max-Age=31536000",
+        response.token, secure
     );
     let mut built = json_response(&envelope(response), 200)?;
     built.headers_mut().set("set-cookie", &cookie)?;

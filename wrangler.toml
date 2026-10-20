@@ -29,7 +29,9 @@ migrations_dir = "migrations/blobs"
 # For local development and tests, pass it as a var:
 #   npx wrangler dev --local --var SETUP_TOKEN:local-dev-token
 
-# Phase 7: serve the Dioxus web build from the same Worker.
-# [assets]
-# directory = "target/dx/notebox/release/web/public"
-# binding = "ASSETS"
+# Serve the Dioxus web build from the same Worker, so browser requests are
+# same-origin and the HttpOnly session cookie applies. Build it first with:
+#   dx build -p notes-app --platform web --release --features web
+[assets]
+directory = "target/dx/notebox/release/web/public"
+binding = "ASSETS"

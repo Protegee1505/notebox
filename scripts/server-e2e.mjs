@@ -14,7 +14,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { rm } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -138,6 +138,10 @@ async function migrate(name) {
 }
 
 async function startWorker() {
+  // wrangler.toml serves the Dioxus web build from this directory. The server
+  // e2e runs without building the web app, so the empty directory keeps the
+  // assets binding valid while every API path still reaches the Worker.
+  await mkdir("target/dx/notebox/release/web/public", { recursive: true });
   child = spawn(
     "npx",
     [
@@ -238,6 +242,19 @@ async function main() {
     cookie: cookie.split(";")[0],
   });
   same(cookieList.status, 200, "the cookie authenticates like a bearer token");
+
+  const logout = await call("POST", "/v1/auth/logout", {
+    cookie: cookie.split(";")[0],
+  });
+  same(logout.status, 204, "logout answers without a body");
+  const logoutCookies = logout.headers.getSetCookie?.() ?? [
+    logout.headers.get("set-cookie"),
+  ];
+  const expired = logoutCookies.find((value) =>
+    value?.startsWith("notebox_session="),
+  );
+  ok(expired?.includes("Max-Age=0"), "logout expires the session cookie");
+  ok(expired?.includes("HttpOnly"), "the cleared cookie stays HttpOnly");
 
   const login = await call("POST", "/v1/auth/login", {
     body: envelope(authRequest("phone")),

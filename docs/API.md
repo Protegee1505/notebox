@@ -29,21 +29,33 @@ Failed logins are counted in the account row and back off exponentially: 1, 2,
 with a `retry-after` header. Three consecutive failures return `429`
 immediately. A successful login resets the counter.
 
-The setup/login response also sets an `HttpOnly; Secure; SameSite=Strict`
-cookie. The token remains in the JSON body for native clients.
+The setup/login response also sets an `HttpOnly; SameSite=Strict` cookie,
+with `Secure` when the request arrived over HTTPS. Local `wrangler dev` runs
+on plain HTTP, where a `Secure` cookie would be dropped. The token remains in
+the JSON body for native clients.
+
+`POST /v1/auth/logout` clears that cookie with `Max-Age=0` and answers `204`.
+It does not revoke the device token; use the device list for that. Without the
+endpoint, a browser reload would sign itself back in from the cookie.
 
 ## Routes
 
 | Method | Path | Body / query | Response |
 | --- | --- | --- | --- |
-| `GET` | `/` | — | `notebox` (plain text health check) |
+| `GET` | `/` | — | The web app, or `notebox` when no asset matches |
 | `POST` | `/v1/auth/setup` | `AuthRequest` | `AuthResponse` |
 | `POST` | `/v1/auth/login` | `AuthRequest` | `AuthResponse` |
+| `POST` | `/v1/auth/logout` | — | `204` and an expired cookie |
 | `POST` | `/v1/sync` | `SyncRequest` | `SyncResponse` |
 | `PUT` | `/v1/blob/{hash}` | `BlobChunk` | `BlobStored` |
 | `GET` | `/v1/blob/{hash}?index={n}` | — | `BlobChunk` |
 | `GET` | `/v1/devices` | — | `DeviceList` |
 | `DELETE` | `/v1/devices/{id}` | — | `204` |
+
+`wrangler.toml` serves the web build from `[assets]`. Requests under `/v1/`
+have no static file and reach the Worker; the rest are assets. Build
+`target/dx/notebox/release/web/public` before deploying, or `/` falls back to
+the plain-text health check.
 
 ## Sync
 

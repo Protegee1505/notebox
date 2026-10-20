@@ -51,6 +51,10 @@ for database in notebox-sync notebox-blobs; do
   fi
 done
 
+# The Worker serves the web build from this directory (wrangler.toml). This
+# sync test only needs the API, so an empty directory is enough.
+mkdir -p target/dx/notebox/release/web/public
+
 setsid npx "${WRANGLER[@]}" dev --local \
   --port "$PORT" \
   --persist-to "$PERSIST" \
