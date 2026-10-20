@@ -115,6 +115,8 @@ npx wrangler dev --local --var SETUP_TOKEN:local-dev-token
 Open the Worker origin (`http://127.0.0.1:8787`) to use the web app. Sync is
 same-origin by design, so a `dx serve` page on another port cannot reach the
 Worker: open the build the Worker serves instead, or use the desktop app.
+Restart `wrangler dev` after every `dx build`: Wrangler caches the asset
+manifest, so a running dev server can 404 the newly hashed files.
 
 Run the full HTTP test, including setup, login backoff, sync pagination,
 attachment chunks and device revocation, against a throwaway local Worker:
