@@ -29,7 +29,7 @@ dioxus = { version = "=0.7.10" }
 
 # Planned dependencies, added to crates as their phases begin.
 loro = "1.16.2"
-worker = "0.8.7"
+worker = { version = "0.8.7", features = ["d1"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 # rusqlite 0.40 links sqlite-wasm-rs 0.5 on wasm. Keep the version in step:
 # two copies of the C library would not share the installed OPFS VFS.
