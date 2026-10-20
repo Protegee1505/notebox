@@ -10,6 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+mod attachments;
 mod document;
 mod error;
 mod export;
@@ -20,11 +21,15 @@ mod text;
 mod version;
 mod workspace;
 
+pub use attachments::{
+    attachment_url, content_hash, extension_for_mime, mime_for_extension, normalize_file_name,
+    parse_attachment_url, references, AttachmentReference, AttachmentUrl, ATTACHMENTS_DIR,
+};
 pub use document::{NoteDocument, HISTORY_MERGE_INTERVAL_SECS, TEXT_CONTAINER};
 pub use error::{ExportError, NoteError};
 pub use export::{
     note_file_name, read_export_zip, write_export_zip, ExportAttachment, ExportBundle, ExportNote,
-    ATTACHMENTS_DIR, EXPORT_FORMAT, EXPORT_VERSION, MANIFEST_PATH, NOTES_DIR,
+    EXPORT_FORMAT, EXPORT_VERSION, MANIFEST_PATH, NOTES_DIR,
 };
 pub use history::NoteVersion;
 pub use markdown::render_markdown;

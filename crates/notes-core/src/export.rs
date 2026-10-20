@@ -11,10 +11,10 @@ use std::io::{Read, Seek, Write};
 
 use notes_proto::{NoteId, Notebook};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
+use crate::attachments::{attachment_url, content_hash, ATTACHMENTS_DIR};
 use crate::error::ExportError;
 use crate::NoteMeta;
 
@@ -26,9 +26,6 @@ pub const EXPORT_VERSION: u16 = 1;
 
 /// Directory inside the archive that holds the Markdown files.
 pub const NOTES_DIR: &str = "notes";
-
-/// Directory inside the archive that holds attachments.
-pub const ATTACHMENTS_DIR: &str = "attachments";
 
 /// Manifest path inside the archive.
 pub const MANIFEST_PATH: &str = "manifest.json";
@@ -133,9 +130,9 @@ pub fn write_export_zip<W: Write + Seek>(
 
     for attachment in &bundle.attachments {
         let name = display_file_name(&attachment.name);
-        let file = attachment_file_name(&name, &attachment.data);
-        // Equal bytes and extension share one entry; the manifest still lists
-        // each attachment, so import restores both rows.
+        let file = attachment_file_name(&attachment.mime, &attachment.data);
+        // Equal bytes share one entry; the manifest still lists each
+        // attachment, so import restores both rows.
         if written_attachments.insert(file.clone()) {
             zip.start_file(&file, options)?;
             zip.write_all(&attachment.data)?;
@@ -250,21 +247,10 @@ pub fn note_file_name(id: NoteId) -> String {
 /// File name an attachment gets inside the archive.
 ///
 /// Content addressing makes identical bytes share one entry and keeps a user
-/// supplied name from colliding with another attachment.
-fn attachment_file_name(name: &str, data: &[u8]) -> String {
-    let digest = Sha256::digest(data);
-    let hash: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
-    let extension = name
-        .rsplit_once('.')
-        .map(|(_, extension)| extension)
-        .filter(|extension| {
-            !extension.is_empty()
-                && extension.len() <= 16
-                && extension.chars().all(|ch| ch.is_ascii_alphanumeric())
-        })
-        .map(|extension| format!(".{}", extension.to_ascii_lowercase()))
-        .unwrap_or_default();
-    format!("{ATTACHMENTS_DIR}/{hash}{extension}")
+/// supplied name from colliding with another attachment. The extension comes
+/// from the MIME type, so the path is exactly the URL the note uses.
+fn attachment_file_name(mime: &str, data: &[u8]) -> String {
+    attachment_url(&content_hash(data), mime)
 }
 
 /// Reduce a user-supplied path to a plain display name.

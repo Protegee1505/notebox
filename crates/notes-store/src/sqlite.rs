@@ -15,9 +15,9 @@ use std::io::Cursor;
 use std::path::Path;
 
 use notes_core::{
-    decode_version_vector, encode_version_vector, normalize_tags, read_export_zip,
-    write_export_zip, ExportAttachment, ExportBundle, ExportNote, Note, NoteMeta, VersionVector,
-    WorkspaceDocument,
+    content_hash, decode_version_vector, encode_version_vector, normalize_file_name,
+    normalize_tags, read_export_zip, references, write_export_zip, ExportAttachment, ExportBundle,
+    ExportNote, Note, NoteMeta, VersionVector, WorkspaceDocument,
 };
 use notes_proto::{NoteId, Notebook, NotebookId};
 use rusqlite::types::Value;
@@ -25,12 +25,12 @@ use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 
 use crate::error::StoreError;
 use crate::{
-    ImportReport, NewNote, NoteQuery, NoteStore, NoteSummary, NoteView, SearchHit, SearchQuery,
-    SyncState, TagCount, WorkspacePush,
+    Attachment, AttachmentUsage, ImportReport, NewNote, NoteQuery, NoteStore, NoteSummary,
+    NoteView, SearchHit, SearchQuery, SyncState, TagCount, WorkspacePush,
 };
 
 /// Schema version written to `PRAGMA user_version`.
-pub const SCHEMA_VERSION: i32 = 3;
+pub const SCHEMA_VERSION: i32 = 4;
 
 /// Workspace columns read by [`NoteStore::workspace_pending`]:
 /// snapshot, local version vector, last pushed version vector.
@@ -95,14 +95,25 @@ CREATE TABLE IF NOT EXISTS workspace (
 );
 
 CREATE TABLE IF NOT EXISTS attachment (
-    id         TEXT PRIMARY KEY,
-    note_id    TEXT,
-    name       TEXT NOT NULL,
-    mime       TEXT NOT NULL,
-    size       INTEGER NOT NULL,
-    created_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS attachment_note ON attachment (note_id);
+    hash        TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    mime        TEXT NOT NULL,
+    size        INTEGER NOT NULL,
+    data        BLOB,
+    created_at  INTEGER NOT NULL,
+    uploaded_at INTEGER
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS attachment_upload ON attachment (uploaded_at);
+
+-- Which notes use an attachment. The note's Markdown is the source of truth;
+-- this table is rebuilt from it whenever the note is saved.
+CREATE TABLE IF NOT EXISTS note_attachment (
+    note_id  TEXT NOT NULL,
+    hash     TEXT NOT NULL,
+    added_at INTEGER NOT NULL,
+    PRIMARY KEY (note_id, hash)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS note_attachment_hash ON note_attachment (hash);
 
 CREATE TABLE IF NOT EXISTS sync_state (
     id         INTEGER PRIMARY KEY CHECK (id = 1),
@@ -151,6 +162,33 @@ CREATE TABLE IF NOT EXISTS device (
     id      INTEGER PRIMARY KEY CHECK (id = 1),
     peer_id INTEGER NOT NULL
 );
+"#;
+
+/// Schema v3 to v4: content-addressed attachments with their bytes.
+///
+/// P1 stored attachment metadata only, and the bytes never existed, so the old
+/// table is renamed rather than rewritten. Nothing in a note can refer to one
+/// of those rows: note links arrive with P6. Keeping the table means a
+/// migration never destroys what an older build recorded.
+const MIGRATION_V4: &str = r#"
+ALTER TABLE attachment RENAME TO attachment_legacy;
+CREATE TABLE attachment (
+    hash        TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    mime        TEXT NOT NULL,
+    size        INTEGER NOT NULL,
+    data        BLOB,
+    created_at  INTEGER NOT NULL,
+    uploaded_at INTEGER
+) WITHOUT ROWID;
+CREATE INDEX attachment_upload ON attachment (uploaded_at);
+CREATE TABLE note_attachment (
+    note_id  TEXT NOT NULL,
+    hash     TEXT NOT NULL,
+    added_at INTEGER NOT NULL,
+    PRIMARY KEY (note_id, hash)
+) WITHOUT ROWID;
+CREATE INDEX note_attachment_hash ON note_attachment (hash);
 "#;
 
 const UPSERT_NOTE: &str = r#"
@@ -357,6 +395,11 @@ impl NoteStore for SqliteStore {
             "DELETE FROM note_tag WHERE note_id IN (SELECT id FROM note WHERE trashed_at <> 0)",
             [],
         )?;
+        tx.execute(
+            "DELETE FROM note_attachment
+             WHERE note_id IN (SELECT id FROM note WHERE trashed_at <> 0)",
+            [],
+        )?;
         tx.execute("DELETE FROM note WHERE trashed_at <> 0", [])?;
         tx.commit()?;
         Ok(count.max(0) as usize)
@@ -370,6 +413,121 @@ impl NoteStore for SqliteStore {
             |row| row.get(0),
         )?;
         Ok(count.max(0) as u64)
+    }
+
+    fn put_attachment(
+        &self,
+        name: &str,
+        mime: &str,
+        bytes: &[u8],
+        at: i64,
+    ) -> Result<Attachment, StoreError> {
+        let hash = content_hash(bytes);
+        let name = normalize_file_name(name, mime);
+        let mime = normalized_mime(mime);
+        let mut conn = self.connection();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO attachment (hash, name, mime, size, data, created_at, uploaded_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)
+             ON CONFLICT(hash) DO UPDATE SET
+                 data = excluded.data,
+                 size = excluded.size,
+                 name = CASE WHEN attachment.data IS NULL THEN excluded.name ELSE attachment.name END,
+                 mime = CASE WHEN attachment.data IS NULL THEN excluded.mime ELSE attachment.mime END",
+            params![hash, name, mime, bytes.len() as i64, bytes, at],
+        )?;
+        let attachment = read_attachment(&tx, &hash)?.ok_or_else(|| {
+            StoreError::Corrupt(format!("attachment {hash} vanished after insert"))
+        })?;
+        tx.commit()?;
+        Ok(attachment)
+    }
+
+    fn attachment(&self, hash: &str) -> Result<Option<Attachment>, StoreError> {
+        let conn = self.conn.borrow();
+        read_attachment(&conn, &hash.to_ascii_lowercase())
+    }
+
+    fn attachment_bytes(&self, hash: &str) -> Result<Option<Vec<u8>>, StoreError> {
+        let conn = self.conn.borrow();
+        let row: Option<(i64, Option<Vec<u8>>)> = conn
+            .query_row(
+                "SELECT size, data FROM attachment WHERE hash = ?1",
+                params![hash.to_ascii_lowercase()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        match row {
+            None => Ok(None),
+            Some((_, None)) => Ok(None),
+            Some((size, Some(data))) => {
+                if data.len() as i64 != size {
+                    return Err(StoreError::Corrupt(format!(
+                        "attachment {hash} holds {} bytes but records {size}",
+                        data.len()
+                    )));
+                }
+                Ok(Some(data))
+            }
+        }
+    }
+
+    fn note_attachments(&self, note: &NoteId) -> Result<Vec<Attachment>, StoreError> {
+        let conn = self.conn.borrow();
+        let mut statement = conn.prepare(
+            "SELECT a.hash, a.name, a.mime, a.size, a.data IS NOT NULL,
+                    a.uploaded_at IS NOT NULL, a.created_at
+             FROM attachment a
+             JOIN note_attachment na ON na.hash = a.hash
+             WHERE na.note_id = ?1
+             ORDER BY na.added_at, a.hash",
+        )?;
+        let rows = statement.query_map(params![note.to_string()], attachment_row)?;
+        let mut attachments = Vec::new();
+        for row in rows {
+            attachments.push(row?);
+        }
+        Ok(attachments)
+    }
+
+    fn unsynced_attachments(&self, limit: usize) -> Result<Vec<String>, StoreError> {
+        let conn = self.conn.borrow();
+        let mut statement = conn.prepare(
+            "SELECT hash FROM attachment
+             WHERE uploaded_at IS NULL AND data IS NOT NULL
+             ORDER BY created_at, hash
+             LIMIT ?1",
+        )?;
+        let limit = if limit == 0 { -1 } else { limit as i64 };
+        let rows = statement.query_map(params![limit], |row| row.get::<_, String>(0))?;
+        let mut hashes = Vec::new();
+        for row in rows {
+            hashes.push(row?);
+        }
+        Ok(hashes)
+    }
+
+    fn mark_attachment_uploaded(&self, hash: &str, at: i64) -> Result<(), StoreError> {
+        let conn = self.conn.borrow();
+        conn.execute(
+            "UPDATE attachment SET uploaded_at = ?2 WHERE hash = ?1",
+            params![hash.to_ascii_lowercase(), at],
+        )?;
+        Ok(())
+    }
+
+    fn attachment_usage(&self) -> Result<AttachmentUsage, StoreError> {
+        let conn = self.conn.borrow();
+        let (count, bytes): (i64, i64) = conn.query_row(
+            "SELECT count(*), coalesce(sum(size), 0) FROM attachment WHERE data IS NOT NULL",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        Ok(AttachmentUsage {
+            count: count.max(0) as u64,
+            bytes: bytes.max(0) as u64,
+        })
     }
 
     fn apply_update(&self, id: &NoteId, update: &[u8], at: i64) -> Result<Note, StoreError> {
@@ -696,18 +854,7 @@ impl NoteStore for SqliteStore {
         }
 
         for attachment in &bundle.attachments {
-            tx.execute(
-                "INSERT INTO attachment (id, note_id, name, mime, size, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    NoteId::new().to_string(),
-                    attachment.note_id.map(|id| id.to_string()),
-                    attachment.name,
-                    attachment.mime,
-                    attachment.data.len() as i64,
-                    stamp
-                ],
-            )?;
+            import_attachment(&tx, attachment, stamp)?;
             report.attachments += 1;
         }
 
@@ -728,11 +875,18 @@ fn migrate(conn: &Connection) -> Result<(), StoreError> {
         1 => {
             conn.execute_batch(MIGRATION_V2)?;
             conn.execute_batch(MIGRATION_V3)?;
+            conn.execute_batch(MIGRATION_V4)?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             Ok(())
         }
         2 => {
             conn.execute_batch(MIGRATION_V3)?;
+            conn.execute_batch(MIGRATION_V4)?;
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            Ok(())
+        }
+        3 => {
+            conn.execute_batch(MIGRATION_V4)?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             Ok(())
         }
@@ -790,6 +944,130 @@ fn load_note(conn: &Connection, id: &NoteId, peer: u64) -> Result<Option<Note>, 
         }
         None => Ok(None),
     }
+}
+
+/// Read one attachment's metadata without loading its bytes.
+fn read_attachment(conn: &Connection, hash: &str) -> Result<Option<Attachment>, StoreError> {
+    Ok(conn
+        .query_row(
+            "SELECT hash, name, mime, size, data IS NOT NULL,
+                    uploaded_at IS NOT NULL, created_at
+             FROM attachment WHERE hash = ?1",
+            params![hash],
+            attachment_row,
+        )
+        .optional()?)
+}
+
+fn attachment_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Attachment> {
+    Ok(Attachment {
+        hash: row.get(0)?,
+        name: row.get(1)?,
+        mime: row.get(2)?,
+        size: row.get::<_, i64>(3)?.max(0) as u64,
+        available: row.get(4)?,
+        uploaded: row.get(5)?,
+        created_at: row.get(6)?,
+    })
+}
+
+/// Lowercase a MIME type and drop any parameters.
+fn normalized_mime(mime: &str) -> String {
+    mime.split(';')
+        .next()
+        .unwrap_or(mime)
+        .trim()
+        .to_ascii_lowercase()
+}
+
+/// Rebuild the note-to-attachment index from the note's Markdown.
+///
+/// A note may link an attachment whose bytes are not here yet, so a missing
+/// hash becomes a placeholder row. Nothing here deletes attachment bytes: a
+/// removed link only removes the note's use of it.
+fn update_note_attachment_links(
+    conn: &Connection,
+    note_id: &str,
+    text: &str,
+    at: i64,
+) -> Result<(), StoreError> {
+    let wanted = references(text);
+    let wanted_hashes: std::collections::HashSet<&str> = wanted
+        .iter()
+        .map(|reference| reference.hash.as_str())
+        .collect();
+
+    let existing: Vec<String> = {
+        let mut statement = conn.prepare("SELECT hash FROM note_attachment WHERE note_id = ?1")?;
+        let rows = statement.query_map(params![note_id], |row| row.get::<_, String>(0))?;
+        let mut hashes = Vec::new();
+        for row in rows {
+            hashes.push(row?);
+        }
+        hashes
+    };
+    for hash in existing {
+        if !wanted_hashes.contains(hash.as_str()) {
+            conn.execute(
+                "DELETE FROM note_attachment WHERE note_id = ?1 AND hash = ?2",
+                params![note_id, hash],
+            )?;
+        }
+    }
+
+    for reference in wanted {
+        let mime = reference.mime().unwrap_or("application/octet-stream");
+        let name = format!("attachment.{}", reference.extension);
+        conn.execute(
+            "INSERT OR IGNORE INTO attachment
+                 (hash, name, mime, size, data, created_at, uploaded_at)
+             VALUES (?1, ?2, ?3, 0, NULL, ?4, NULL)",
+            params![reference.hash, name, mime, at],
+        )?;
+        conn.execute(
+            "INSERT OR IGNORE INTO note_attachment (note_id, hash, added_at)
+             VALUES (?1, ?2, ?3)",
+            params![note_id, reference.hash, at],
+        )?;
+    }
+    Ok(())
+}
+
+/// Write one attachment from an export archive. The caller owns the
+/// transaction; the archive has already validated entry paths and sizes.
+fn import_attachment(
+    conn: &Connection,
+    attachment: &ExportAttachment,
+    at: i64,
+) -> Result<(), StoreError> {
+    let hash = content_hash(&attachment.data);
+    let name = normalize_file_name(&attachment.name, &attachment.mime);
+    let mime = normalized_mime(&attachment.mime);
+    conn.execute(
+        "INSERT INTO attachment (hash, name, mime, size, data, created_at, uploaded_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)
+         ON CONFLICT(hash) DO UPDATE SET
+             data = excluded.data,
+             size = excluded.size,
+             name = CASE WHEN attachment.data IS NULL THEN excluded.name ELSE attachment.name END,
+             mime = CASE WHEN attachment.data IS NULL THEN excluded.mime ELSE attachment.mime END",
+        params![
+            hash,
+            name,
+            mime,
+            attachment.data.len() as i64,
+            attachment.data,
+            at
+        ],
+    )?;
+    if let Some(note_id) = attachment.note_id {
+        conn.execute(
+            "INSERT OR IGNORE INTO note_attachment (note_id, hash, added_at)
+             VALUES (?1, ?2, ?3)",
+            params![note_id.to_string(), hash, at],
+        )?;
+    }
+    Ok(())
 }
 
 /// Write one note's row, tags and search index. The caller owns the transaction.
@@ -853,6 +1131,8 @@ fn save_note_with(
          VALUES ((SELECT seq FROM note WHERE id = ?1), ?1, ?2, ?3)",
         params![id_text, title, text],
     )?;
+
+    update_note_attachment_links(conn, &id_text, &text, updated_at)?;
 
     Ok(NoteSummary {
         id,
@@ -1208,27 +1488,30 @@ fn export_bundle_with(
         });
     }
 
-    let mut statement =
-        conn.prepare("SELECT note_id, name, mime FROM attachment ORDER BY created_at, name")?;
+    let mut statement = conn.prepare(
+        "SELECT a.name, a.mime, a.data,
+                (SELECT na.note_id FROM note_attachment na
+                 WHERE na.hash = a.hash ORDER BY na.added_at LIMIT 1)
+         FROM attachment a
+         WHERE a.data IS NOT NULL
+         ORDER BY a.created_at, a.hash",
+    )?;
     let attachments = statement
         .query_map([], |row| {
             Ok((
-                row.get::<_, Option<String>>(0)?,
+                row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, Option<String>>(3)?,
             ))
         })?
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
-        .map(|(note_id, name, mime)| {
-            let note_id = note_id.and_then(|value| NoteId::parse(&value).ok());
-            ExportAttachment {
-                note_id,
-                name,
-                mime,
-                // Attachment bytes land here in P6; the metadata is exported now.
-                data: Vec::new(),
-            }
+        .map(|(name, mime, data, note_id)| ExportAttachment {
+            note_id: note_id.and_then(|value| NoteId::parse(&value).ok()),
+            name,
+            mime,
+            data,
         })
         .collect();
 
