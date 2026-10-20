@@ -1,0 +1,1014 @@
+//! SQLite backend: schema, migrations and the [`NoteStore`] implementation.
+//!
+//! The same code runs natively through `rusqlite` and in the browser through
+//! `sqlite-wasm-rs` over the OPFS SAH-pool VFS. One connection per worker keeps
+//! the rollback journal simple, as the S4 probe showed (ADR-0004).
+//!
+//! The `note` table holds the CRDT snapshot and the columns the list view
+//! needs. `note_tag` and the FTS5 index are queryable mirrors of the note's own
+//! metadata: the CRDT stays the source of truth, and saving a note rewrites its
+//! rows in one transaction.
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::io::Cursor;
+use std::path::Path;
+
+use notes_core::{
+    normalize_tags, read_export_zip, write_export_zip, ExportAttachment, ExportBundle, ExportNote,
+    Note, NoteMeta, WorkspaceDocument,
+};
+use notes_proto::{NoteId, Notebook, NotebookId};
+use rusqlite::types::Value;
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
+
+use crate::error::StoreError;
+use crate::{
+    ImportReport, NewNote, NoteQuery, NoteStore, NoteSummary, NoteView, SearchHit, SearchQuery,
+    SyncState, TagCount,
+};
+
+/// Schema version written to `PRAGMA user_version`.
+pub const SCHEMA_VERSION: i32 = 1;
+
+/// Database file name used by native builds and by the browser build.
+pub const APP_DB_NAME: &str = "notebox.db";
+
+/// OPFS directory that holds the browser database.
+pub const BROWSER_DB_DIR: &str = "notebox";
+
+/// Tables, indexes and the full-text index.
+///
+/// `note.seq` is the integer rowid; the FTS row for a note uses the same
+/// number, so updating or deleting one note touches only its own FTS rows.
+const SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS note (
+    seq         INTEGER PRIMARY KEY,
+    id          TEXT NOT NULL UNIQUE,
+    snapshot    BLOB NOT NULL,
+    title       TEXT NOT NULL,
+    preview     TEXT NOT NULL,
+    notebook_id TEXT,
+    pinned      INTEGER NOT NULL DEFAULT 0,
+    archived    INTEGER NOT NULL DEFAULT 0,
+    color       TEXT,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    trashed_at  INTEGER NOT NULL DEFAULT 0,
+    last_pushed BLOB
+);
+CREATE INDEX IF NOT EXISTS note_list ON note (trashed_at, archived, updated_at DESC);
+CREATE INDEX IF NOT EXISTS note_notebook ON note (notebook_id);
+
+CREATE TABLE IF NOT EXISTS note_tag (
+    note_id  TEXT NOT NULL,
+    tag      TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    PRIMARY KEY (note_id, tag)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS note_tag_tag ON note_tag (tag);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS note_fts USING fts5 (
+    note_id UNINDEXED,
+    title,
+    body,
+    tokenize = 'unicode61 remove_diacritics 2'
+);
+
+CREATE TABLE IF NOT EXISTS notebook (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS workspace (
+    id       INTEGER PRIMARY KEY CHECK (id = 1),
+    snapshot BLOB NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS attachment (
+    id         TEXT PRIMARY KEY,
+    note_id    TEXT,
+    name       TEXT NOT NULL,
+    mime       TEXT NOT NULL,
+    size       INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS attachment_note ON attachment (note_id);
+
+CREATE TABLE IF NOT EXISTS sync_state (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    cursor     BLOB,
+    updated_at INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO sync_state (id, cursor, updated_at) VALUES (1, NULL, 0);
+"#;
+
+const UPSERT_NOTE: &str = r#"
+INSERT INTO note (
+    id, snapshot, title, preview, notebook_id, pinned, archived, color,
+    created_at, updated_at, trashed_at
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+ON CONFLICT(id) DO UPDATE SET
+    snapshot    = excluded.snapshot,
+    title       = excluded.title,
+    preview     = excluded.preview,
+    notebook_id = excluded.notebook_id,
+    pinned      = excluded.pinned,
+    archived    = excluded.archived,
+    color       = excluded.color,
+    created_at  = excluded.created_at,
+    updated_at  = excluded.updated_at,
+    trashed_at  = excluded.trashed_at
+"#;
+
+const SUMMARY_COLUMNS: &str = "n.id, n.title, n.preview, n.notebook_id, n.pinned, n.archived, \
+     n.color, n.created_at, n.updated_at, n.trashed_at";
+
+/// A note store backed by one SQLite connection.
+pub struct SqliteStore {
+    conn: RefCell<Connection>,
+}
+
+impl SqliteStore {
+    /// Open (or create) a database file.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
+        Self::from_connection(Connection::open(path)?)
+    }
+
+    /// Open an in-memory database. Used by tests.
+    pub fn open_in_memory() -> Result<Self, StoreError> {
+        Self::from_connection(Connection::open_in_memory()?)
+    }
+
+    /// Take ownership of an opened connection and run the migrations.
+    pub fn from_connection(conn: Connection) -> Result<Self, StoreError> {
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // One connection per process, but WAL survives a crash without
+            // rewriting the whole journal on every debounced save.
+            let _ = conn.pragma_update(None, "journal_mode", "WAL");
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            // The SAH-pool VFS has no shared memory for WAL.
+            conn.pragma_update(None, "journal_mode", "delete")?;
+        }
+
+        migrate(&conn)?;
+        Ok(Self {
+            conn: RefCell::new(conn),
+        })
+    }
+
+    fn connection(&self) -> std::cell::RefMut<'_, Connection> {
+        self.conn.borrow_mut()
+    }
+}
+
+/// Install the OPFS SAH-pool VFS. Call once, before [`open_browser`].
+#[cfg(target_arch = "wasm32")]
+pub async fn install_browser_vfs(directory: &str) -> Result<(), StoreError> {
+    use sqlite_wasm_rs::WasmOsCallback;
+    use sqlite_wasm_vfs::sahpool::{install, OpfsSAHPoolCfgBuilder};
+
+    let config = OpfsSAHPoolCfgBuilder::new()
+        .directory(directory)
+        .initial_capacity(6)
+        .build();
+    install::<WasmOsCallback>(&config, true)
+        .await
+        .map(|_| ())
+        .map_err(|error| StoreError::Browser(error.to_string()))
+}
+
+/// Open the browser database. [`install_browser_vfs`] must have run first.
+#[cfg(target_arch = "wasm32")]
+pub fn open_browser(file_name: &str) -> Result<SqliteStore, StoreError> {
+    SqliteStore::from_connection(Connection::open(file_name)?)
+}
+
+impl NoteStore for SqliteStore {
+    fn create_note(&self, new_note: NewNote) -> Result<Note, StoreError> {
+        let meta = NoteMeta {
+            notebook_id: new_note.notebook_id,
+            tags: normalize_tags(new_note.tags),
+            created_at: new_note.created_at,
+            ..NoteMeta::default()
+        };
+        let note = Note::from_text(NoteId::new(), &new_note.text, &meta)?;
+        let mut conn = self.connection();
+        let tx = conn.transaction()?;
+        save_note_with(&tx, &note, new_note.created_at)?;
+        tx.commit()?;
+        Ok(note)
+    }
+
+    fn open_note(&self, id: &NoteId) -> Result<Note, StoreError> {
+        let conn = self.conn.borrow();
+        load_note(&conn, id)?.ok_or(StoreError::NoteNotFound(*id))
+    }
+
+    fn save_note(&self, note: &Note, updated_at: i64) -> Result<NoteSummary, StoreError> {
+        let mut conn = self.connection();
+        let tx = conn.transaction()?;
+        let summary = save_note_with(&tx, note, updated_at)?;
+        tx.commit()?;
+        Ok(summary)
+    }
+
+    fn note_summary(&self, id: &NoteId) -> Result<NoteSummary, StoreError> {
+        let conn = self.conn.borrow();
+        let mut summaries = list_with(
+            &conn,
+            &NoteQuery {
+                view: NoteView::All,
+                limit: 0,
+                ..NoteQuery::default()
+            },
+            Some(*id),
+        )?;
+        summaries.pop().ok_or(StoreError::NoteNotFound(*id))
+    }
+
+    fn list_notes(&self, query: &NoteQuery) -> Result<Vec<NoteSummary>, StoreError> {
+        let conn = self.conn.borrow();
+        list_with(&conn, query, None)
+    }
+
+    fn search(&self, query: &SearchQuery) -> Result<Vec<SearchHit>, StoreError> {
+        let conn = self.conn.borrow();
+        search_with(&conn, query)
+    }
+
+    fn trash_note(&self, id: &NoteId, at: i64) -> Result<bool, StoreError> {
+        let note = self.open_note(id)?;
+        if !note.trash(at)? {
+            return Ok(false);
+        }
+        let mut conn = self.connection();
+        let tx = conn.transaction()?;
+        save_note_with(&tx, &note, at)?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    fn restore_note(&self, id: &NoteId, at: i64) -> Result<bool, StoreError> {
+        let note = self.open_note(id)?;
+        if !note.restore()? {
+            return Ok(false);
+        }
+        let mut conn = self.connection();
+        let tx = conn.transaction()?;
+        save_note_with(&tx, &note, at)?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    fn empty_trash(&self) -> Result<usize, StoreError> {
+        let mut conn = self.connection();
+        let tx = conn.transaction()?;
+        let count: i64 = tx.query_row(
+            "SELECT count(*) FROM note WHERE trashed_at <> 0",
+            [],
+            |row| row.get(0),
+        )?;
+        tx.execute(
+            "DELETE FROM note_fts WHERE rowid IN (SELECT seq FROM note WHERE trashed_at <> 0)",
+            [],
+        )?;
+        tx.execute(
+            "DELETE FROM note_tag WHERE note_id IN (SELECT id FROM note WHERE trashed_at <> 0)",
+            [],
+        )?;
+        tx.execute("DELETE FROM note WHERE trashed_at <> 0", [])?;
+        tx.commit()?;
+        Ok(count.max(0) as usize)
+    }
+
+    fn note_count(&self) -> Result<u64, StoreError> {
+        let conn = self.conn.borrow();
+        let count: i64 = conn.query_row(
+            "SELECT count(*) FROM note WHERE trashed_at = 0",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count.max(0) as u64)
+    }
+
+    fn apply_update(&self, id: &NoteId, update: &[u8], at: i64) -> Result<Note, StoreError> {
+        let mut conn = self.connection();
+        let tx = conn.transaction()?;
+        let note = match load_note(&tx, id)? {
+            Some(note) => note,
+            None => Note::new(*id, at)?,
+        };
+        note.document().import(update)?;
+        note.commit_at(at);
+        save_note_with(&tx, &note, at)?;
+        tx.commit()?;
+        Ok(note)
+    }
+
+    fn last_pushed(&self, id: &NoteId) -> Result<Option<Vec<u8>>, StoreError> {
+        let conn = self.conn.borrow();
+        let value: Option<Option<Vec<u8>>> = conn
+            .query_row(
+                "SELECT last_pushed FROM note WHERE id = ?1",
+                params![id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        value.ok_or(StoreError::NoteNotFound(*id))
+    }
+
+    fn set_last_pushed(&self, id: &NoteId, version: &[u8]) -> Result<(), StoreError> {
+        let conn = self.conn.borrow();
+        let changed = conn.execute(
+            "UPDATE note SET last_pushed = ?2 WHERE id = ?1",
+            params![id.to_string(), version],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::NoteNotFound(*id));
+        }
+        Ok(())
+    }
+
+    fn list_notebooks(&self) -> Result<Vec<Notebook>, StoreError> {
+        let conn = self.conn.borrow();
+        notebook_rows(&conn)
+    }
+
+    fn create_notebook(&self, name: &str, at: i64) -> Result<Notebook, StoreError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(StoreError::Invalid("notebook name is empty".to_string()));
+        }
+        let notebook = Notebook {
+            id: NotebookId::new(),
+            name: name.to_string(),
+            created_at: at,
+        };
+        let mut conn = self.connection();
+        let tx = conn.transaction()?;
+        let workspace = load_workspace(&tx)?;
+        workspace.upsert_notebook(&notebook)?;
+        save_workspace(&tx, &workspace)?;
+        tx.execute(
+            "INSERT INTO notebook (id, name, created_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(id) DO UPDATE SET name = excluded.name",
+            params![notebook.id.to_string(), notebook.name, notebook.created_at],
+        )?;
+        tx.commit()?;
+        Ok(notebook)
+    }
+
+    fn rename_notebook(&self, id: &NotebookId, name: &str) -> Result<bool, StoreError> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(StoreError::Invalid("notebook name is empty".to_string()));
+        }
+        let mut conn = self.connection();
+        let tx = conn.transaction()?;
+        let workspace = load_workspace(&tx)?;
+        if !workspace.rename_notebook(id, name)? {
+            return Ok(false);
+        }
+        save_workspace(&tx, &workspace)?;
+        let changed = tx.execute(
+            "UPDATE notebook SET name = ?2 WHERE id = ?1",
+            params![id.to_string(), name],
+        )?;
+        tx.commit()?;
+        Ok(changed > 0)
+    }
+
+    fn delete_notebook(&self, id: &NotebookId) -> Result<bool, StoreError> {
+        let mut conn = self.connection();
+        let tx = conn.transaction()?;
+        let workspace = load_workspace(&tx)?;
+        if !workspace.delete_notebook(id)? {
+            return Ok(false);
+        }
+        save_workspace(&tx, &workspace)?;
+        tx.execute(
+            "DELETE FROM notebook WHERE id = ?1",
+            params![id.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    fn workspace_snapshot(&self) -> Result<Vec<u8>, StoreError> {
+        let conn = self.conn.borrow();
+        Ok(load_workspace(&conn)?.snapshot()?)
+    }
+
+    fn import_workspace(&self, bytes: &[u8]) -> Result<Vec<Notebook>, StoreError> {
+        let mut conn = self.connection();
+        let tx = conn.transaction()?;
+        let workspace = load_workspace(&tx)?;
+        workspace.import(bytes)?;
+        save_workspace(&tx, &workspace)?;
+        tx.execute("DELETE FROM notebook", [])?;
+        let notebooks = workspace.notebooks();
+        {
+            let mut insert =
+                tx.prepare("INSERT INTO notebook (id, name, created_at) VALUES (?1, ?2, ?3)")?;
+            for notebook in &notebooks {
+                insert.execute(params![
+                    notebook.id.to_string(),
+                    notebook.name,
+                    notebook.created_at
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(notebooks)
+    }
+
+    fn list_tags(&self) -> Result<Vec<TagCount>, StoreError> {
+        let conn = self.conn.borrow();
+        let mut statement = conn.prepare(
+            "SELECT t.tag, count(*) FROM note_tag t
+             JOIN note n ON n.id = t.note_id
+             WHERE n.trashed_at = 0
+             GROUP BY t.tag
+             ORDER BY count(*) DESC, t.tag",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(TagCount {
+                tag: row.get(0)?,
+                count: row.get::<_, i64>(1)?.max(0) as u64,
+            })
+        })?;
+        let mut tags = Vec::new();
+        for row in rows {
+            tags.push(row?);
+        }
+        Ok(tags)
+    }
+
+    fn sync_state(&self) -> Result<SyncState, StoreError> {
+        let conn = self.conn.borrow();
+        let state: Option<SyncState> = conn
+            .query_row(
+                "SELECT cursor, updated_at FROM sync_state WHERE id = 1",
+                [],
+                |row| {
+                    Ok(SyncState {
+                        cursor: row.get(0)?,
+                        updated_at: row.get(1)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(state.unwrap_or_default())
+    }
+
+    fn set_sync_state(&self, state: &SyncState) -> Result<(), StoreError> {
+        let conn = self.conn.borrow();
+        conn.execute(
+            "INSERT INTO sync_state (id, cursor, updated_at) VALUES (1, ?1, ?2)
+             ON CONFLICT(id) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at",
+            params![state.cursor, state.updated_at],
+        )?;
+        Ok(())
+    }
+
+    fn export_zip(&self, exported_at: i64) -> Result<Vec<u8>, StoreError> {
+        let bundle = {
+            let conn = self.conn.borrow();
+            export_bundle_with(&conn, exported_at)?
+        };
+        let mut bytes = Vec::new();
+        write_export_zip(&bundle, Cursor::new(&mut bytes))?;
+        Ok(bytes)
+    }
+
+    fn import_zip(&self, bytes: &[u8]) -> Result<ImportReport, StoreError> {
+        let bundle = read_export_zip(Cursor::new(bytes))?;
+        let mut conn = self.connection();
+        let tx = conn.transaction()?;
+        let mut report = ImportReport::default();
+
+        let workspace = load_workspace(&tx)?;
+        for notebook in &bundle.notebooks {
+            workspace.upsert_notebook(notebook)?;
+            tx.execute(
+                "INSERT INTO notebook (id, name, created_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(id) DO UPDATE SET name = excluded.name",
+                params![notebook.id.to_string(), notebook.name, notebook.created_at],
+            )?;
+            report.notebooks += 1;
+        }
+        save_workspace(&tx, &workspace)?;
+
+        let stamp = if bundle.exported_at > 0 {
+            bundle.exported_at
+        } else {
+            1
+        };
+        for import in &bundle.notes {
+            match load_note(&tx, &import.id)? {
+                Some(existing) => {
+                    existing.replace_text(&import.text)?;
+                    existing.set_meta(&import.meta)?;
+                    existing.commit_at(stamp);
+                    save_note_with(&tx, &existing, stamp)?;
+                    report.notes_updated += 1;
+                }
+                None => {
+                    let note = Note::from_text(import.id, &import.text, &import.meta)?;
+                    save_note_with(&tx, &note, stamp)?;
+                    report.notes_created += 1;
+                }
+            }
+        }
+
+        for attachment in &bundle.attachments {
+            tx.execute(
+                "INSERT INTO attachment (id, note_id, name, mime, size, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    NoteId::new().to_string(),
+                    attachment.note_id.map(|id| id.to_string()),
+                    attachment.name,
+                    attachment.mime,
+                    attachment.data.len() as i64,
+                    stamp
+                ],
+            )?;
+            report.attachments += 1;
+        }
+
+        tx.commit()?;
+        Ok(report)
+    }
+}
+
+/// Run `PRAGMA user_version` migrations.
+fn migrate(conn: &Connection) -> Result<(), StoreError> {
+    let version: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    match version {
+        0 => {
+            conn.execute_batch(SCHEMA)?;
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            Ok(())
+        }
+        v if v == SCHEMA_VERSION => Ok(()),
+        v if v > SCHEMA_VERSION => Err(StoreError::Invalid(format!(
+            "database schema {v} is newer than this build's {SCHEMA_VERSION}"
+        ))),
+        v => Err(StoreError::Invalid(format!(
+            "database schema {v} is older than this build's {SCHEMA_VERSION}"
+        ))),
+    }
+}
+
+/// Load one note's snapshot, if the row exists.
+fn load_note(conn: &Connection, id: &NoteId) -> Result<Option<Note>, StoreError> {
+    let snapshot: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT snapshot FROM note WHERE id = ?1",
+            params![id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    match snapshot {
+        Some(bytes) => Ok(Some(Note::from_snapshot(*id, &bytes)?)),
+        None => Ok(None),
+    }
+}
+
+/// Write one note's row, tags and search index. The caller owns the transaction.
+fn save_note_with(
+    conn: &Connection,
+    note: &Note,
+    updated_at: i64,
+) -> Result<NoteSummary, StoreError> {
+    let id = note.id();
+    let id_text = id.to_string();
+    let meta = note.meta();
+    let title = note.title();
+    let preview = note.preview();
+    let text = note.text();
+    let snapshot = note.document().snapshot()?;
+    let created_at = if meta.created_at != 0 {
+        meta.created_at
+    } else {
+        updated_at
+    };
+    let trashed_at = meta.trashed_at.unwrap_or(0);
+    let notebook_id = meta.notebook_id.map(|id| id.to_string());
+
+    conn.execute(
+        UPSERT_NOTE,
+        params![
+            id_text,
+            snapshot,
+            title,
+            preview,
+            notebook_id,
+            meta.pinned,
+            meta.archived,
+            meta.color,
+            created_at,
+            updated_at,
+            trashed_at
+        ],
+    )?;
+
+    let tags = normalize_tags(meta.tags);
+    conn.execute("DELETE FROM note_tag WHERE note_id = ?1", params![id_text])?;
+    {
+        let mut insert = conn.prepare(
+            "INSERT OR REPLACE INTO note_tag (note_id, tag, position) VALUES (?1, ?2, ?3)",
+        )?;
+        for (position, tag) in tags.iter().enumerate() {
+            insert.execute(params![id_text, tag, position as i64])?;
+        }
+    }
+
+    // The FTS row shares the note's integer rowid, so this touches one row.
+    conn.execute(
+        "DELETE FROM note_fts WHERE rowid = (SELECT seq FROM note WHERE id = ?1)",
+        params![id_text],
+    )?;
+    conn.execute(
+        "INSERT INTO note_fts (rowid, note_id, title, body)
+         VALUES ((SELECT seq FROM note WHERE id = ?1), ?1, ?2, ?3)",
+        params![id_text, title, text],
+    )?;
+
+    Ok(NoteSummary {
+        id,
+        title,
+        preview,
+        notebook_id: meta.notebook_id,
+        tags,
+        pinned: meta.pinned,
+        archived: meta.archived,
+        color: meta.color,
+        created_at,
+        updated_at,
+        trashed_at: meta.trashed_at,
+    })
+}
+
+/// A database row before ids are parsed.
+struct RawSummary {
+    id: String,
+    title: String,
+    preview: String,
+    notebook_id: Option<String>,
+    pinned: bool,
+    archived: bool,
+    color: Option<String>,
+    created_at: i64,
+    updated_at: i64,
+    trashed_at: i64,
+}
+
+fn raw_summary(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawSummary> {
+    Ok(RawSummary {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        preview: row.get(2)?,
+        notebook_id: row.get(3)?,
+        pinned: row.get::<_, i64>(4)? != 0,
+        archived: row.get::<_, i64>(5)? != 0,
+        color: row.get(6)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
+        trashed_at: row.get(9)?,
+    })
+}
+
+fn finish_summary(raw: RawSummary) -> Result<NoteSummary, StoreError> {
+    let id = NoteId::parse(&raw.id).map_err(|_| StoreError::Corrupt(format!("id {}", raw.id)))?;
+    let notebook_id = match raw.notebook_id {
+        Some(value) if !value.is_empty() => Some(
+            NotebookId::parse(&value)
+                .map_err(|_| StoreError::Corrupt(format!("notebook {value}")))?,
+        ),
+        _ => None,
+    };
+    Ok(NoteSummary {
+        id,
+        title: raw.title,
+        preview: raw.preview,
+        notebook_id,
+        tags: Vec::new(),
+        pinned: raw.pinned,
+        archived: raw.archived,
+        color: raw.color.filter(|value| !value.is_empty()),
+        created_at: raw.created_at,
+        updated_at: raw.updated_at,
+        trashed_at: if raw.trashed_at == 0 {
+            None
+        } else {
+            Some(raw.trashed_at)
+        },
+    })
+}
+
+/// List notes, optionally for a single id.
+fn list_with(
+    conn: &Connection,
+    query: &NoteQuery,
+    only: Option<NoteId>,
+) -> Result<Vec<NoteSummary>, StoreError> {
+    let mut sql = format!("SELECT {SUMMARY_COLUMNS} FROM note n WHERE ");
+    let mut params: Vec<Value> = Vec::new();
+
+    let mut clauses = vec![view_clause(query.view).to_string()];
+    if let Some(id) = only {
+        clauses.push("n.id = ?".to_string());
+        params.push(Value::Text(id.to_string()));
+    }
+    if let Some(notebook_id) = query.notebook_id {
+        clauses.push("n.notebook_id = ?".to_string());
+        params.push(Value::Text(notebook_id.to_string()));
+    }
+    if let Some(tag) = query
+        .tag
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    {
+        clauses.push(
+            "EXISTS (SELECT 1 FROM note_tag t WHERE t.note_id = n.id AND t.tag = ?)".to_string(),
+        );
+        params.push(Value::Text(tag.to_string()));
+    }
+    sql.push_str(&clauses.join(" AND "));
+    sql.push_str(match query.view {
+        NoteView::Trash => " ORDER BY n.trashed_at DESC, n.updated_at DESC, n.id",
+        _ => " ORDER BY n.pinned DESC, n.updated_at DESC, n.id",
+    });
+    if query.limit > 0 {
+        sql.push_str(" LIMIT ? OFFSET ?");
+        params.push(Value::Integer(query.limit as i64));
+        params.push(Value::Integer(query.offset as i64));
+    } else if query.offset > 0 {
+        sql.push_str(" LIMIT -1 OFFSET ?");
+        params.push(Value::Integer(query.offset as i64));
+    }
+
+    let mut statement = conn.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(params.iter()), raw_summary)?;
+    let mut summaries = Vec::new();
+    for row in rows {
+        summaries.push(finish_summary(row?)?);
+    }
+    drop(statement);
+    attach_tags(conn, &mut summaries)?;
+    Ok(summaries)
+}
+
+/// Full-text search over title and body.
+fn search_with(conn: &Connection, query: &SearchQuery) -> Result<Vec<SearchHit>, StoreError> {
+    let Some(expression) = fts_expression(&query.text) else {
+        return Ok(Vec::new());
+    };
+    let limit = if query.limit == 0 { 50 } else { query.limit };
+
+    let mut sql = format!(
+        "SELECT {SUMMARY_COLUMNS}, bm25(note_fts) AS rank, \
+         snippet(note_fts, -1, '[', ']', '…', 12) \
+         FROM note_fts JOIN note n ON n.id = note_fts.note_id WHERE note_fts MATCH ?"
+    );
+    let mut params: Vec<Value> = vec![Value::Text(expression)];
+    let mut clauses = vec![view_clause(query.view).to_string()];
+    if let Some(notebook_id) = query.notebook_id {
+        clauses.push("n.notebook_id = ?".to_string());
+        params.push(Value::Text(notebook_id.to_string()));
+    }
+    if let Some(tag) = query
+        .tag
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    {
+        clauses.push(
+            "EXISTS (SELECT 1 FROM note_tag t WHERE t.note_id = n.id AND t.tag = ?)".to_string(),
+        );
+        params.push(Value::Text(tag.to_string()));
+    }
+    sql.push_str(" AND ");
+    sql.push_str(&clauses.join(" AND "));
+    sql.push_str(" ORDER BY rank LIMIT ?");
+    params.push(Value::Integer(limit as i64));
+
+    let mut statement = conn.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(params.iter()), |row| {
+        Ok((
+            raw_summary(row)?,
+            row.get::<_, f64>(10)?,
+            row.get::<_, String>(11)?,
+        ))
+    })?;
+    let mut hits = Vec::new();
+    for row in rows {
+        let (raw, rank, snippet) = row?;
+        hits.push(SearchHit {
+            note: finish_summary(raw)?,
+            snippet,
+            rank,
+        });
+    }
+    drop(statement);
+
+    let mut summaries: Vec<NoteSummary> = hits.iter().map(|hit| hit.note.clone()).collect();
+    attach_tags(conn, &mut summaries)?;
+    for (hit, summary) in hits.iter_mut().zip(summaries) {
+        hit.note = summary;
+    }
+    Ok(hits)
+}
+
+/// Turn user text into an FTS5 expression: every word, matched by prefix.
+///
+/// The whole query is quoted, so `AND`, `OR` and `*` typed by the user cannot
+/// be read as FTS5 syntax.
+fn fts_expression(text: &str) -> Option<String> {
+    let mut terms = Vec::new();
+    for word in text.split(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '\'')) {
+        let word = word.trim_matches('\'');
+        if word.is_empty() {
+            continue;
+        }
+        terms.push(format!("\"{word}\"*"));
+    }
+    if terms.is_empty() {
+        None
+    } else {
+        Some(terms.join(" AND "))
+    }
+}
+
+fn view_clause(view: NoteView) -> &'static str {
+    match view {
+        NoteView::Active => "n.trashed_at = 0 AND n.archived = 0",
+        NoteView::Archived => "n.trashed_at = 0 AND n.archived = 1",
+        NoteView::Trash => "n.trashed_at <> 0",
+        NoteView::All => "1 = 1",
+    }
+}
+
+/// Read the tags of the listed notes in one query, keeping their order.
+fn attach_tags(conn: &Connection, summaries: &mut [NoteSummary]) -> Result<(), StoreError> {
+    if summaries.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<String> = summaries.iter().map(|note| note.id.to_string()).collect();
+    let placeholders = vec!["?"; ids.len()].join(",");
+    let sql = format!(
+        "SELECT note_id, tag FROM note_tag WHERE note_id IN ({placeholders}) \
+         ORDER BY note_id, position"
+    );
+    let mut statement = conn.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(ids.iter().map(String::as_str)), |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut by_note: HashMap<String, Vec<String>> = HashMap::new();
+    for row in rows {
+        let (id, tag) = row?;
+        by_note.entry(id).or_default().push(tag);
+    }
+    for summary in summaries.iter_mut() {
+        if let Some(tags) = by_note.remove(&summary.id.to_string()) {
+            summary.tags = tags;
+        }
+    }
+    Ok(())
+}
+
+fn notebook_rows(conn: &Connection) -> Result<Vec<Notebook>, StoreError> {
+    let mut statement =
+        conn.prepare("SELECT id, name, created_at FROM notebook ORDER BY created_at, name, id")?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+        ))
+    })?;
+    let mut notebooks = Vec::new();
+    for row in rows {
+        let (id, name, created_at) = row?;
+        let id =
+            NotebookId::parse(&id).map_err(|_| StoreError::Corrupt(format!("notebook id {id}")))?;
+        notebooks.push(Notebook {
+            id,
+            name,
+            created_at,
+        });
+    }
+    Ok(notebooks)
+}
+
+fn load_workspace(conn: &Connection) -> Result<WorkspaceDocument, StoreError> {
+    let snapshot: Option<Vec<u8>> = conn
+        .query_row("SELECT snapshot FROM workspace WHERE id = 1", [], |row| {
+            row.get(0)
+        })
+        .optional()?;
+    match snapshot {
+        Some(bytes) => Ok(WorkspaceDocument::from_snapshot(&bytes)?),
+        None => Ok(WorkspaceDocument::new()),
+    }
+}
+
+fn save_workspace(conn: &Connection, workspace: &WorkspaceDocument) -> Result<(), StoreError> {
+    let snapshot = workspace.snapshot()?;
+    conn.execute(
+        "INSERT INTO workspace (id, snapshot) VALUES (1, ?1)
+         ON CONFLICT(id) DO UPDATE SET snapshot = excluded.snapshot",
+        params![snapshot],
+    )?;
+    Ok(())
+}
+
+/// Gather every note, notebook and attachment for an export.
+fn export_bundle_with(conn: &Connection, exported_at: i64) -> Result<ExportBundle, StoreError> {
+    let mut statement = conn.prepare("SELECT id FROM note ORDER BY created_at, id")?;
+    let ids = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<String>, _>>()?;
+    drop(statement);
+
+    let mut notes = Vec::with_capacity(ids.len());
+    for id in ids {
+        let id = NoteId::parse(&id).map_err(|_| StoreError::Corrupt(format!("note id {id}")))?;
+        let note = load_note(conn, &id)?.ok_or(StoreError::NoteNotFound(id))?;
+        notes.push(ExportNote {
+            id,
+            meta: note.meta(),
+            text: note.text(),
+        });
+    }
+
+    let mut statement =
+        conn.prepare("SELECT note_id, name, mime FROM attachment ORDER BY created_at, name")?;
+    let attachments = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .map(|(note_id, name, mime)| {
+            let note_id = note_id.and_then(|value| NoteId::parse(&value).ok());
+            ExportAttachment {
+                note_id,
+                name,
+                mime,
+                // Attachment bytes land here in P6; the metadata is exported now.
+                data: Vec::new(),
+            }
+        })
+        .collect();
+
+    Ok(ExportBundle {
+        exported_at,
+        notebooks: notebook_rows(conn)?,
+        notes,
+        attachments,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fts_expression;
+
+    #[test]
+    fn search_words_become_quoted_prefix_terms() {
+        assert_eq!(
+            fts_expression("quick fox"),
+            Some("\"quick\"* AND \"fox\"*".to_string())
+        );
+        assert_eq!(
+            fts_expression("don't stop"),
+            Some("\"don't\"* AND \"stop\"*".to_string())
+        );
+        assert_eq!(fts_expression("  ...  "), None);
+    }
+
+    #[test]
+    fn fts_syntax_characters_are_not_operators() {
+        let expression = fts_expression("rock OR roll*").expect("expression");
+        assert!(!expression.contains(" OR "));
+        assert_eq!(
+            expression,
+            "\"rock\"* AND \"OR\"* AND \"roll\"*".to_string()
+        );
+    }
+}
