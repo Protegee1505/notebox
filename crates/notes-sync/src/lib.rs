@@ -46,8 +46,8 @@ pub use blob::{
     chunk_count, sha256_hex, AttachmentData, AttachmentRef, CHUNK_BYTES, MAX_ATTACHMENT_BYTES,
 };
 pub use engine::{
-    workspace_note_id, SyncClient, SyncConfig, SyncOutcome, EDIT_DEBOUNCE_SECS, MAX_PAGES,
-    SYNC_INTERVAL_SECS,
+    workspace_note_id, AttachmentSyncOutcome, SyncClient, SyncConfig, SyncOutcome,
+    EDIT_DEBOUNCE_SECS, MAX_PAGES, SYNC_INTERVAL_SECS,
 };
 pub use error::SyncError;
 pub use key::{

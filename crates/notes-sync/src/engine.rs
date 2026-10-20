@@ -69,6 +69,17 @@ pub struct SyncOutcome {
     pub more: bool,
 }
 
+/// What one note's attachment pass did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AttachmentSyncOutcome {
+    /// Local attachments the server accepted.
+    pub uploaded: usize,
+    /// Attachments whose bytes arrived from the server.
+    pub downloaded: usize,
+    /// Placeholders the server does not have either.
+    pub missing: usize,
+}
+
 /// What a device needs to know before it can sync.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncConfig {
@@ -334,6 +345,59 @@ impl<T: SyncTransport> SyncClient<T> {
     pub async fn download_attachment(&self, hash: &str) -> Result<AttachmentData, SyncError> {
         let session = self.token()?;
         blob::download(&self.transport, &session.token, hash).await
+    }
+
+    /// Move the attachments one note links to or from the server.
+    ///
+    /// Local bytes the server has not seen are uploaded; a placeholder whose
+    /// bytes are missing locally is downloaded and verified. A placeholder the
+    /// server does not have either stays a placeholder and is counted in
+    /// [`AttachmentSyncOutcome::missing`], so one broken link cannot stop a
+    /// sync run. Every attachment is content-addressed, so this is safe to
+    /// call again after a partial run.
+    pub async fn sync_note_attachments(
+        &self,
+        store: &dyn NoteStore,
+        note: &NoteId,
+        now: i64,
+    ) -> Result<AttachmentSyncOutcome, SyncError> {
+        let session = self.token()?;
+        let mut outcome = AttachmentSyncOutcome::default();
+        for attachment in store.note_attachments(note)? {
+            if attachment.available {
+                if attachment.uploaded {
+                    continue;
+                }
+                let bytes = store.attachment_bytes(&attachment.hash)?.ok_or_else(|| {
+                    SyncError::Protocol(format!(
+                        "attachment {} is marked available but has no bytes",
+                        attachment.hash
+                    ))
+                })?;
+                let uploaded =
+                    blob::upload(&self.transport, &session.token, &bytes, &attachment.mime).await?;
+                if uploaded.hash != attachment.hash {
+                    return Err(SyncError::Protocol(format!(
+                        "uploaded {} bytes under hash {}",
+                        uploaded.size, attachment.hash
+                    )));
+                }
+                store.mark_attachment_uploaded(&attachment.hash, now)?;
+                outcome.uploaded += 1;
+                continue;
+            }
+
+            match blob::download(&self.transport, &session.token, &attachment.hash).await {
+                Ok(data) => {
+                    store.put_attachment(&attachment.name, &data.mime, &data.bytes, now)?;
+                    store.mark_attachment_uploaded(&attachment.hash, now)?;
+                    outcome.downloaded += 1;
+                }
+                Err(SyncError::Server { status: 404, .. }) => outcome.missing += 1,
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(outcome)
     }
 
     fn token(&self) -> Result<SyncSession, SyncError> {

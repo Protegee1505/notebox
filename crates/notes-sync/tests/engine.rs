@@ -21,8 +21,8 @@ use notes_proto::{
 use notes_server::{MemoryStorage, Server, ServerConfig, ServerError};
 use notes_store::{NewNote, NoteQuery, NoteStore, NoteView, SqliteStore, SyncState};
 use notes_sync::{
-    workspace_note_id, MemoryTokenStore, NoSleep, SyncClient, SyncConfig, SyncError, SyncOutcome,
-    SyncTransport, TokenStore,
+    workspace_note_id, AttachmentSyncOutcome, MemoryTokenStore, NoSleep, SyncClient, SyncConfig,
+    SyncError, SyncOutcome, SyncTransport, TokenStore,
 };
 
 const SETUP_TOKEN: &str = "setup-secret";
@@ -707,6 +707,117 @@ fn attachments_round_trip_between_devices_and_are_verified() {
     assert!(
         matches!(error, SyncError::HashMismatch { .. }),
         "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn a_note_photo_reaches_the_other_device() {
+    let server = InProcess::new();
+    let phone = device(&server, "phone");
+    phone.setup();
+    let desktop = device(&server, "desktop");
+    desktop.login();
+
+    // The phone compresses a photo, stores it and writes a note that links it.
+    let photo: Vec<u8> = (0..180_000u32).map(|index| (index % 253) as u8).collect();
+    let stored = phone
+        .store
+        .put_attachment("holiday.webp", "image/webp", &photo, phone.now())
+        .expect("store the photo");
+    let url = notes_core::attachment_url(&stored.hash, &stored.mime);
+    let note = phone
+        .store
+        .create_note(NewNote::new(
+            format!("Trip\n\n![holiday]({url})"),
+            phone.now(),
+        ))
+        .expect("create the note");
+
+    let uploaded = pollster::block_on(phone.client.sync_note_attachments(
+        &phone.store,
+        &note.id(),
+        phone.now(),
+    ))
+    .expect("upload the note's photo");
+    assert_eq!(uploaded.uploaded, 1);
+    phone.sync();
+
+    // The desktop learns the Markdown link but not the bytes.
+    desktop.sync();
+    let pulled = desktop.store.open_note(&note.id()).expect("open the note");
+    assert_eq!(pulled.text(), note.text());
+    let pending = desktop
+        .store
+        .note_attachments(&note.id())
+        .expect("list attachments");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].hash, stored.hash);
+    assert!(
+        !pending[0].available,
+        "a link alone must not pretend to have bytes"
+    );
+    assert_eq!(
+        desktop.store.attachment_bytes(&stored.hash).expect("bytes"),
+        None
+    );
+
+    // One attachment pass downloads and verifies it; the preview can now show it.
+    let downloaded = pollster::block_on(desktop.client.sync_note_attachments(
+        &desktop.store,
+        &note.id(),
+        desktop.now(),
+    ))
+    .expect("download the photo");
+    assert_eq!(downloaded.downloaded, 1);
+    let ready = desktop
+        .store
+        .note_attachments(&note.id())
+        .expect("list attachments");
+    assert!(ready[0].available);
+    assert_eq!(
+        desktop.store.attachment_bytes(&stored.hash).expect("bytes"),
+        Some(photo)
+    );
+    assert!(ready[0].uploaded, "downloaded bytes need no re-upload");
+
+    // A second pass is a no-op, and the server has one copy.
+    let again = pollster::block_on(desktop.client.sync_note_attachments(
+        &desktop.store,
+        &note.id(),
+        desktop.now(),
+    ))
+    .expect("no-op pass");
+    assert_eq!(again, AttachmentSyncOutcome::default());
+
+    // A broken link stays a placeholder instead of stopping the pass.
+    let missing_hash = "c".repeat(64);
+    let broken = phone
+        .store
+        .create_note(NewNote::new(
+            format!(
+                "Broken\n\n![missing]({})",
+                notes_core::attachment_url(&missing_hash, "image/webp")
+            ),
+            phone.now(),
+        ))
+        .expect("create a note with a broken link");
+    phone.sync();
+    desktop.sync();
+    let missing = pollster::block_on(desktop.client.sync_note_attachments(
+        &desktop.store,
+        &broken.id(),
+        desktop.now(),
+    ))
+    .expect("a missing blob is not a failed sync");
+    assert_eq!(missing.missing, 1);
+    assert!(
+        !desktop
+            .store
+            .note_attachments(&broken.id())
+            .expect("list")
+            .first()
+            .expect("one link")
+            .available
     );
 }
 
