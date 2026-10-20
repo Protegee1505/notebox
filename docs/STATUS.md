@@ -1,10 +1,36 @@
 # Status
 
 Updated: 2026-10-20
-Phase: 4 (app shell); P1–P3 complete, P4 complete and green in CI
+Phase: 5 (history and trash); P1–P4 complete, P5 local complete; the
+cross-device acceptance still waits on the browser sync transport
 
 ## Shipped
 
+- `notes-app`: the P5 history panel over the editor. The timeline lists
+  versions newest first with day, relative time, change count and device; the
+  detail shows a unified diff against the current note or a read-only Markdown
+  preview; restore writes the old body as a new edit. The palette has a
+  "Note history" command. Versions group one device's changes when the gap is
+  under five minutes, as PLAN specifies, so a short sitting is one version.
+  Screenshots at 360, 900 and 1400 px in both themes are in
+  `docs/screenshots/` (`p5-history-*`).
+- `notes-app`: the P5 trash view. A trashed note can be restored from its card
+  or the editor header, which returns to the active notes view. "Empty trash"
+  expands an inline confirmation with the note count before erasing, and the
+  empty state explains that deletes wait in the trash. Trash screenshots are
+  `p5-trash-*` at 360, 900 and 1400 px in both themes.
+- `notes-store`: schema v3 stores one random Loro peer id per database and
+  applies it to every note and workspace document. Before this, reopening a
+  note created a fresh peer, so autosaves looked like a new device and history
+  split into fake versions. The file-reopen and autosave-grouping tests cover
+  the fix.
+- `notes-store`: a focused two-store test restores an older version on the
+  second store, syncs the update back, and checks identical text and version
+  ids. This proves restore is an append-only edit that travels through sync;
+  the UI-level acceptance is still blocked on P7.
+- P5 browser verification: a Playwright flow passes 26 checks (seed, autosave,
+  timeline, diff, preview, restore, version retention, trash, confirm, cancel,
+  restore and empty) with no console errors at 1400 px.
 - `notes-app`: the P4 shell — design tokens with light, dark and system
   themes; a three-pane desktop layout that becomes two panes at 1100 px and
   one pane at 700 px; a top bar; a sidebar with views, notebooks, tags, theme
@@ -147,11 +173,14 @@ Phase: 4 (app shell); P1–P3 complete, P4 complete and green in CI
 
 | Check | Result |
 | --- | --- |
-| Native tests | 150 passed, 1 skipped (the ignored Worker client e2e) |
+| Native tests | 155 passed, 1 skipped (the ignored Worker client e2e) |
 | Search, 10,000 notes | seeded in 14,534 ms; search 4 ms (budget 100 ms), 1 hit |
 | 3-store convergence | random updates, metadata changes and sync order; identical text, metadata and history |
 | 3-replica core convergence | random edits, drops and random sync order |
-| Web bundle (release, brotli) | local 1,479,074 B, CI 1,478,616 B (1.41 MiB), limit 3.00 MiB; raw 6,087,996 B; wasm 5,986,977 B |
+| Web bundle (release, brotli) | local P5 1,545,831 B (1.47 MiB), limit 3.00 MiB; raw 6,485,710 B. P4 was 1,479,074 B local / 1,478,616 B CI |
+| P5 browser flow (Playwright) | 26/26 checks: autosave, timeline, diff, preview, restore, version retention, trash, confirm, cancel, restore and empty |
+| P5 layout review | 360/900/1400 px, light and dark; no horizontal overflow, no console errors |
+| Restore across stores | older version restored on store B reached store A after one update exchange; both reported the same three version ids |
 | P4 browser flow (Playwright) | 15/15 checks: seed, create, autosave, preview, Markdown, palette, search and find |
 | P4 layout review | 360/900/1400 px, light and dark; no horizontal overflow, no console errors |
 | Loro wasm delta (brotli) | 712,105 bytes (0.68 MiB), budget 1.5 MiB |
@@ -190,6 +219,11 @@ Phase: 4 (app shell); P1–P3 complete, P4 complete and green in CI
 - **Cold starts**: Linux desktop boot is verified under Xvfb, but the 600 ms
   cold-start number is not measured. Windows is build-only; Android has no
   boot or cold-start number.
+- **P5 cross-device acceptance**: restore itself is proven across two stores in
+  `sync_convergence`, but the app has no account/sync screen wired to the
+  engine and the web build uses a per-tab in-memory database. "A version
+  restored on one device appears on another within a minute" cannot be
+  demonstrated in the running app until P7.
 - **Browser persistence**: P4 runs the real `SqliteStore` schema through
   `open_in_memory()` in the browser, so a reload starts from the seed notes.
   The OPFS-backed worker and the browser sync transport remain for P7; until
@@ -197,11 +231,12 @@ Phase: 4 (app shell); P1–P3 complete, P4 complete and green in CI
 
 ## Next
 
-1. P5 history and trash UI against the existing core history API: version
-   timeline, diff, read-only preview and restore.
+1. P6 attachments: paste, drop and file picker, upload and lazy download,
+   gallery, then Android camera and WebP compression.
 2. Wire the OPFS-backed `SqliteStore` worker and browser sync transport in
    P7, replacing `open_in_memory()` and extending the S4 probe to the real
-   schema.
+   schema. Then rerun the P5 acceptance with two browser profiles: restore on
+   one, see the text on the other within a minute.
 3. S3 after `wrangler login`: deploy, create the account, measure request CPU
    with `wrangler tail` and write `docs/adr/0003-worker-free-tier.md`.
 4. Run S2/S5 on an Android emulator with `/dev/kvm` (CI or a physical device) to
