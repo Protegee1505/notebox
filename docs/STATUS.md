@@ -1,7 +1,7 @@
 # Status
 
 Updated: 2026-10-20
-Phase: 3 (sync); P1 and P2 complete, P3 complete locally, deploy and S3 next
+Phase: 3 (sync); P1 and P2 complete, P3 code complete and green in CI, deploy and S3 next
 
 ## Shipped
 
@@ -97,8 +97,8 @@ Phase: 3 (sync); P1 and P2 complete, P3 complete locally, deploy and S3 next
   Chromium boot check at 360, 900 and 1400 px (S1 web).
 - CI jobs for wasm tests and size, web build/budget, Linux desktop boot under
   Xvfb, Windows build, Android NDK compile and the server job. Run
-  [39379251864](https://github.com/Protegee1505/notebox/actions/runs/39379251864)
-  is green across all eight jobs, including `server`.
+  [39385729456](https://github.com/Protegee1505/notebox/actions/runs/39385729456)
+  is green across all eight jobs, including the client sync step in `server`.
 - ADR-0001, ADR-0002, ADR-0004, ADR-0005, ADR-0006 and ADR-0007 record the
   spike, dependency and encoding decisions. `docs/API.md` documents the v1
   endpoints the P3 engine implements.
@@ -161,9 +161,7 @@ Phase: 3 (sync); P1 and P2 complete, P3 complete locally, deploy and S3 next
 1. P4 UI: app shell, editor, login and settings against the core traits; wire
    `SqliteStore` into the browser worker and extend the OPFS probe to the real
    schema.
-2. Push the P3 commits and confirm the `server` job, including the new client
-   sync step, is green on GitHub.
-3. S3 after `wrangler login`: deploy, create the account, measure request CPU
+2. S3 after `wrangler login`: deploy, create the account, measure request CPU
    with `wrangler tail` and write `docs/adr/0003-worker-free-tier.md`.
-4. Run S2/S5 on an Android emulator with `/dev/kvm` (CI or a physical device) to
+3. Run S2/S5 on an Android emulator with `/dev/kvm` (CI or a physical device) to
    close the runtime gap, including Gboard composition.
