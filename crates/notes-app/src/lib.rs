@@ -13,7 +13,9 @@
 
 mod app;
 mod commands;
+mod images;
 mod markdown_ops;
+mod media;
 mod state;
 mod storage;
 mod time;

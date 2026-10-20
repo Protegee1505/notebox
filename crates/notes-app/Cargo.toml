@@ -13,12 +13,24 @@ notes-proto.workspace = true
 notes-store.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+base64.workspace = true
+thiserror.workspace = true
+image.workspace = true
+webp-rust.workspace = true
 # A portable delay for the autosave loop: setTimeout in the browser and a
 # background timer natively, with no async runtime of its own.
 futures-timer = { version = "3.0.3", features = ["wasm-bindgen"] }
 # `std::time` panics on wasm32-unknown-unknown; this crate uses the browser
 # clock there and re-exports the standard types natively.
 web-time = "1.1.0"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Dioxus 0.7.10's FileData::read_bytes hangs and its byte_stream panics on an
+# ArrayBuffer, so read the browser File directly. See ADR-0008.
+web-sys = { version = "0.3", features = ["Blob", "File"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
 
 [[bin]]
 name = "notebox"

@@ -1,10 +1,12 @@
 //! The Markdown editor, its toolbar and the rendered view.
 
+use dioxus::html::HasFileData;
 use dioxus::prelude::*;
-use notes_core::render_markdown;
+use notes_core::{parse_attachment_url, render_markdown_with_images};
 use notes_proto::NotebookId;
 
 use crate::markdown_ops::Mark;
+use crate::media::{attachment_kind, format_size};
 use crate::state::{
     edited_label, find_match_count, note_title, tone_class, word_count, AppContext, EditorMode,
     COLORS,
@@ -12,9 +14,36 @@ use crate::state::{
 use crate::ui::icons::Icon;
 use crate::ui::HistoryPanel;
 
+/// Clipboard images cannot travel through Dioxus's paste event, so a page
+/// listener hands them to the hidden file input instead. A single listener is
+/// installed for the lifetime of the page; the app can unmount and remount the
+/// editor without stacking handlers.
+const PASTE_SCRIPT: &str = r#"
+if (!window.__noteboxPasteBound) {
+  window.__noteboxPasteBound = true;
+  document.addEventListener('paste', (event) => {
+    const target = event.target;
+    if (!target || target.id !== 'note-editor') return;
+    const files = Array.from(event.clipboardData?.files || [])
+      .filter((file) => file.type.startsWith('image/'));
+    if (files.length === 0) return;
+    event.preventDefault();
+    const transfer = new DataTransfer();
+    for (const file of files) transfer.items.add(file);
+    const input = document.getElementById('note-image-input');
+    if (!input) return;
+    input.files = transfer.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+"#;
+
 #[component]
 pub fn EditorPane() -> Element {
     let context = use_context::<AppContext>();
+    use_effect(move || {
+        let _ = document::eval(PASTE_SCRIPT);
+    });
     let mut tag_draft = use_signal(String::new);
     let state = context.state.read();
     let selected = state.selected;
@@ -28,6 +57,8 @@ pub fn EditorPane() -> Element {
     let color_open = state.color_open;
     let history_open = state.history_open;
     let notebooks = state.notebooks.clone();
+    let attachments = state.attachments.clone();
+    let attaching = state.attaching;
     let summary = selected.and_then(|id| state.notes.iter().find(|note| note.id == id).cloned());
     let pinned = summary.as_ref().map(|note| note.pinned).unwrap_or(false);
     let archived = summary.as_ref().map(|note| note.archived).unwrap_or(false);
@@ -48,7 +79,6 @@ pub fn EditorPane() -> Element {
         .as_ref()
         .and_then(|note| note.color.clone())
         .unwrap_or_default();
-    drop(state);
 
     let Some(id) = selected else {
         return rsx! {
@@ -81,6 +111,16 @@ pub fn EditorPane() -> Element {
         };
     };
 
+    let preview_html = if mode == EditorMode::Preview {
+        let urls = &state.attachment_urls;
+        render_markdown_with_images(&draft, &|url| {
+            parse_attachment_url(url).and_then(|parsed| urls.get(parsed.hash).cloned())
+        })
+    } else {
+        String::new()
+    };
+    drop(state);
+
     let words = word_count(&draft);
     let characters = draft.chars().count();
     let matches = find_match_count(&draft, &find_query);
@@ -94,15 +134,49 @@ pub fn EditorPane() -> Element {
     } else {
         Some(note_color.as_str())
     });
-    let preview_html = render_markdown(&draft);
     let (mode_icon, mode_label) = if mode == EditorMode::Preview {
         ("edit", "Write")
     } else {
         ("eye", "Preview")
     };
+    let working_label = if attaching == 1 {
+        "Compressing 1 image\u{2026}".to_string()
+    } else {
+        format!("Compressing {attaching} images\u{2026}")
+    };
 
     rsx! {
         section { class: "editor-pane {tone}", aria_label: "Editor",
+            ondragover: move |event| event.prevent_default(),
+            ondrop: {
+                let context = context.clone();
+                move |event| {
+                    event.prevent_default();
+                    let files = event.files();
+                    if !files.is_empty() {
+                        context.attach_files(files);
+                    }
+                }
+            },
+            input {
+                id: "note-image-input",
+                class: "visually-hidden",
+                r#type: "file",
+                accept: "image/png,image/jpeg,image/gif,image/webp",
+                multiple: true,
+                tabindex: "-1",
+                onchange: {
+                    let context = context.clone();
+                    move |event| {
+                        let files = event.files();
+                        context.attach_files(files);
+                        let _ = document::eval(
+                            "const el = document.getElementById('note-image-input');\
+                             if (el) el.value = '';",
+                        );
+                    }
+                },
+            }
             header { class: "editor-header",
                 button {
                     class: "icon-button back-button",
@@ -378,6 +452,15 @@ pub fn EditorPane() -> Element {
                     MarkButton { icon: "code", label: "Code", mark: Mark::Code }
                     MarkButton { icon: "code-block", label: "Code block", mark: Mark::CodeBlock }
                     MarkButton { icon: "link", label: "Link", mark: Mark::Link }
+                    ToolButton {
+                        icon: "image",
+                        label: "Add image",
+                        onpick: move |_| {
+                            let _ = document::eval(
+                                "document.getElementById('note-image-input')?.click();",
+                            );
+                        },
+                    }
                 }
                 div { class: "toolbar-spacer" }
                 div { class: "tool-group",
@@ -453,6 +536,59 @@ pub fn EditorPane() -> Element {
                         class: "editor-preview markdown-body",
                         aria_label: "Rendered note",
                         dangerous_inner_html: "{preview_html}",
+                    }
+                }
+            }
+
+            if attaching > 0 {
+                div { class: "attachment-working", role: "status",
+                    span { class: "save-dot is-dirty" }
+                    "{working_label}"
+                }
+            }
+
+            if !attachments.is_empty() {
+                div { class: "attachment-strip", aria_label: "Attachments",
+                    div { class: "attachment-strip-head",
+                        span { class: "attachment-strip-title", "Attachments" }
+                        span { class: "attachment-strip-count", "{attachments.len()}" }
+                    }
+                    div { class: "attachment-rows",
+                        for attachment in attachments.iter().take(12) {
+                            div { key: "{attachment.hash}", class: "attachment-row",
+                                span { class: "attachment-icon", Icon { name: "image" } }
+                                div { class: "attachment-copy",
+                                    span { class: "attachment-name", "{attachment.name}" }
+                                    span { class: "attachment-detail",
+                                        "{attachment_kind(&attachment.mime)} \u{00b7} {format_size(attachment.size)}"
+                                        if !attachment.available {
+                                            " \u{00b7} not downloaded"
+                                        }
+                                    }
+                                }
+                                if attachment.available {
+                                    button {
+                                        class: "attachment-insert",
+                                        r#type: "button",
+                                        title: "Insert this image at the caret",
+                                        aria_label: "Insert {attachment.name}",
+                                        onclick: {
+                                            let context = context.clone();
+                                            let attachment = attachment.clone();
+                                            move |_| context.insert_attachment(attachment.clone())
+                                        },
+                                        "Insert"
+                                    }
+                                } else {
+                                    span { class: "attachment-waiting", "Waiting" }
+                                }
+                            }
+                        }
+                    }
+                    if attachments.len() > 12 {
+                        span { class: "attachment-more",
+                            "+{attachments.len() - 12} more"
+                        }
                     }
                 }
             }

@@ -48,6 +48,15 @@ argon2 = { version = "0.6.0", default-features = false, features = ["alloc"] }
 ureq = { version = "3.4.2", features = ["json"] }
 pulldown-cmark = "0.13.4"
 similar = "3.2.0"
+# P6 image ingest: pure-Rust decoding and lossy WebP encoding, so native,
+# wasm32 and Android share one code path with no C toolchain. See ADR-0008.
+image = { version = "0.25.10", default-features = false, features = [
+    "gif",
+    "jpeg",
+    "png",
+    "webp",
+] }
+webp-rust = "0.3.2"
 # Deflate only: zopfli and the other codecs would bloat the wasm build for no
 # gain on a Markdown export.
 zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }

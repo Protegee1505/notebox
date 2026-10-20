@@ -5,15 +5,20 @@
 //! keeps the view free of storage details and gives the browser worker in P7
 //! one place to plug into.
 
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use dioxus::prelude::*;
 use notes_core::{Note, NoteVersion};
 use notes_proto::{NoteId, Notebook, NotebookId};
-use notes_store::{NewNote, NoteQuery, NoteStore, NoteSummary, NoteView, SearchQuery, TagCount};
+use notes_store::{
+    Attachment, NewNote, NoteQuery, NoteStore, NoteSummary, NoteView, SearchQuery, TagCount,
+};
 use web_time::Instant;
 
+use crate::images;
 use crate::markdown_ops::{self, Mark};
+use crate::media;
 use crate::storage::{self, StorageInfo};
 use crate::time::{now, relative_time};
 
@@ -188,6 +193,12 @@ pub struct AppState {
     pub note_count: u64,
     /// Open note.
     pub selected: Option<NoteId>,
+    /// Attachments the open note links, in the order first added.
+    pub attachments: Vec<Attachment>,
+    /// Inline image URLs by content hash, for the rendered view.
+    pub attachment_urls: HashMap<String, String>,
+    /// Images being compressed before they are stored.
+    pub attaching: usize,
     /// Editor body.
     pub draft: String,
     /// Body as last written to SQLite.
@@ -283,6 +294,9 @@ impl AppState {
             tags: Vec::new(),
             note_count: 0,
             selected: None,
+            attachments: Vec::new(),
+            attachment_urls: HashMap::new(),
+            attaching: 0,
             draft: String::new(),
             saved_text: String::new(),
             dirty: false,
@@ -584,7 +598,7 @@ impl AppContext {
         let Some(store) = self.store() else {
             return;
         };
-        match store.open_note(&id) {
+        let opened = match store.open_note(&id) {
             Ok(note) => {
                 let saved_at = store
                     .note_summary(&id)
@@ -607,8 +621,17 @@ impl AppContext {
                 state.mobile_list = false;
                 state.editor_mode = EditorMode::Write;
                 hide_history(&mut state);
+                state.attachments.clear();
+                state.attachment_urls.clear();
+                true
             }
-            Err(error) => self.toast_danger(format!("Could not open note: {error}")),
+            Err(error) => {
+                self.toast_danger(format!("Could not open note: {error}"));
+                false
+            }
+        };
+        if opened {
+            self.load_attachments(id);
         }
     }
 
@@ -709,11 +732,16 @@ impl AppContext {
             Ok(summary) => {
                 let mut state = self.state.write_unchecked();
                 state.dirty = false;
-                state.saved_text = draft;
+                state.saved_text = draft.clone();
                 state.saved_at = stamp;
                 state.seen_seq = state.edit_seq;
                 let view = state.view;
                 replace_summary(&mut state.notes, summary, view);
+                let attachments_changed = attachment_set_changed(&draft, &state.attachments);
+                drop(state);
+                if attachments_changed {
+                    self.load_attachments(id);
+                }
             }
             Err(message) => {
                 let edit_seq = self.state.peek().edit_seq;
@@ -721,6 +749,62 @@ impl AppContext {
                 self.toast_danger(message);
             }
         }
+    }
+
+    /// Refresh the attachment strip and the inline image cache for a note.
+    ///
+    /// A note can mention a hash whose bytes are not here yet; that row stays
+    /// in the strip with a "not downloaded" state. Data URLs are built once per
+    /// hash and reused until the note changes.
+    fn load_attachments(&self, id: NoteId) {
+        let Some(store) = self.store() else {
+            return;
+        };
+        let attachments = match store.note_attachments(&id) {
+            Ok(attachments) => attachments,
+            Err(error) => {
+                self.toast_danger(format!("Could not list attachments: {error}"));
+                return;
+            }
+        };
+
+        let missing: Vec<Attachment> = {
+            let state = self.state.read();
+            attachments
+                .iter()
+                .filter(|attachment| {
+                    attachment.available
+                        && attachment.mime.starts_with("image/")
+                        && !state.attachment_urls.contains_key(&attachment.hash)
+                })
+                .cloned()
+                .collect()
+        };
+        let mut fresh_urls = Vec::with_capacity(missing.len());
+        for attachment in missing {
+            if let Ok(Some(bytes)) = store.attachment_bytes(&attachment.hash) {
+                fresh_urls.push((
+                    attachment.hash.clone(),
+                    media::image_data_url(&attachment.mime, &bytes),
+                ));
+            }
+        }
+
+        let mut state = self.state.write_unchecked();
+        if state.selected != Some(id) {
+            return;
+        }
+        state.attachment_urls.retain(|hash, _| {
+            attachments.iter().any(|attachment| {
+                &attachment.hash == hash
+                    && attachment.available
+                    && attachment.mime.starts_with("image/")
+            })
+        });
+        for (hash, url) in fresh_urls {
+            state.attachment_urls.insert(hash, url);
+        }
+        state.attachments = attachments;
     }
 
     /// Called about once a second: saves after a quiet moment, expires toasts
@@ -791,13 +875,13 @@ impl AppContext {
         if self.state.peek().editor_mode == EditorMode::Preview {
             self.state.write_unchecked().editor_mode = EditorMode::Write;
         }
-        let mut eval = document::eval(
+        let eval = document::eval(
             "const el = document.getElementById('note-editor');\
              return el ? [el.selectionStart, el.selectionEnd] : [0, 0];",
         );
         let context = self.clone();
         spawn(async move {
-            let selection = match eval.recv::<(usize, usize)>().await {
+            let selection = match eval.join::<(usize, usize)>().await {
                 Ok(selection) => selection,
                 Err(_) => {
                     let length = context.state.peek().draft.encode_utf16().count();
@@ -812,7 +896,119 @@ impl AppContext {
         });
     }
 
-    /// Put the caret or selection back after the text box re-renders.
+    /// Compress picked or dropped files and insert them at the caret.
+    ///
+    /// File reading is async; compression and the SQLite write are synchronous
+    /// on the UI thread for now. A 1600 px photo takes a moment, and the
+    /// toolbar shows an "Adding" state while it runs.
+    pub fn attach_files(&self, files: Vec<dioxus::html::FileData>) {
+        if files.is_empty() {
+            return;
+        }
+        if self.state.peek().selected.is_none() {
+            self.toast_info("Open a note before adding an image");
+            return;
+        }
+        let count = files.len();
+        self.state.write_unchecked().attaching += count;
+
+        let context = self.clone();
+        spawn(async move {
+            let mut snippets = Vec::new();
+            let mut failures = Vec::new();
+            for file in files {
+                let name = file.name();
+                let bytes = match read_file_bytes(&file).await {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        failures.push(format!("{name}: {error}"));
+                        continue;
+                    }
+                };
+                let image = match images::ingest(&name, &bytes) {
+                    Ok(image) => image,
+                    Err(error) => {
+                        failures.push(format!("{name}: {error}"));
+                        continue;
+                    }
+                };
+                let Some(store) = context.store() else {
+                    failures.push("storage is not open".to_string());
+                    break;
+                };
+                let stored =
+                    match store.put_attachment(&image.name, image.mime, &image.bytes, now()) {
+                        Ok(stored) => stored,
+                        Err(error) => {
+                            failures.push(format!("{name}: could not store it: {error}"));
+                            continue;
+                        }
+                    };
+                let url = notes_core::attachment_url(&stored.hash, &stored.mime);
+                snippets.push(format!("![{}]({url})", attachment_label(&stored.name)));
+            }
+
+            if !snippets.is_empty() {
+                let fallback = context.state.peek().draft.encode_utf16().count();
+                let (start, end) = selected_range(fallback).await;
+                let block = snippets.join("\n\n");
+                let text = context.state.peek().draft.clone();
+                let edit = markdown_ops::insert_block(&text, start, end, &block);
+                context.note_input(edit.text);
+                context.restore_selection(edit.selection);
+                context.save_now();
+                context.toast_success(format!(
+                    "Added {}{}",
+                    snippets.len(),
+                    if snippets.len() == 1 {
+                        " image"
+                    } else {
+                        " images"
+                    }
+                ));
+            }
+            if !failures.is_empty() {
+                let message = if failures.len() == 1 {
+                    failures.remove(0)
+                } else {
+                    format!(
+                        "{} images could not be added. {}",
+                        failures.len(),
+                        failures.remove(0)
+                    )
+                };
+                context.toast_danger(message);
+            }
+
+            let mut state = context.state.write_unchecked();
+            state.attaching = state.attaching.saturating_sub(count);
+        });
+    }
+
+    /// Insert an existing attachment's Markdown at the caret.
+    pub fn insert_attachment(&self, attachment: Attachment) {
+        if !attachment.available {
+            self.toast_info("That attachment has not downloaded yet");
+            return;
+        }
+        let block = format!(
+            "![{}]({})",
+            attachment_label(&attachment.name),
+            notes_core::attachment_url(&attachment.hash, &attachment.mime)
+        );
+        let context = self.clone();
+        spawn(async move {
+            let fallback = context.state.peek().draft.encode_utf16().count();
+            let (start, end) = selected_range(fallback).await;
+            let text = context.state.peek().draft.clone();
+            let edit = markdown_ops::insert_block(&text, start, end, &block);
+            context.note_input(edit.text);
+            context.restore_selection(edit.selection);
+            context.save_now();
+        });
+    }
+
+    /// Put the caret after a snippet inserted into the open note.
     fn restore_selection(&self, selection: (usize, usize)) {
         let (start, end) = selection;
         let _ = document::eval(&format!(
@@ -1567,6 +1763,70 @@ impl AppContext {
     }
 }
 
+/// Read a picked or dropped file.
+///
+/// Dioxus 0.7.10's web `read_bytes` waits on a FileReader event that never
+/// fires through the app's executor, and its `byte_stream` unwraps an
+/// `ArrayBuffer` as a `Uint8Array`. Reading the `File` here avoids both bugs.
+#[cfg(target_arch = "wasm32")]
+async fn read_file_bytes(file: &dioxus::html::FileData) -> Result<Vec<u8>, String> {
+    let file = file
+        .inner()
+        .downcast_ref::<web_sys::File>()
+        .ok_or_else(|| "the browser did not provide a file".to_string())?
+        .clone();
+    let buffer = wasm_bindgen_futures::JsFuture::from(file.array_buffer())
+        .await
+        .map_err(|error| format!("could not read the file: {error:?}"))?;
+    Ok(js_sys::Uint8Array::new(&buffer).to_vec())
+}
+
+/// Read a picked or dropped file on desktop and mobile.
+#[cfg(not(target_arch = "wasm32"))]
+async fn read_file_bytes(file: &dioxus::html::FileData) -> Result<Vec<u8>, String> {
+    file.read_bytes()
+        .await
+        .map(|bytes| bytes.to_vec())
+        .map_err(|error| format!("could not read the file: {error}"))
+}
+
+/// The text box selection, or the end of the draft when there is no text box.
+async fn selected_range(fallback: usize) -> (usize, usize) {
+    let eval = document::eval(
+        "const el = document.getElementById('note-editor');\
+         return el ? [el.selectionStart, el.selectionEnd] : null;",
+    );
+    match eval.join::<Option<(usize, usize)>>().await {
+        Ok(Some(selection)) => selection,
+        _ => (fallback, fallback),
+    }
+}
+
+/// Display name for an attachment's image tag: no suffix, no brackets.
+fn attachment_label(name: &str) -> String {
+    let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+    let label: String = stem
+        .chars()
+        .filter(|ch| !matches!(ch, '[' | ']' | '\n' | '\r'))
+        .take(80)
+        .collect();
+    let label = label.trim();
+    if label.is_empty() {
+        "image".to_string()
+    } else {
+        label.to_string()
+    }
+}
+
+/// Whether a saved draft refers to a different set of attachments.
+fn attachment_set_changed(draft: &str, attachments: &[Attachment]) -> bool {
+    let references = notes_core::references(draft);
+    references.len() != attachments.len()
+        || references
+            .iter()
+            .any(|reference| !attachments.iter().any(|item| item.hash == reference.hash))
+}
+
 /// Clear the history panel when the note or the list changes underneath it.
 ///
 /// Separate from [`AppContext::close_history`] so callers already holding the
@@ -1672,7 +1932,39 @@ pub fn edited_label(updated_at: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{find_match_count, tone_class, word_count};
+    use super::{
+        attachment_label, attachment_set_changed, find_match_count, tone_class, word_count,
+    };
+    use notes_store::Attachment;
+
+    fn attachment(hash: &str) -> Attachment {
+        Attachment {
+            hash: hash.to_string(),
+            name: "photo.webp".to_string(),
+            mime: "image/webp".to_string(),
+            size: 10,
+            available: true,
+            uploaded: false,
+            created_at: 1_000,
+        }
+    }
+
+    #[test]
+    fn attachment_labels_drop_the_suffix_and_brackets() {
+        assert_eq!(attachment_label("IMG 1.webp"), "IMG 1");
+        assert_eq!(attachment_label("[draft].webp"), "draft");
+        assert_eq!(attachment_label(".webp"), "image");
+    }
+
+    #[test]
+    fn attachment_changes_are_detected_by_hash() {
+        let hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let body = format!("![pic](attachments/{hash}.webp)");
+        assert!(!attachment_set_changed("plain text", &[]));
+        assert!(attachment_set_changed(&body, &[]));
+        assert!(!attachment_set_changed(&body, &[attachment(hash)]));
+        assert!(attachment_set_changed(&body, &[attachment("other")]));
+    }
 
     #[test]
     fn word_count_ignores_extra_whitespace() {

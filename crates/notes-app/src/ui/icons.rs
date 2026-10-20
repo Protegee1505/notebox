@@ -196,6 +196,11 @@ pub fn Icon(name: &'static str) -> Element {
                     path { d: "M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5" }
                     path { d: "M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6" }
                 },
+                "image" => rsx! {
+                    rect { x: "3", y: "4", width: "18", height: "16", rx: "2" }
+                    circle { cx: "9", cy: "10", r: "2" }
+                    path { d: "M21 15l-4.5-4.5L7 20" }
+                },
                 "sparkle" => rsx! {
                     path { d: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" }
                     path { d: "M19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z" }

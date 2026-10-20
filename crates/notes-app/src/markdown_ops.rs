@@ -77,6 +77,50 @@ pub fn apply(text: &str, start_utf16: usize, end_utf16: usize, mark: Mark) -> Ed
     }
 }
 
+/// Insert a block at the selection with blank lines around it.
+///
+/// Attachments read best as their own paragraph. Existing blank lines are
+/// reused rather than doubled, and the caret lands after the block.
+pub fn insert_block(text: &str, start_utf16: usize, end_utf16: usize, block: &str) -> Edit {
+    let start = utf16_to_byte(text, start_utf16);
+    let end = utf16_to_byte(text, end_utf16);
+    let (start, end) = if start <= end {
+        (start, end.min(text.len()))
+    } else {
+        (end, start)
+    };
+    let before = &text[..start];
+    let after = &text[end..];
+    let prefix = if before.is_empty() || before.ends_with("\n\n") {
+        ""
+    } else if before.ends_with('\n') {
+        "\n"
+    } else {
+        "\n\n"
+    };
+    let suffix = if after.is_empty() || after.starts_with("\n\n") {
+        ""
+    } else if after.starts_with('\n') {
+        "\n"
+    } else {
+        "\n\n"
+    };
+
+    let mut new_text =
+        String::with_capacity(text.len() + block.len() + prefix.len() + suffix.len());
+    new_text.push_str(before);
+    new_text.push_str(prefix);
+    new_text.push_str(block);
+    new_text.push_str(suffix);
+    let caret = new_text.len();
+    new_text.push_str(after);
+    let caret = byte_to_utf16(&new_text, caret);
+    Edit {
+        text: new_text,
+        selection: (caret, caret),
+    }
+}
+
 /// Wrap the selection, keeping it selected inside the markers.
 fn wrap(
     text: &str,
@@ -202,7 +246,32 @@ fn byte_to_utf16(text: &str, offset: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply, Mark};
+    use super::{apply, insert_block, Mark};
+
+    #[test]
+    fn a_block_gets_blank_lines_without_doubling_them() {
+        let edit = insert_block("hello", 5, 5, "![pic](attachments/a.webp)");
+        assert_eq!(edit.text, "hello\n\n![pic](attachments/a.webp)");
+        assert_eq!(edit.selection.0, 33);
+    }
+
+    #[test]
+    fn a_block_after_a_blank_line_does_not_add_more() {
+        let edit = insert_block("hello\n\n", 7, 7, "![pic](attachments/a.webp)");
+        assert_eq!(edit.text, "hello\n\n![pic](attachments/a.webp)");
+    }
+
+    #[test]
+    fn a_block_between_paragraphs_keeps_them_apart() {
+        let edit = insert_block("one\ntwo", 3, 3, "![x](attachments/b.webp)");
+        assert_eq!(edit.text, "one\n\n![x](attachments/b.webp)\n\ntwo");
+    }
+
+    #[test]
+    fn a_block_handles_an_emoji_before_the_caret() {
+        let edit = insert_block("😀 ", 3, 3, "![x](attachments/b.webp)");
+        assert_eq!(edit.text, "😀 \n\n![x](attachments/b.webp)");
+    }
 
     #[test]
     fn bold_wraps_a_selected_word() {
