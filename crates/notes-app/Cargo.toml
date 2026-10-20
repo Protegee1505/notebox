@@ -8,6 +8,17 @@ publish.workspace = true
 
 [dependencies]
 dioxus.workspace = true
+notes-core.workspace = true
+notes-proto.workspace = true
+notes-store.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# A portable delay for the autosave loop: setTimeout in the browser and a
+# background timer natively, with no async runtime of its own.
+futures-timer = { version = "3.0.3", features = ["wasm-bindgen"] }
+# `std::time` panics on wasm32-unknown-unknown; this crate uses the browser
+# clock there and re-exports the standard types natively.
+web-time = "1.1.0"
 
 [[bin]]
 name = "notebox"

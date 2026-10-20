@@ -25,7 +25,13 @@ notes-sync = { path = "crates/notes-sync" }
 notes-server = { path = "crates/notes-server" }
 
 # Pinned intentionally. Upgrade only with an ADR.
-dioxus = { version = "=0.7.10" }
+# `logger` is left out: its tracing subscriber reads `std::time::Instant`,
+# which panics on wasm32-unknown-unknown. The app does not need console logging.
+dioxus = { version = "=0.7.10", default-features = false, features = [
+    "launch",
+    "devtools",
+    "lib",
+] }
 
 # Planned dependencies, added to crates as their phases begin.
 loro = "1.16.2"

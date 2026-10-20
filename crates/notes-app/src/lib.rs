@@ -1,20 +1,22 @@
 //! Dioxus UI for web, desktop and Android.
 //!
-//! Phase 0 keeps this to the smallest possible app so the S1 boot spike
-//! measures the framework, not the product.
+//! The app owns presentation only. Every note operation goes through the
+//! [`NoteStore`](notes_store::NoteStore) trait, Markdown is rendered by
+//! `notes-core`, and the next phase can put the sync engine on the same store
+//! without a UI rewrite.
+//!
+//! Layout follows PLAN.md: one pane under 700 px, two panes from 700 px and
+//! three from 1100 px. The browser build keeps its database in memory for now;
+//! P7 moves it into an OPFS worker.
 
 #![forbid(unsafe_code)]
 
-use dioxus::prelude::*;
+mod app;
+mod commands;
+mod markdown_ops;
+mod state;
+mod storage;
+mod time;
+mod ui;
 
-/// Root component. Replaced by the app shell in Phase 4.
-#[component]
-pub fn App() -> Element {
-    rsx! {
-        main {
-            id: "app",
-            h1 { "Notebox" }
-            p { "Bootstrap build. No features yet." }
-        }
-    }
-}
+pub use app::App;

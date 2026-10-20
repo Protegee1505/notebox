@@ -1,0 +1,189 @@
+//! The application root: layout, keyboard shortcuts and the autosave ticker.
+
+use std::time::Duration;
+
+use dioxus::prelude::*;
+use futures_timer::Delay;
+use notes_store::NoteView;
+
+use crate::commands::filtered;
+use crate::state::{AppContext, Screen};
+use crate::ui::{
+    CommandPalette, EditorPane, LoginScreen, NoteList, SettingsPane, ShortcutSheet, Sidebar,
+    ToastView, TopBar,
+};
+
+const STYLE: Asset = asset!("/assets/main.css");
+
+#[component]
+pub fn App() -> Element {
+    let context = use_hook(AppContext::new);
+    use_context_provider(|| context.clone());
+
+    let tick_context = context.clone();
+    use_future(move || {
+        let context = tick_context.clone();
+        async move {
+            loop {
+                Delay::new(Duration::from_millis(700)).await;
+                context.tick();
+            }
+        }
+    });
+
+    let state = context.state.read();
+    let screen = state.screen;
+    let theme = state.theme;
+    let mobile_list = state.mobile_list;
+    let palette_open = state.palette_open;
+    let shortcuts_open = state.shortcuts_open;
+    let storage_error = state.storage_error.clone();
+    drop(state);
+
+    let mut workspace_class = String::from("workspace");
+    if screen == Screen::Settings {
+        workspace_class.push_str(" settings-mode");
+    }
+    if mobile_list {
+        workspace_class.push_str(" show-list");
+    } else {
+        workspace_class.push_str(" show-editor");
+    }
+
+    rsx! {
+        document::Title { "Notebox" }
+        document::Stylesheet { href: STYLE }
+
+        div {
+            id: "app-root",
+            class: "app",
+            "data-theme": theme.attr(),
+            tabindex: "-1",
+            onmounted: move |_| {
+                let _ = document::eval(
+                    "setTimeout(() => document.getElementById('app-root')?.focus(), 0);",
+                );
+            },
+            onkeydown: {
+                let context = context.clone();
+                move |event| handle_shortcut(&context, &event)
+            },
+
+            if screen == Screen::Login {
+                LoginScreen {}
+            } else {
+                TopBar {}
+                if let Some(error) = storage_error {
+                    main { class: "fatal-screen",
+                        div { class: "fatal-card",
+                            h1 { "The local database did not open" }
+                            p { "{error}" }
+                            p { class: "card-note",
+                                "Nothing was deleted. Fix the data directory or set NOTEBOX_DATA_DIR to a writable folder, then restart Notebox."
+                            }
+                        }
+                    }
+                } else {
+                    div { class: "{workspace_class}",
+                        Sidebar {}
+                        if screen == Screen::Settings {
+                            SettingsPane {}
+                        } else {
+                            NoteList {}
+                            EditorPane {}
+                        }
+                    }
+                }
+            }
+
+            if palette_open {
+                CommandPalette {}
+            }
+            if shortcuts_open {
+                ShortcutSheet {}
+            }
+            ToastView {}
+        }
+    }
+}
+
+/// Global shortcuts. Panels handle their own keys first and stop propagation.
+fn handle_shortcut(context: &AppContext, event: &KeyboardEvent) {
+    let modifiers = event.modifiers();
+    let command = modifiers.contains(Modifiers::CONTROL) || modifiers.contains(Modifiers::META);
+    let key = event.key();
+
+    if key == Key::Escape {
+        context.escape();
+        return;
+    }
+    if !command {
+        return;
+    }
+    let shift = modifiers.contains(Modifiers::SHIFT);
+    match key {
+        Key::Character(value) => match value.to_lowercase().as_str() {
+            "k" => {
+                event.prevent_default();
+                if context.state.peek().palette_open {
+                    context.close_palette();
+                } else {
+                    context.open_palette();
+                }
+            }
+            "n" => {
+                event.prevent_default();
+                context.new_note();
+            }
+            "s" => {
+                event.prevent_default();
+                context.save_now();
+                context.toast_success("Saved");
+            }
+            "f" => {
+                event.prevent_default();
+                if !context.state.peek().find_open {
+                    context.toggle_find();
+                }
+            }
+            "e" => {
+                event.prevent_default();
+                context.toggle_preview();
+            }
+            "z" if shift => {
+                event.prevent_default();
+                context.redo();
+            }
+            "z" => {
+                event.prevent_default();
+                context.undo();
+            }
+            "1" => {
+                event.prevent_default();
+                context.set_view(NoteView::Active);
+            }
+            "2" => {
+                event.prevent_default();
+                context.set_view(NoteView::Archived);
+            }
+            "3" => {
+                event.prevent_default();
+                context.set_view(NoteView::Trash);
+            }
+            "," => {
+                event.prevent_default();
+                context.open_settings();
+            }
+            _ => {}
+        },
+        Key::Enter if context.state.peek().palette_open => {
+            event.prevent_default();
+            let query = context.state.peek().palette_query.clone();
+            let index = context.state.peek().palette_index;
+            if let Some(command) = filtered(&query).get(index).copied() {
+                command.run(context);
+            }
+        }
+        _ => {}
+    }
+}

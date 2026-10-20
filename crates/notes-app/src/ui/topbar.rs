@@ -1,0 +1,121 @@
+//! The persistent top bar: navigation, search and account controls.
+
+use dioxus::prelude::*;
+use notes_store::NoteView;
+
+use crate::state::{AppContext, Screen, Theme};
+use crate::ui::icons::Icon;
+
+#[component]
+pub fn TopBar() -> Element {
+    let context = use_context::<AppContext>();
+    let state = context.state.read();
+    let screen = state.screen;
+    let theme = state.theme;
+    let search = state.search.clone();
+    let hits = state.search_hits;
+    let initial = state
+        .profile
+        .username
+        .chars()
+        .next()
+        .unwrap_or('L')
+        .to_uppercase()
+        .to_string();
+    drop(state);
+
+    rsx! {
+        header { class: "topbar",
+            div { class: "topbar-start",
+                button {
+                    class: "icon-button menu-button",
+                    r#type: "button",
+                    aria_label: "Open navigation",
+                    title: "Navigation",
+                    onclick: {
+                        let context = context.clone();
+                        move |_| context.state.write_unchecked().sidebar_open = true
+                    },
+                    Icon { name: "menu" }
+                }
+                button {
+                    class: "brand",
+                    r#type: "button",
+                    title: "All notes",
+                    onclick: {
+                        let context = context.clone();
+                        move |_| context.set_view(NoteView::Active)
+                    },
+                    span { class: "brand-mark", "nb" }
+                    span { class: "brand-name", "Notebox" }
+                }
+                if screen == Screen::Settings {
+                    span { class: "crumb", "Settings" }
+                }
+            }
+
+            div { class: "search-field",
+                Icon { name: "search" }
+                input {
+                    id: "global-search",
+                    r#type: "search",
+                    class: "search-input",
+                    placeholder: "Search notes",
+                    aria_label: "Search notes",
+                    autocomplete: "off",
+                    value: "{search}",
+                    oninput: {
+                        let context = context.clone();
+                        move |event| context.set_search(event.value())
+                    },
+                }
+                if let Some(count) = hits {
+                    span { class: "search-count",
+                        "{count} "
+                        if count == 1 { "hit" } else { "hits" }
+                    }
+                }
+                kbd { class: "key-hint", "Ctrl K" }
+            }
+
+            div { class: "topbar-end",
+                button {
+                    class: "status-pill",
+                    r#type: "button",
+                    title: "Account and sync",
+                    onclick: {
+                        let context = context.clone();
+                        move |_| context.open_settings()
+                    },
+                    span { class: "status-dot" }
+                    span { "Local" }
+                }
+                button {
+                    class: "icon-button",
+                    r#type: "button",
+                    aria_label: "Toggle theme",
+                    title: match theme {
+                        Theme::Light => "Switch to dark",
+                        _ => "Switch to light",
+                    },
+                    onclick: {
+                        let context = context.clone();
+                        move |_| context.toggle_theme()
+                    },
+                    Icon { name: match theme { Theme::Light => "moon", _ => "sun" } }
+                }
+                button {
+                    class: "avatar",
+                    r#type: "button",
+                    aria_label: "Open settings",
+                    title: "Settings",
+                    onclick: {
+                        let context = context.clone();
+                        move |_| context.open_settings()
+                    },
+                    "{initial}"
+                }
+            }
+        }
+    }
+}
