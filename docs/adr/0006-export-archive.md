@@ -67,3 +67,6 @@ dependency added for P1 after the spike ADRs; `tempfile` is test-only.
 - History export is deliberately deferred; a backup restores current notes,
   not the version timeline. P5/P8 can add it under a new manifest version
   without breaking P1 archives.
+- P1 stores attachment metadata only, so its archive entries are empty until
+  P6 stores the bytes. The path scheme and manifest already carry the fields
+  P6 needs.
