@@ -92,6 +92,19 @@ impl Note {
         Ok(note)
     }
 
+    /// An empty note with no body, metadata or history.
+    ///
+    /// This is the target for a note another device created: writing the local
+    /// metadata defaults first would add operations that never reach the
+    /// server, and every later edit on this device would depend on them, so no
+    /// other device could apply that edit.
+    pub fn empty(id: NoteId) -> Self {
+        Self {
+            id,
+            doc: NoteDocument::new(),
+        }
+    }
+
     /// Restore a note from a stored snapshot.
     pub fn from_snapshot(id: NoteId, snapshot: &[u8]) -> Result<Self, NoteError> {
         Ok(Self {

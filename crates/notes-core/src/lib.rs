@@ -17,6 +17,7 @@ mod history;
 mod markdown;
 mod note;
 mod text;
+mod version;
 mod workspace;
 
 pub use document::{NoteDocument, HISTORY_MERGE_INTERVAL_SECS, TEXT_CONTAINER};
@@ -31,6 +32,7 @@ pub use note::{
     normalize_tags, Note, NoteMeta, META_CONTAINER, PREVIEW_MAX_CHARS, TITLE_MAX_CHARS,
 };
 pub use text::{apply_replacement, diff_replacement, TextReplacement};
+pub use version::{decode_version_vector, encode_version_vector};
 pub use workspace::{WorkspaceDocument, NOTEBOOKS_CONTAINER};
 
 // Re-export the Loro types that cross crate boundaries, so the store and sync

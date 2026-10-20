@@ -29,6 +29,10 @@ pub enum NoteError {
     /// Loro could not walk the oplog to build the version list.
     #[error("history traversal failed: {0}")]
     History(String),
+
+    /// A stored or received version vector is not in the canonical format.
+    #[error("version vector is not valid: {0}")]
+    VersionVector(String),
 }
 
 /// Failure while writing or reading a portable export archive.
