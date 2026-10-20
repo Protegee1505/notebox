@@ -144,6 +144,50 @@ fn the_upload_queue_skips_data_the_server_already_has() {
 }
 
 #[test]
+fn notes_with_attachment_work_lists_uploads_and_missing_bytes() {
+    let store = store();
+    let photo = store
+        .put_attachment("one.png", "image/png", b"one", 1_000)
+        .expect("put");
+    let uploading = create(&store, "Uploading", 1_000);
+    let body = format!(
+        "Uploading\n\n![one]({})",
+        attachment_url(&photo.hash, &photo.mime)
+    );
+    uploading.replace_text(&body).expect("edit");
+    store.save_note(&uploading, 1_100).expect("save");
+
+    let waiting = create(&store, "Waiting", 2_000);
+    let missing = content_hash(b"not here");
+    waiting
+        .replace_text(&format!("Waiting\n\n![remote](attachments/{missing}.webp)"))
+        .expect("edit");
+    store.save_note(&waiting, 2_100).expect("save");
+
+    // A note with no attachment at all never appears.
+    create(&store, "Plain", 3_000);
+
+    assert_eq!(
+        store.notes_with_attachment_work(0).expect("work"),
+        vec![uploading.id(), waiting.id()],
+        "oldest first, once per note"
+    );
+
+    store
+        .mark_attachment_uploaded(&photo.hash, 3_000)
+        .expect("mark");
+    assert_eq!(
+        store.notes_with_attachment_work(0).expect("work"),
+        vec![waiting.id()],
+        "uploaded bytes drop out; the placeholder stays"
+    );
+    assert_eq!(
+        store.notes_with_attachment_work(1).expect("limit"),
+        vec![waiting.id()]
+    );
+}
+
+#[test]
 fn export_and_import_carry_attachment_bytes_and_links() {
     let source = store();
     let photo = source

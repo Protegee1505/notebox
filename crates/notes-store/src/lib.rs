@@ -290,6 +290,13 @@ pub trait NoteStore {
     /// Attachments whose bytes the server has not seen, oldest first.
     fn unsynced_attachments(&self, limit: usize) -> Result<Vec<String>, StoreError>;
 
+    /// Notes with at least one attachment to upload or download.
+    ///
+    /// The sync engine works one note at a time, so it needs note ids, not just
+    /// hashes. A note stays listed while one of its attachments has no local
+    /// bytes or has bytes the server has not accepted yet.
+    fn notes_with_attachment_work(&self, limit: usize) -> Result<Vec<NoteId>, StoreError>;
+
     /// Record that the server has an attachment's bytes.
     fn mark_attachment_uploaded(&self, hash: &str, at: i64) -> Result<(), StoreError>;
 

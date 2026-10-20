@@ -508,6 +508,30 @@ impl NoteStore for SqliteStore {
         Ok(hashes)
     }
 
+    fn notes_with_attachment_work(&self, limit: usize) -> Result<Vec<NoteId>, StoreError> {
+        let conn = self.conn.borrow();
+        let mut statement = conn.prepare(
+            "SELECT na.note_id
+             FROM note_attachment na
+             JOIN attachment a ON a.hash = na.hash
+             WHERE a.data IS NULL OR a.uploaded_at IS NULL
+             GROUP BY na.note_id
+             ORDER BY MIN(na.added_at), na.note_id
+             LIMIT ?1",
+        )?;
+        let limit = if limit == 0 { -1 } else { limit as i64 };
+        let rows = statement.query_map(params![limit], |row| row.get::<_, String>(0))?;
+        let mut notes = Vec::new();
+        for row in rows {
+            let value = row?;
+            notes.push(
+                NoteId::parse(&value)
+                    .map_err(|_| StoreError::Corrupt(format!("attachment note id {value}")))?,
+            );
+        }
+        Ok(notes)
+    }
+
     fn mark_attachment_uploaded(&self, hash: &str, at: i64) -> Result<(), StoreError> {
         let conn = self.conn.borrow();
         conn.execute(
