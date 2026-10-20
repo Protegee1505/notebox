@@ -9,6 +9,15 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+mod api;
+
+pub use api::{
+    envelope, is_sha256_hex, is_token_hex, AuthRequest, AuthResponse, Base64Bytes, BlobChunk,
+    BlobStored, DeviceInfo, DeviceList, ErrorBody, PulledUpdate, PushUpdate, SyncRequest,
+    SyncResponse, LOGIN_KEY_BYTES, MAX_BLOB_CHUNKS, MAX_BLOB_CHUNK_BYTES, MAX_DEVICE_NAME_CHARS,
+    MAX_PUSH_UPDATES, MAX_UPDATE_BYTES, MAX_USERNAME_CHARS, SHA256_HEX_CHARS, TOKEN_HEX_CHARS,
+};
+
 /// Current wire-format version. Bump only with a compatible decoding path.
 pub const PROTOCOL_VERSION: u16 = 1;
 
