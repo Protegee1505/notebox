@@ -1,11 +1,50 @@
 # Status
 
 Updated: 2026-10-20
-Phase: 5 (history and trash); P1–P4 complete, P5 local complete; the
-cross-device acceptance still waits on the browser sync transport
+Phase: 6 (attachments); P1–P5 complete, P6 local complete and transfer proven
+between two sync-engine stores. The running app has no account/sync loop or
+browser transport yet, so the human cross-device check waits on P7.
 
 ## Shipped
 
+- `notes-app`: P6 image ingest. The file picker, drag and drop and a page-level
+  paste listener all route through one path: read the file, apply EXIF
+  orientation, cap the longest side at 1600 px, encode lossy WebP at quality
+  80/68/56, and store bytes content-addressed. A 951,612 B 1200×700 PNG
+  became a 29,450 B WebP in 1.3 s in a release web build. Unsupported files
+  get a readable toast and leave no row.
+- `notes-app`: the attachment strip under the editor lists the note's images
+  with name, kind and size, offers Insert at the caret, and shows a Waiting
+  placeholder for a link whose bytes have not arrived. The rendered preview
+  resolves content hashes to cached inline `data:image/webp;base64` URLs;
+  note cards show the image's alt text instead of a raw Markdown URL.
+- `notes-store`: schema v4 stores attachment bytes in the local SQLite file,
+  deduplicates by SHA-256, indexes note links, creates placeholders for links
+  without bytes, tracks the upload queue, measures usage, and carries bytes
+  through export/import. Removing a Markdown reference only drops the link,
+  never the bytes. Attachment tests cover dedupe, placeholders, the queue,
+  export/import and the v3 migration.
+- `notes-core`: content-addressed attachment paths (`attachments/<hash>.<ext>`),
+  MIME/extension helpers, safe names, reference scanning, and a Markdown image
+  resolver that accepts only `data:image/` responses. The plain-text preview
+  replaces image syntax with alt text.
+- `notes-sync`: `SyncClient::sync_note_attachments` uploads local bytes and
+  downloads missing placeholder bytes with the existing SHA-256 check. A
+  two-store test creates a note with a photo on one device, syncs the note,
+  sees a placeholder on the second, downloads the photo, and confirms the
+  bytes and preview are available; a broken link remains Waiting and does not
+  stop the pass.
+- P6 browser verification: a Playwright flow passes 26 checks (picker, WebP,
+  autosave, preview decode, dedupe, paste, drop, Insert, unsupported file,
+  placeholder, themes and all three widths). Screenshots at 360, 900 and
+  1400 px in light and dark are in `docs/screenshots/` (`p6-editor-*`), with
+  no horizontal page overflow.
+- `notes-app`: fixed two async bindings found in P6. Dioxus `eval().recv()`
+  waits for `send`, so toolbar marks and image insertion now use `join()`;
+  the Dioxus web file reader hangs or panics, so the browser reads a `File`
+  through `web-sys` directly.
+- `docs/adr/0008-attachments.md` records the content-addressed, local-BLOB,
+  pure-Rust WebP design and its limits.
 - `notes-app`: the P5 history panel over the editor. The timeline lists
   versions newest first with day, relative time, change count and device; the
   detail shows a unified diff against the current note or a read-only Markdown
@@ -173,11 +212,15 @@ cross-device acceptance still waits on the browser sync transport
 
 | Check | Result |
 | --- | --- |
-| Native tests | 155 passed, 1 skipped (the ignored Worker client e2e) |
+| Native tests | 188 passed, 1 skipped (the ignored Worker client e2e) |
 | Search, 10,000 notes | seeded in 14,534 ms; search 4 ms (budget 100 ms), 1 hit |
 | 3-store convergence | random updates, metadata changes and sync order; identical text, metadata and history |
 | 3-replica core convergence | random edits, drops and random sync order |
-| Web bundle (release, brotli) | local P5 1,545,831 B (1.47 MiB), limit 3.00 MiB; raw 6,485,710 B. P4 was 1,479,074 B local / 1,478,616 B CI |
+| P6 browser flow (Playwright) | 26/26 checks: picker, 29 KB WebP, autosave, preview decode, dedupe, paste, drop, Insert, unsupported file, placeholder, light/dark at 360/900/1400, no application console errors |
+| P6 layout review | 360/900/1400 px, light and dark; no horizontal page overflow; the 900 px toolbar wraps instead of hiding Preview |
+| P6 image ingest | 951,612 B 1200×700 PNG → 29,450 B WebP (3.1%), 1.3 s from picker to row in a release web build (headless Chromium) |
+| P6 note + photo transfer | two stores, 180,000 B photo: note and link arrive first, placeholder shows, download fills bytes, second pass is a no-op; a missing blob is counted without failing |
+| Web bundle (release, brotli) | local P6 manual static build 1,955,393 B (1.86 MiB), limit 3.00 MiB; raw 9,353,273 B. P5 CI was 1,545,831 B |
 | P5 browser flow (Playwright) | 26/26 checks: autosave, timeline, diff, preview, restore, version retention, trash, confirm, cancel, restore and empty |
 | P5 layout review | 360/900/1400 px, light and dark; no horizontal overflow, no console errors |
 | Restore across stores | older version restored on store B reached store A after one update exchange; both reported the same three version ids |
@@ -211,11 +254,11 @@ cross-device acceptance still waits on the browser sync transport
   secret and deploy are blocked for the same reason. The exact commands are in
   README, "Deploying the free Worker".
 - **Android runtime**: no `/dev/kvm` and no Android SDK, so S2/S5 cannot be run
-  on a device or emulator locally, and the P4 Android screenshot/boot check is
-  still missing. The local `aarch64-linux-android` check now also lacks
-  `aarch64-linux-android-clang`; CI still compiles the four crates with NDK
-  r27c. The full Android app has not been built, and the Argon2id timing on a
-  mid-range phone is not measured.
+  on a device or emulator locally, and the P4/P6 Android screenshot, camera and
+  boot checks are still missing. The local `aarch64-linux-android` check also
+  lacks `aarch64-linux-android-clang`; CI still compiles the four crates with
+  NDK r27c. The full Android app has not been built, and the Argon2id timing on
+  a mid-range phone is not measured.
 - **Cold starts**: Linux desktop boot is verified under Xvfb, but the 600 ms
   cold-start number is not measured. Windows is build-only; Android has no
   boot or cold-start number.
@@ -224,6 +267,12 @@ cross-device acceptance still waits on the browser sync transport
   engine and the web build uses a per-tab in-memory database. "A version
   restored on one device appears on another within a minute" cannot be
   demonstrated in the running app until P7.
+- **P6 app cross-device acceptance**: the engine test moves a note and its
+  photo between two stores, but the app does not start that engine yet and has
+  no browser transport. "A photo added on the phone shows on the desktop"
+  therefore waits on the P7 account and sync loop. Native SQLite keeps cached
+  image bytes offline; the web build loses them on reload with the rest of its
+  in-memory database.
 - **Browser persistence**: P4 runs the real `SqliteStore` schema through
   `open_in_memory()` in the browser, so a reload starts from the seed notes.
   The OPFS-backed worker and the browser sync transport remain for P7; until
@@ -231,13 +280,15 @@ cross-device acceptance still waits on the browser sync transport
 
 ## Next
 
-1. P6 attachments: paste, drop and file picker, upload and lazy download,
-   gallery, then Android camera and WebP compression.
-2. Wire the OPFS-backed `SqliteStore` worker and browser sync transport in
-   P7, replacing `open_in_memory()` and extending the S4 probe to the real
-   schema. Then rerun the P5 acceptance with two browser profiles: restore on
-   one, see the text on the other within a minute.
+1. P7 sync wiring: add the browser `SyncTransport`, an account screen backed
+   by the existing engine, and a sync loop that calls
+   `sync_note_attachments` after notes are pulled or saved. Then run the P5 and
+   P6 acceptance with two browser profiles or a web and a native client.
+2. P7 persistence: wire the OPFS-backed `SqliteStore` worker, replacing
+   `open_in_memory()`, and extend the S4 probe to the real v4 schema so images
+   survive a reload.
 3. S3 after `wrangler login`: deploy, create the account, measure request CPU
    with `wrangler tail` and write `docs/adr/0003-worker-free-tier.md`.
-4. Run S2/S5 on an Android emulator with `/dev/kvm` (CI or a physical device) to
-   close the runtime gap, including Gboard composition.
+4. Run S2/S5/P6 on an Android emulator with `/dev/kvm` (CI or a physical
+   device) to close the runtime gap, including Gboard composition and the
+   camera picker.
