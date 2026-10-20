@@ -53,6 +53,16 @@ impl WorkspaceDocument {
         self.doc.as_loro()
     }
 
+    /// Use a stable peer id for notebook changes this device makes.
+    pub fn set_peer_id(&self, peer: u64) -> Result<(), NoteError> {
+        self.doc.set_peer_id(peer)
+    }
+
+    /// This replica's peer id.
+    pub fn peer_id(&self) -> u64 {
+        self.doc.peer_id()
+    }
+
     /// Full snapshot, for storage and sync.
     pub fn snapshot(&self) -> Result<Vec<u8>, NoteError> {
         self.doc.snapshot()

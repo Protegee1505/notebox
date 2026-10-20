@@ -667,14 +667,54 @@ fn a_file_database_survives_reopening() {
     let directory = tempfile::tempdir().expect("tempdir");
     let path = directory.path().join("notebox.db");
     let id;
+    let peer;
     {
         let store = SqliteStore::open(&path).expect("open");
         let note = create(&store, "persisted", 1_000);
         id = note.id();
+        peer = store.device_peer_id();
     }
     let reopened = SqliteStore::open(&path).expect("reopen");
     assert_eq!(reopened.open_note(&id).expect("open").text(), "persisted");
     assert_eq!(reopened.note_count().expect("count"), 1);
+    assert_eq!(reopened.device_peer_id(), peer);
+}
+
+#[test]
+fn autosaves_after_a_reload_stay_on_one_device_and_group_by_time() {
+    let store = store();
+    let note = create(&store, "first", 1_000);
+    let peer = store.device_peer_id();
+
+    let first = store.open_note(&note.id()).expect("open");
+    assert_eq!(first.peer_id(), peer);
+    first.set_next_commit_timestamp(1_100);
+    first.replace_text("first edit").expect("edit");
+    store.save_note(&first, 1_100).expect("save");
+
+    // More than five minutes after the first sitting: a new version.
+    let second = store.open_note(&note.id()).expect("reopen");
+    assert_eq!(second.peer_id(), peer);
+    second.set_next_commit_timestamp(1_601);
+    second.replace_text("second edit").expect("edit");
+    store.save_note(&second, 1_601).expect("save");
+
+    let versions = second.history().expect("history");
+    assert_eq!(
+        versions.len(),
+        2,
+        "the two sittings should be two versions: {versions:?}"
+    );
+    assert_eq!(versions[0].started_at, 1_000);
+    assert_eq!(versions[1].started_at, 1_601);
+    assert_eq!(
+        second.text_at(&versions[0]).expect("older text"),
+        "first edit"
+    );
+    assert_eq!(
+        second.text_at(&versions[1]).expect("newer text"),
+        "second edit"
+    );
 }
 
 #[test]

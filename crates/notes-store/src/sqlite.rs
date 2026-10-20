@@ -30,7 +30,7 @@ use crate::{
 };
 
 /// Schema version written to `PRAGMA user_version`.
-pub const SCHEMA_VERSION: i32 = 2;
+pub const SCHEMA_VERSION: i32 = 3;
 
 /// Workspace columns read by [`NoteStore::workspace_pending`]:
 /// snapshot, local version vector, last pushed version vector.
@@ -110,6 +110,13 @@ CREATE TABLE IF NOT EXISTS sync_state (
     updated_at INTEGER NOT NULL DEFAULT 0
 );
 INSERT OR IGNORE INTO sync_state (id, cursor, updated_at) VALUES (1, NULL, 0);
+
+-- One random Loro peer id per database, so edits made after a reload still
+-- belong to this device in the note history.
+CREATE TABLE IF NOT EXISTS device (
+    id      INTEGER PRIMARY KEY CHECK (id = 1),
+    peer_id INTEGER NOT NULL
+);
 "#;
 
 /// Schema v1 to v2: per-row sync bookkeeping and an integer pull cursor.
@@ -133,6 +140,17 @@ INSERT INTO sync_state_v2 (id, cursor, updated_at)
     SELECT id, NULL, updated_at FROM sync_state;
 DROP TABLE sync_state;
 ALTER TABLE sync_state_v2 RENAME TO sync_state;
+"#;
+
+/// Schema v2 to v3: one stable Loro peer id per device.
+///
+/// The row is created on the next open by [`load_or_create_device_peer`], so
+/// an upgraded database starts using a stable peer without rewriting any note.
+const MIGRATION_V3: &str = r#"
+CREATE TABLE IF NOT EXISTS device (
+    id      INTEGER PRIMARY KEY CHECK (id = 1),
+    peer_id INTEGER NOT NULL
+);
 "#;
 
 const UPSERT_NOTE: &str = r#"
@@ -160,6 +178,8 @@ const SUMMARY_COLUMNS: &str = "n.id, n.title, n.preview, n.notebook_id, n.pinned
 /// A note store backed by one SQLite connection.
 pub struct SqliteStore {
     conn: RefCell<Connection>,
+    /// Stable Loro peer id for changes this database makes.
+    peer_id: u64,
 }
 
 impl SqliteStore {
@@ -191,9 +211,16 @@ impl SqliteStore {
         }
 
         migrate(&conn)?;
+        let peer_id = load_or_create_device_peer(&conn)?;
         Ok(Self {
             conn: RefCell::new(conn),
+            peer_id,
         })
+    }
+
+    /// Stable Loro peer id this database uses for new changes.
+    pub fn device_peer_id(&self) -> u64 {
+        self.peer_id
     }
 
     fn connection(&self) -> std::cell::RefMut<'_, Connection> {
@@ -231,7 +258,16 @@ impl NoteStore for SqliteStore {
             created_at: new_note.created_at,
             ..NoteMeta::default()
         };
-        let note = Note::from_text(NoteId::new(), &new_note.text, &meta)?;
+        let note = Note::empty(NoteId::new());
+        note.set_peer_id(self.peer_id)?;
+        note.set_meta(&meta)?;
+        if !new_note.text.is_empty() {
+            note.insert(0, &new_note.text)?;
+        }
+        if new_note.created_at != 0 {
+            note.set_next_commit_timestamp(new_note.created_at);
+        }
+        note.commit();
         let mut conn = self.connection();
         let tx = conn.transaction()?;
         save_note_with(&tx, &note, new_note.created_at)?;
@@ -241,7 +277,7 @@ impl NoteStore for SqliteStore {
 
     fn open_note(&self, id: &NoteId) -> Result<Note, StoreError> {
         let conn = self.conn.borrow();
-        load_note(&conn, id)?.ok_or(StoreError::NoteNotFound(*id))
+        load_note(&conn, id, self.peer_id)?.ok_or(StoreError::NoteNotFound(*id))
     }
 
     fn save_note(&self, note: &Note, updated_at: i64) -> Result<NoteSummary, StoreError> {
@@ -343,9 +379,13 @@ impl NoteStore for SqliteStore {
         // the imported update comes back from the server and must not be
         // queued for a push of its own.
         let was_clean = note_was_clean(&tx, id)?;
-        let note = match load_note(&tx, id)? {
+        let note = match load_note(&tx, id, self.peer_id)? {
             Some(note) => note,
-            None => Note::empty(*id),
+            None => {
+                let note = Note::empty(*id);
+                note.set_peer_id(self.peer_id)?;
+                note
+            }
         };
         let status = note.document().import(update)?;
         if status.pending.is_some() {
@@ -433,7 +473,7 @@ impl NoteStore for SqliteStore {
         };
         let mut conn = self.connection();
         let tx = conn.transaction()?;
-        let workspace = load_workspace(&tx)?;
+        let workspace = load_workspace(&tx, self.peer_id)?;
         workspace.upsert_notebook(&notebook)?;
         save_workspace(&tx, &workspace)?;
         tx.execute(
@@ -452,7 +492,7 @@ impl NoteStore for SqliteStore {
         }
         let mut conn = self.connection();
         let tx = conn.transaction()?;
-        let workspace = load_workspace(&tx)?;
+        let workspace = load_workspace(&tx, self.peer_id)?;
         if !workspace.rename_notebook(id, name)? {
             return Ok(false);
         }
@@ -468,7 +508,7 @@ impl NoteStore for SqliteStore {
     fn delete_notebook(&self, id: &NotebookId) -> Result<bool, StoreError> {
         let mut conn = self.connection();
         let tx = conn.transaction()?;
-        let workspace = load_workspace(&tx)?;
+        let workspace = load_workspace(&tx, self.peer_id)?;
         if !workspace.delete_notebook(id)? {
             return Ok(false);
         }
@@ -483,13 +523,13 @@ impl NoteStore for SqliteStore {
 
     fn workspace_snapshot(&self) -> Result<Vec<u8>, StoreError> {
         let conn = self.conn.borrow();
-        Ok(load_workspace(&conn)?.snapshot()?)
+        Ok(load_workspace(&conn, self.peer_id)?.snapshot()?)
     }
 
     fn import_workspace(&self, bytes: &[u8]) -> Result<Vec<Notebook>, StoreError> {
         let mut conn = self.connection();
         let tx = conn.transaction()?;
-        let workspace = load_workspace(&tx)?;
+        let workspace = load_workspace(&tx, self.peer_id)?;
         let was_clean = workspace_was_clean(&tx)?;
         let status = workspace.import(bytes)?;
         if status.pending.is_some() {
@@ -607,7 +647,7 @@ impl NoteStore for SqliteStore {
     fn export_zip(&self, exported_at: i64) -> Result<Vec<u8>, StoreError> {
         let bundle = {
             let conn = self.conn.borrow();
-            export_bundle_with(&conn, exported_at)?
+            export_bundle_with(&conn, exported_at, self.peer_id)?
         };
         let mut bytes = Vec::new();
         write_export_zip(&bundle, Cursor::new(&mut bytes))?;
@@ -620,7 +660,7 @@ impl NoteStore for SqliteStore {
         let tx = conn.transaction()?;
         let mut report = ImportReport::default();
 
-        let workspace = load_workspace(&tx)?;
+        let workspace = load_workspace(&tx, self.peer_id)?;
         for notebook in &bundle.notebooks {
             workspace.upsert_notebook(notebook)?;
             tx.execute(
@@ -638,7 +678,7 @@ impl NoteStore for SqliteStore {
             1
         };
         for import in &bundle.notes {
-            match load_note(&tx, &import.id)? {
+            match load_note(&tx, &import.id, self.peer_id)? {
                 Some(existing) => {
                     existing.replace_text(&import.text)?;
                     existing.set_meta(&import.meta)?;
@@ -648,6 +688,7 @@ impl NoteStore for SqliteStore {
                 }
                 None => {
                     let note = Note::from_text(import.id, &import.text, &import.meta)?;
+                    note.set_peer_id(self.peer_id)?;
                     save_note_with(&tx, &note, stamp)?;
                     report.notes_created += 1;
                 }
@@ -686,6 +727,12 @@ fn migrate(conn: &Connection) -> Result<(), StoreError> {
         }
         1 => {
             conn.execute_batch(MIGRATION_V2)?;
+            conn.execute_batch(MIGRATION_V3)?;
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            Ok(())
+        }
+        2 => {
+            conn.execute_batch(MIGRATION_V3)?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             Ok(())
         }
@@ -699,8 +746,35 @@ fn migrate(conn: &Connection) -> Result<(), StoreError> {
     }
 }
 
+/// Read this database's Loro peer id, or create one on first open.
+///
+/// The id is random per database and persisted, so it stays stable across
+/// reloads but two devices do not share one. The low and high halves of a
+/// UUID are folded together; zero and `u64::MAX` are reserved by Loro.
+fn load_or_create_device_peer(conn: &Connection) -> Result<u64, StoreError> {
+    let stored: Option<i64> = conn
+        .query_row("SELECT peer_id FROM device WHERE id = 1", [], |row| {
+            row.get(0)
+        })
+        .optional()?;
+    if let Some(peer) = stored {
+        return Ok(peer as u64);
+    }
+
+    let uuid = NoteId::new().as_uuid().as_u128();
+    let mut peer = (uuid as u64) ^ ((uuid >> 64) as u64);
+    if peer == 0 || peer == u64::MAX {
+        peer = 1;
+    }
+    conn.execute(
+        "INSERT INTO device (id, peer_id) VALUES (1, ?1)",
+        params![peer as i64],
+    )?;
+    Ok(peer)
+}
+
 /// Load one note's snapshot, if the row exists.
-fn load_note(conn: &Connection, id: &NoteId) -> Result<Option<Note>, StoreError> {
+fn load_note(conn: &Connection, id: &NoteId, peer: u64) -> Result<Option<Note>, StoreError> {
     let snapshot: Option<Vec<u8>> = conn
         .query_row(
             "SELECT snapshot FROM note WHERE id = ?1",
@@ -709,7 +783,11 @@ fn load_note(conn: &Connection, id: &NoteId) -> Result<Option<Note>, StoreError>
         )
         .optional()?;
     match snapshot {
-        Some(bytes) => Ok(Some(Note::from_snapshot(*id, &bytes)?)),
+        Some(bytes) => {
+            let note = Note::from_snapshot(*id, &bytes)?;
+            note.set_peer_id(peer)?;
+            Ok(Some(note))
+        }
         None => Ok(None),
     }
 }
@@ -1044,16 +1122,18 @@ fn notebook_rows(conn: &Connection) -> Result<Vec<Notebook>, StoreError> {
     Ok(notebooks)
 }
 
-fn load_workspace(conn: &Connection) -> Result<WorkspaceDocument, StoreError> {
+fn load_workspace(conn: &Connection, peer: u64) -> Result<WorkspaceDocument, StoreError> {
     let snapshot: Option<Vec<u8>> = conn
         .query_row("SELECT snapshot FROM workspace WHERE id = 1", [], |row| {
             row.get(0)
         })
         .optional()?;
-    match snapshot {
-        Some(bytes) => Ok(WorkspaceDocument::from_snapshot(&bytes)?),
-        None => Ok(WorkspaceDocument::new()),
-    }
+    let workspace = match snapshot {
+        Some(bytes) => WorkspaceDocument::from_snapshot(&bytes)?,
+        None => WorkspaceDocument::new(),
+    };
+    workspace.set_peer_id(peer)?;
+    Ok(workspace)
 }
 
 fn save_workspace(conn: &Connection, workspace: &WorkspaceDocument) -> Result<(), StoreError> {
@@ -1106,7 +1186,11 @@ fn decode_version(bytes: Option<&[u8]>) -> Result<VersionVector, StoreError> {
 }
 
 /// Gather every note, notebook and attachment for an export.
-fn export_bundle_with(conn: &Connection, exported_at: i64) -> Result<ExportBundle, StoreError> {
+fn export_bundle_with(
+    conn: &Connection,
+    exported_at: i64,
+    peer: u64,
+) -> Result<ExportBundle, StoreError> {
     let mut statement = conn.prepare("SELECT id FROM note ORDER BY created_at, id")?;
     let ids = statement
         .query_map([], |row| row.get::<_, String>(0))?
@@ -1116,7 +1200,7 @@ fn export_bundle_with(conn: &Connection, exported_at: i64) -> Result<ExportBundl
     let mut notes = Vec::with_capacity(ids.len());
     for id in ids {
         let id = NoteId::parse(&id).map_err(|_| StoreError::Corrupt(format!("note id {id}")))?;
-        let note = load_note(conn, &id)?.ok_or(StoreError::NoteNotFound(id))?;
+        let note = load_note(conn, &id, peer)?.ok_or(StoreError::NoteNotFound(id))?;
         notes.push(ExportNote {
             id,
             meta: note.meta(),

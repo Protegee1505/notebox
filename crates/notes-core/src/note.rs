@@ -134,6 +134,23 @@ impl Note {
         &self.doc
     }
 
+    /// Use a stable peer id for changes this device makes.
+    ///
+    /// Loro creates a random peer for every document instance. A store that
+    /// reloads a snapshot for each save would therefore make every edit look
+    /// like it came from a new device, and the five-minute history grouping
+    /// would never merge. Stores call this after loading a snapshot and before
+    /// applying an edit. The id must be persisted per device and unique across
+    /// devices.
+    pub fn set_peer_id(&self, peer: u64) -> Result<(), NoteError> {
+        self.doc.set_peer_id(peer)
+    }
+
+    /// This replica's peer id.
+    pub fn peer_id(&self) -> u64 {
+        self.doc.peer_id()
+    }
+
     /// Current Markdown body.
     pub fn text(&self) -> String {
         self.doc.text()

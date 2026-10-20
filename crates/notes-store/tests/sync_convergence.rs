@@ -73,6 +73,73 @@ fn sync(from: &SqliteStore, to: &SqliteStore, id: &NoteId, at: i64) {
 }
 
 #[test]
+fn a_restored_version_travels_to_another_store() {
+    let first = SqliteStore::open_in_memory().expect("first store");
+    let second = SqliteStore::open_in_memory().expect("second store");
+
+    // A note written in one sitting, then edited more than five minutes later.
+    let created = first
+        .create_note(NewNote::new("first draft", 1_000))
+        .expect("seed");
+    let id = created.id();
+    let update = created.document().all_updates().expect("updates");
+    second.apply_update(&id, &update, 1_000).expect("apply");
+    drop(created);
+
+    let edited = first.open_note(&id).expect("open");
+    edited.set_next_commit_timestamp(1_601);
+    edited.replace_text("second draft").expect("edit");
+    first.save_note(&edited, 1_601).expect("save");
+    sync(&first, &second, &id, 1_700);
+
+    let versions = edited.history().expect("history");
+    assert_eq!(versions.len(), 2, "two sittings make two versions");
+    let older = versions.first().expect("older version").clone();
+    assert_eq!(edited.text_at(&older).expect("preview"), "first draft");
+
+    // The other device sees the edit, then restores the older version as a new
+    // edit of its own. Nothing is removed from either history.
+    let target = second.open_note(&id).expect("open");
+    assert_eq!(target.text(), "second draft");
+    target.set_next_commit_timestamp(2_001);
+    assert!(target.restore_version(&older).expect("restore"));
+    second.save_note(&target, 2_001).expect("save");
+    sync(&second, &first, &id, 2_100);
+
+    assert_eq!(
+        first.open_note(&id).expect("open").text(),
+        "first draft",
+        "the restored text reaches the first device"
+    );
+    let first_history = first
+        .open_note(&id)
+        .expect("open")
+        .history()
+        .expect("history");
+    let second_history = second
+        .open_note(&id)
+        .expect("open")
+        .history()
+        .expect("history");
+    assert_eq!(first_history.len(), 3, "restore appended a version");
+    assert_eq!(
+        first_history
+            .iter()
+            .map(|version| version.id.clone())
+            .collect::<Vec<_>>(),
+        second_history
+            .iter()
+            .map(|version| version.id.clone())
+            .collect::<Vec<_>>(),
+        "both devices group the same history"
+    );
+    assert!(
+        first_history.iter().any(|version| version.id == older.id),
+        "the restored version still exists"
+    );
+}
+
+#[test]
 fn three_stores_converge_under_random_updates_and_metadata_changes() {
     let stores = [
         SqliteStore::open_in_memory().expect("store 1"),
