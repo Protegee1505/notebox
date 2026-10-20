@@ -9,11 +9,16 @@ publish.workspace = true
 [dependencies]
 notes-proto.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 loro.workspace = true
+pulldown-cmark.workspace = true
+similar.workspace = true
+zip.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
+tempfile.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"

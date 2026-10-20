@@ -106,6 +106,20 @@ impl NoteDocument {
         self.doc.commit();
     }
 
+    /// Timestamp the next commit explicitly, in Unix seconds.
+    ///
+    /// The app lets Loro use the wall clock; tests and imports set this so the
+    /// five-minute version grouping is reproducible.
+    pub fn set_next_commit_timestamp(&self, timestamp: i64) {
+        self.doc.set_next_commit_timestamp(timestamp);
+    }
+
+    /// Commit the pending operations with an explicit Unix-seconds timestamp.
+    pub fn commit_at(&self, timestamp: i64) {
+        self.doc.set_next_commit_timestamp(timestamp);
+        self.doc.commit();
+    }
+
     /// Full document snapshot, including history.
     pub fn snapshot(&self) -> Result<Vec<u8>, NoteError> {
         Ok(self.doc.export(ExportMode::Snapshot)?)
