@@ -9,12 +9,18 @@ ran so a green result cannot be mistaken for a performance pass.
 
 from __future__ import annotations
 
+import shutil
 import sys
 import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BUDGETS = ROOT / "docs" / "budgets.toml"
+
+# Building must not fill the home partition: on this workspace it is only
+# 4.8 GB, while the overlay disk is much larger. Caches and the Cargo target
+# directory live outside home; see docs/DISK.md.
+HOME_FREE_FLOOR = 512 * 1024 * 1024
 
 # Ceilings from PLAN.md, "Starting budgets".
 CEILINGS = {
@@ -39,7 +45,15 @@ def main() -> int:
         print(f"budget-check: invalid TOML: {exc}", file=sys.stderr)
         return 1
 
+    home = Path.home()
+    home_free = shutil.disk_usage(home).free
     failures = []
+    if home_free < HOME_FREE_FLOOR:
+        failures.append(
+            f"home partition {home} has only {home_free // (1024 * 1024)} MiB "
+            "free; move build caches off it (see docs/DISK.md)"
+        )
+
     for (section, key), ceiling in CEILINGS.items():
         value = data.get(section, {}).get(key)
         if value is None:
@@ -53,7 +67,10 @@ def main() -> int:
             print(f"  - {failure}", file=sys.stderr)
         return 1
 
-    print("budget-check: PASS (static ceilings only; runtime measurements not collected yet)")
+    print(
+        "budget-check: PASS (static ceilings only; runtime measurements not "
+        f"collected yet); {home_free // (1024 * 1024)} MiB free on {home}"
+    )
     return 0
 
 

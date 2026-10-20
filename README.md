@@ -55,6 +55,17 @@ CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
   cargo test -p notes-core --target wasm32-unknown-unknown --test wasm_smoke
 ```
 
+If `/home` is a small partition, keep build artifacts and caches on the larger
+disk before building; the script is idempotent and also creates the local Cargo
+target setting:
+
+```bash
+./scripts/relocate-caches.sh --force
+```
+
+See [docs/DISK.md](docs/DISK.md) for the layout, the 512 MiB free-space guard,
+and recovery steps.
+
 ## Free-tier rule
 
 The app must stay inside Cloudflare's free plan. Do not enable R2 and do not add a

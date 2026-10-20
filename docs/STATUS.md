@@ -15,6 +15,10 @@ Phase: 0 (spikes)
 - CI jobs for wasm tests and size, web build/budget, Linux desktop boot under
   Xvfb, Windows build and Android NDK compile.
 - ADR-0001, ADR-0002 and ADR-0005 record the spike evidence.
+- Development disk: Cargo target, Rust/Cargo/npm/yarn/dx caches and Playwright
+  browsers now live under `/tmp/opencode`; `scripts/relocate-caches.sh` repairs
+  the layout and `scripts/budget-check` fails below 512 MiB free on `/home`.
+  See `docs/DISK.md`.
 
 ## Measurements
 
