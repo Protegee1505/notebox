@@ -1,8 +1,4 @@
 //! The account screen.
-//!
-//! The form is complete, but the P4 shell deliberately stops at local mode:
-//! notes-sync and the Worker are already tested, and P7 is where the browser
-//! transport and session cookie make this button real.
 
 use dioxus::prelude::*;
 
@@ -18,7 +14,13 @@ pub fn LoginScreen() -> Element {
     let server = state.login.server.clone();
     let device = state.login.device.clone();
     let error = state.login.error.clone();
+    let connecting = state.sync.status.busy();
     drop(state);
+    let local_note = if cfg!(target_arch = "wasm32") {
+        "Signed in, this tab keeps a working copy and syncs when it can. A reload pulls your notes back from your Worker."
+    } else {
+        "Signed in, this device keeps a full local copy and syncs when it can. Signing out never deletes a note."
+    };
 
     rsx! {
         main { class: "login-screen",
@@ -65,6 +67,7 @@ pub fn LoginScreen() -> Element {
                     r#type: "button",
                     aria_label: "Back to notes",
                     title: "Back to notes",
+                    disabled: connecting,
                     onclick: {
                         let context = context.clone();
                         move |_| context.go(Screen::Notes)
@@ -83,11 +86,14 @@ pub fn LoginScreen() -> Element {
                     }
                     form {
                         class: "login-form",
+                        aria_busy: connecting,
                         onsubmit: {
                             let context = context.clone();
                             move |event| {
                                 event.prevent_default();
-                                context.submit_login();
+                                if !connecting {
+                                    context.submit_login();
+                                }
                             }
                         },
                         label { class: "field",
@@ -98,6 +104,7 @@ pub fn LoginScreen() -> Element {
                                 autocomplete: "username",
                                 placeholder: "your name",
                                 value: "{username}",
+                                disabled: connecting,
                                 oninput: {
                                     let context = context.clone();
                                     move |event| context.state.write_unchecked().login.username = event.value()
@@ -112,6 +119,7 @@ pub fn LoginScreen() -> Element {
                                 autocomplete: "current-password",
                                 placeholder: "six random words",
                                 value: "{passphrase}",
+                                disabled: connecting,
                                 oninput: {
                                     let context = context.clone();
                                     move |event| context.state.write_unchecked().login.passphrase = event.value()
@@ -126,6 +134,7 @@ pub fn LoginScreen() -> Element {
                                 autocomplete: "url",
                                 placeholder: "https://notebox.you.workers.dev",
                                 value: "{server}",
+                                disabled: connecting,
                                 oninput: {
                                     let context = context.clone();
                                     move |event| context.state.write_unchecked().login.server = event.value()
@@ -140,29 +149,32 @@ pub fn LoginScreen() -> Element {
                                 autocomplete: "off",
                                 placeholder: "This device",
                                 value: "{device}",
+                                disabled: connecting,
                                 oninput: {
                                     let context = context.clone();
                                     move |event| context.state.write_unchecked().login.device = event.value()
                                 },
                             }
                         }
-                        button { class: "primary-button wide", r#type: "submit",
-                            "Connect"
+                        button {
+                            class: "primary-button wide",
+                            r#type: "submit",
+                            disabled: connecting,
+                            if connecting { "Connecting…" } else { "Connect" }
                         }
                     }
                     div { class: "login-divider", span { "or" } }
                     button {
                         class: "secondary-button wide",
                         r#type: "button",
+                        disabled: connecting,
                         onclick: {
                             let context = context.clone();
                             move |_| context.continue_local()
                         },
                         "Continue on this device"
                     }
-                    p { class: "login-note",
-                        "Sync is wired to this screen in the next phase. Until then the app stays in local mode and keeps every note on this device."
-                    }
+                    p { class: "login-note", "{local_note}" }
                 }
             }
         }

@@ -4,6 +4,8 @@ use dioxus::prelude::*;
 use notes_store::NoteView;
 
 use crate::state::{AppContext, Screen, Theme};
+use crate::sync::SyncStatus;
+use crate::time::relative_time;
 use crate::ui::icons::Icon;
 
 #[component]
@@ -14,6 +16,9 @@ pub fn TopBar() -> Element {
     let theme = state.theme;
     let search = state.search.clone();
     let hits = state.search_hits;
+    let sync = state.sync.status;
+    let sync_error = state.sync.error.clone();
+    let last_synced = state.sync.last_synced;
     let initial = state
         .profile
         .username
@@ -23,6 +28,11 @@ pub fn TopBar() -> Element {
         .to_uppercase()
         .to_string();
     drop(state);
+    let sync_title = sync_error.unwrap_or_else(|| match (sync, last_synced) {
+        (SyncStatus::Local, _) => "Local only. Open Settings to sync.".to_string(),
+        (_, Some(at)) => format!("Last synced {}", relative_time(crate::time::now(), at)),
+        _ => "Account and sync".to_string(),
+    });
 
     rsx! {
         header { class: "topbar",
@@ -80,15 +90,15 @@ pub fn TopBar() -> Element {
 
             div { class: "topbar-end",
                 button {
-                    class: "status-pill",
+                    class: "status-pill {sync.tone()}",
                     r#type: "button",
-                    title: "Account and sync",
+                    title: "{sync_title}",
                     onclick: {
                         let context = context.clone();
                         move |_| context.open_settings()
                     },
                     span { class: "status-dot" }
-                    span { "Local" }
+                    span { "{sync.short()}" }
                 }
                 button {
                     class: "icon-button",

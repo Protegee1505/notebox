@@ -4122,6 +4122,8 @@ dependencies = [
  "notes-core",
  "notes-proto",
  "notes-store",
+ "notes-sync",
+ "pollster",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

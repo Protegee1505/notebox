@@ -5,21 +5,26 @@
 //! keeps the view free of storage details and gives the browser worker in P7
 //! one place to plug into.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+#[cfg(target_arch = "wasm32")]
+use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
 use notes_core::{Note, NoteVersion};
 use notes_proto::{NoteId, Notebook, NotebookId};
 use notes_store::{
     Attachment, NewNote, NoteQuery, NoteStore, NoteSummary, NoteView, SearchQuery, TagCount,
 };
+use notes_sync::BoxedTransport;
 use web_time::Instant;
 
 use crate::images;
 use crate::markdown_ops::{self, Mark};
 use crate::media;
 use crate::storage::{self, StorageInfo};
+use crate::sync::{self, Due, OpenNotePlan, SyncFailure, SyncReport, SyncStatus, SyncUi};
 use crate::time::{now, relative_time};
 
 /// Top-level screens. Notes and Settings keep the sidebar; Login is full page.
@@ -133,7 +138,7 @@ pub struct Toast {
     pub at: Instant,
 }
 
-/// The local profile badge. Sync arrives with P7.
+/// The local profile badge. Sync details live in [`SyncUi`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Profile {
     /// Display name.
@@ -156,7 +161,7 @@ impl Default for Profile {
 pub struct LoginForm {
     /// Account name.
     pub username: String,
-    /// Stored only long enough to be discarded; no server call yet.
+    /// Cleared as soon as an attempt starts; never stored.
     pub passphrase: String,
     /// Worker base URL.
     pub server: String,
@@ -275,12 +280,23 @@ pub struct AppState {
     pub profile: Profile,
     /// Login form.
     pub login: LoginForm,
+    /// Connection state, last run, and devices.
+    pub sync: SyncUi,
     /// Minute of the last clock tick, so relative times refresh.
     pub clock_minute: i64,
 }
 
 impl AppState {
     fn new(storage: StorageInfo, storage_error: Option<String>) -> Self {
+        let saved = sync::load_account();
+        let (server, username, device) = match saved {
+            Some(account) => (account.server, account.username, account.device),
+            None => (
+                sync::default_server(),
+                String::new(),
+                sync::default_device_name(),
+            ),
+        };
         Self {
             screen: Screen::Notes,
             view: NoteView::Active,
@@ -335,10 +351,12 @@ impl AppState {
             storage_error,
             profile: Profile::default(),
             login: LoginForm {
-                server: "https://notebox.example.workers.dev".to_string(),
-                device: "This device".to_string(),
+                server,
+                username,
+                device,
                 ..LoginForm::default()
             },
+            sync: SyncUi::default(),
             clock_minute: now() / 60,
         }
     }
@@ -350,10 +368,11 @@ pub struct AppContext {
     store: Option<Rc<dyn NoteStore>>,
     /// Reactive app state.
     pub state: Signal<AppState>,
+    runtime: Rc<RefCell<sync::Runtime>>,
 }
 
 impl AppContext {
-    /// Open storage and load the first screen.
+    /// Open storage, load the first screen and restore a saved session.
     pub fn new() -> Self {
         let (store, info, error) = match storage::open() {
             Ok(opened) => (Some(Rc::from(opened.store)), opened.info, None),
@@ -368,8 +387,13 @@ impl AppContext {
             ),
         };
         let state = Signal::new(AppState::new(info, error));
-        let context = Self { store, state };
+        let context = Self {
+            store,
+            state,
+            runtime: Rc::new(RefCell::new(sync::Runtime::default())),
+        };
         context.bootstrap();
+        context.restore_sync();
         context
     }
 
@@ -382,8 +406,13 @@ impl AppContext {
         let Some(store) = self.store() else {
             return;
         };
+        // With a saved account, an empty database means the account's notes
+        // are about to be pulled. Seeding welcome notes there would push demo
+        // content into the account, and on the in-memory web store it would
+        // add a fresh copy on every reload.
+        let account_saved = sync::load_account().is_some();
         match store.note_count() {
-            Ok(0) => self.seed(store),
+            Ok(0) if !account_saved => self.seed(store),
             Ok(_) => {}
             Err(error) => self.toast_danger(format!("Could not read notes: {error}")),
         }
@@ -392,6 +421,74 @@ impl AppContext {
         if let Some(id) = first {
             self.select_note(id);
         }
+    }
+
+    /// Pick up a saved account and token, if both exist.
+    ///
+    /// The web build has no token file: its credential is the `HttpOnly`
+    /// cookie, so an empty bearer token is enough. A missing or expired cookie
+    /// shows up as `Unauthorized` on the first run and turns into “Sign in”.
+    fn restore_sync(&self) {
+        if let Some(store) = self.store() {
+            let last = store
+                .sync_state()
+                .ok()
+                .and_then(|state| (state.updated_at > 0).then_some(state.updated_at));
+            self.state.write_unchecked().sync.last_synced = last;
+        }
+        let Some(account) = sync::load_account() else {
+            return;
+        };
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let session = match sync::load_session() {
+            Some(session) if session.username == account.username => Some(session),
+            Some(_) => {
+                // A token from another account cannot be used with this one.
+                sync::clear_session();
+                None
+            }
+            None => None,
+        };
+        #[cfg(target_arch = "wasm32")]
+        let session = Some(sync::cookie_session(&account.username));
+
+        let Some(session) = session else {
+            return;
+        };
+        let client = match sync::client(
+            &account.server,
+            &account.username,
+            &account.device,
+            Some(session),
+        ) {
+            Ok(client) => client,
+            Err(error) => {
+                self.state.write_unchecked().sync.error = Some(sync::friendly_login_error(&error));
+                return;
+            }
+        };
+
+        {
+            let mut runtime = self.runtime.borrow_mut();
+            runtime.client = Some(client);
+            runtime.account = Some(account.clone());
+            // The first tick runs the boot sync once the UI is interactive.
+            runtime.focus_pending = true;
+        }
+        let mut state = self.state.write_unchecked();
+        state.profile.username = account.username.clone();
+        state.profile.sync_connected = true;
+        // A saved account with no past run has not synced yet; the boot run
+        // is about to start on the first tick.
+        state.sync.status = if state.sync.last_synced.is_some() {
+            SyncStatus::Idle
+        } else {
+            SyncStatus::Connecting
+        };
+        state.login.server = account.server;
+        state.login.username = account.username;
+        state.login.device = account.device;
     }
 
     /// A small welcome set, only on a brand-new database.
@@ -708,6 +805,20 @@ impl AppContext {
         if !dirty && draft == saved_text {
             return;
         }
+        // A run may have pulled a newer body for this note. Writing the stale
+        // draft now could erase it; hold the edit until the report arrives,
+        // then either save it (no remote change) or keep it as a conflict copy.
+        {
+            let mut runtime = self.runtime.borrow_mut();
+            let in_flight = runtime
+                .open_base
+                .as_ref()
+                .is_some_and(|(open, _)| *open == id);
+            if runtime.busy && in_flight {
+                runtime.deferred_save = Some((id, draft, now()));
+                return;
+            }
+        }
         let Some(store) = self.store() else {
             return;
         };
@@ -836,6 +947,8 @@ impl AppContext {
         if save {
             self.save_now();
         }
+        self.poll_background();
+        self.maybe_sync();
     }
 
     /// Toolbar undo.
@@ -1338,6 +1451,13 @@ impl AppContext {
     /// Switch to a screen.
     pub fn go(&self, screen: Screen) {
         self.save_now();
+        // The login form starts a new device session. Replacing a live one
+        // without signing out would leave the old device listed forever.
+        if screen == Screen::Login && self.runtime.borrow().client.is_some() {
+            self.toast_info("Sign out first to use another account.");
+            self.state.write_unchecked().screen = Screen::Settings;
+            return;
+        }
         let mut state = self.state.write_unchecked();
         state.screen = screen;
         state.palette_open = false;
@@ -1589,9 +1709,12 @@ impl AppContext {
         }
     }
 
-    /// Open Settings.
+    /// Open Settings and refresh the device list when connected.
     pub fn open_settings(&self) {
         self.go(Screen::Settings);
+        if self.state.peek().profile.sync_connected {
+            self.refresh_devices();
+        }
     }
 
     /// Close overlays, or leave the editor on a phone.
@@ -1659,31 +1782,162 @@ impl AppContext {
         state.palette_open = false;
     }
 
-    /// Submit the login form. Sync is intentionally not wired in P4.
+    /// Submit the login form and open a real session.
     pub fn submit_login(&self) {
-        let (username, passphrase, server) = {
+        if self.runtime.borrow().busy {
+            self.toast_info("Wait for the current sync to finish.");
+            return;
+        }
+        let (username, passphrase, server, device) = {
             let state = self.state.read();
             (
                 state.login.username.trim().to_string(),
                 state.login.passphrase.clone(),
-                state.login.server.trim().to_string(),
+                state.login.server.trim().trim_end_matches('/').to_string(),
+                state.login.device.trim().to_string(),
             )
         };
-        if username.is_empty() || passphrase.is_empty() || server.is_empty() {
+        if username.is_empty() || passphrase.is_empty() || server.is_empty() || device.is_empty() {
             self.state.write_unchecked().login.error =
-                Some("Enter a username, passphrase and server URL.".to_string());
+                Some("Enter a username, passphrase, server URL and device name.".to_string());
             return;
         }
         {
             let mut state = self.state.write_unchecked();
-            state.profile.username = username;
-            state.profile.sync_connected = false;
             state.login.passphrase.clear();
             state.login.error = None;
+            // Keep the form on screen while connecting so the button and the
+            // error live in one place.
+            state.sync.status = SyncStatus::Connecting;
+            state.sync.error = None;
+        }
+        self.runtime.borrow_mut().busy = true;
+        self.start_login(server, username, device, passphrase);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn start_login(&self, server: String, username: String, device: String, passphrase: String) {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("notebox-login".to_string())
+            .spawn(move || {
+                let result = sync::login_blocking(&server, &username, &device, &passphrase)
+                    .map_err(|error| sync::friendly_login_error(&error));
+                let _ = sender.send(result);
+            });
+        match spawned {
+            Ok(_) => self.runtime.borrow_mut().login_rx = Some(receiver),
+            Err(error) => self.login_failed(format!("Could not start the login thread: {error}")),
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn start_login(&self, server: String, username: String, device: String, passphrase: String) {
+        let client = match sync::client(&server, &username, &device, None) {
+            Ok(client) => client,
+            Err(error) => {
+                self.login_failed(sync::friendly_login_error(&error));
+                return;
+            }
+        };
+        let context = self.clone();
+        let task_client = client.clone();
+        // This task outlives the login screen: finish_login replaces it with
+        // Notes, and a scope-bound task would be cancelled mid-login.
+        spawn_forever(async move {
+            let sessions = notes_sync::NullTokenStore;
+            match task_client.login(&passphrase, &sessions).await {
+                Ok(session) => context.finish_login(
+                    sync::LoginSuccess {
+                        session,
+                        account: sync::SavedAccount {
+                            server,
+                            username,
+                            device,
+                        },
+                    },
+                    Some(client),
+                ),
+                Err(error) => context.login_failed(sync::friendly_login_error(&error)),
+            }
+        });
+    }
+
+    /// Install a successful login and start the first sync.
+    fn finish_login(
+        &self,
+        success: sync::LoginSuccess,
+        provided: Option<Rc<notes_sync::SyncClient<BoxedTransport>>>,
+    ) {
+        let client = match provided {
+            Some(client) => client,
+            None => match sync::client(
+                &success.account.server,
+                &success.account.username,
+                &success.account.device,
+                Some(success.session.clone()),
+            ) {
+                Ok(client) => client,
+                Err(error) => {
+                    self.login_failed(sync::friendly_login_error(&error));
+                    return;
+                }
+            },
+        };
+        if let Err(error) = sync::save_account(&success.account) {
+            self.toast_danger(format!(
+                "Signed in, but this device could not remember the account: {error}"
+            ));
+        }
+        {
+            let mut runtime = self.runtime.borrow_mut();
+            runtime.client = Some(client);
+            runtime.account = Some(success.account.clone());
+            runtime.busy = false;
+            runtime.failures = 0;
+            runtime.retry_after = None;
+            runtime.stopped = false;
+            runtime.focus_pending = true;
+        }
+        {
+            let mut state = self.state.write_unchecked();
+            state.profile.username = success.account.username.clone();
+            state.profile.sync_connected = true;
+            state.login.server = success.account.server.clone();
+            state.login.username = success.account.username.clone();
+            state.login.device = success.account.device.clone();
+            state.login.passphrase.clear();
+            state.login.error = None;
+            state.sync.status = SyncStatus::Idle;
+            state.sync.error = None;
+            state.sync.devices.clear();
+            state.sync.devices_error = None;
+            state.sync.confirm_revoke = None;
             state.screen = Screen::Notes;
             state.mobile_list = state.selected.is_none();
         }
-        self.toast_info("Local mode. Sync through your Worker arrives with P7.");
+        self.toast_success(format!("Connected as {}", success.account.username));
+        // Do not show “Synced” before anything has been synced. Starting the
+        // first run here also removes the tick delay after login.
+        self.start_sync(false);
+    }
+
+    fn login_failed(&self, message: String) {
+        {
+            let mut runtime = self.runtime.borrow_mut();
+            runtime.busy = false;
+            runtime.client = None;
+            runtime.account = None;
+            runtime.failures = 0;
+            runtime.retry_after = None;
+            runtime.stopped = false;
+        }
+        let mut state = self.state.write_unchecked();
+        state.profile.sync_connected = false;
+        state.login.passphrase.clear();
+        state.login.error = Some(message.clone());
+        state.sync.status = SyncStatus::Local;
+        state.sync.error = Some(message);
     }
 
     /// Continue without an account.
@@ -1692,10 +1946,815 @@ impl AppContext {
             let mut state = self.state.write_unchecked();
             state.login.passphrase.clear();
             state.login.error = None;
+            state.profile.sync_connected = false;
+            state.sync.status = SyncStatus::Local;
             state.screen = Screen::Notes;
             state.mobile_list = state.selected.is_none();
         }
         self.toast_info("Your notes stay on this device.");
+    }
+
+    /// Ask for a sync now.
+    pub fn sync_now(&self) {
+        self.start_sync(true);
+    }
+
+    /// Save the editor, then run the engine on a thread (native) or spawned
+    /// future (web).
+    fn start_sync(&self, manual: bool) {
+        if self.store().is_none() {
+            return;
+        }
+        let (client, connected) = {
+            let runtime = self.runtime.borrow();
+            (runtime.client.clone(), runtime.account.is_some())
+        };
+        let Some(client) = client.filter(|_| connected) else {
+            if manual {
+                self.toast_info("Sign in to sync your notes.");
+            }
+            return;
+        };
+        if self.runtime.borrow().busy {
+            if manual {
+                self.toast_info("Sync is already running");
+            }
+            return;
+        }
+        // The draft must be in SQLite before the merge runs; otherwise the
+        // engine would pull a body the editor never contributed.
+        self.save_now();
+        let (dirty, selected, saved_text) = {
+            let state = self.state.peek();
+            (state.dirty, state.selected, state.saved_text.clone())
+        };
+        if dirty {
+            if manual {
+                self.toast_danger("The note could not be saved, so sync did not start.");
+            }
+            return;
+        }
+        let started = now();
+        let open_base = selected.map(|id| (id, saved_text));
+        {
+            let mut runtime = self.runtime.borrow_mut();
+            runtime.busy = true;
+            runtime.manual_run = manual;
+            runtime.last_attempt = started;
+            // A manual Sync now is the way out of a permanent error.
+            runtime.stopped = false;
+            runtime.focus_pending = false;
+            runtime.open_base = open_base.clone();
+            runtime.deferred_save = None;
+        }
+        self.state.write_unchecked().sync.status = SyncStatus::Syncing;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let account = self.runtime.borrow().account.clone();
+            let session = client.session();
+            let (Some(account), Some(session)) = (account, session) else {
+                self.apply_sync_failure(SyncFailure {
+                    message: "The device session is missing. Sign in again.".to_string(),
+                    unauthorized: true,
+                    retryable: false,
+                    retry_after: None,
+                });
+                return;
+            };
+            let job = sync::NativeSyncJob {
+                database: storage::database_path(),
+                account,
+                session,
+                open_note: open_base.as_ref().map(|(id, _)| *id),
+                started_at: started,
+            };
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let spawned = std::thread::Builder::new()
+                .name("notebox-sync".to_string())
+                .spawn(move || {
+                    let report = sync::sync_blocking(job).map_err(sync::SyncFailure::from);
+                    let _ = sender.send(report);
+                });
+            match spawned {
+                Ok(_) => self.runtime.borrow_mut().sync_rx = Some(receiver),
+                Err(error) => self.apply_sync_failure(SyncFailure {
+                    message: format!("Could not start the sync thread: {error}"),
+                    unauthorized: false,
+                    retryable: true,
+                    retry_after: None,
+                }),
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let Some(store) = self.store.clone() else {
+                return;
+            };
+            let context = self.clone();
+            let open_note = open_base.as_ref().map(|(id, _)| *id);
+            // A sync started from Settings must survive leaving Settings; the
+            // status would otherwise stay "Syncing" forever.
+            spawn_forever(async move {
+                let result = async {
+                    let outcome = client.sync(store.as_ref(), started).await?;
+                    let mut attachments = notes_sync::AttachmentSyncOutcome::default();
+                    let mut attachment_error = None;
+                    match store.notes_with_attachment_work(sync::ATTACHMENT_NOTES_PER_RUN) {
+                        Ok(notes) => {
+                            for note in notes {
+                                match client
+                                    .sync_note_attachments(store.as_ref(), &note, started)
+                                    .await
+                                {
+                                    Ok(pass) => {
+                                        attachments.uploaded += pass.uploaded;
+                                        attachments.downloaded += pass.downloaded;
+                                        attachments.missing += pass.missing;
+                                    }
+                                    Err(error) if error.is_unauthorized() => return Err(error),
+                                    Err(error) => {
+                                        attachment_error = Some(sync::friendly_sync_error(&error));
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            attachment_error =
+                                Some(format!("Could not read the attachment queue: {error}"));
+                        }
+                    }
+                    let open_note = open_note
+                        .and_then(|id| store.open_note(&id).ok())
+                        .map(|note| note.text());
+                    Ok::<_, notes_sync::SyncError>(SyncReport {
+                        outcome,
+                        attachments,
+                        attachment_error,
+                        open_note,
+                        finished_at: now(),
+                    })
+                }
+                .await;
+                match result {
+                    Ok(report) => context.apply_sync_report(report),
+                    Err(error) => context.apply_sync_failure(SyncFailure::from(error)),
+                }
+            });
+        }
+    }
+
+    /// Poll the result channels used by the native worker threads.
+    fn poll_background(&self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.poll_native();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn poll_native(&self) {
+        use std::sync::mpsc::TryRecvError;
+
+        let login = {
+            let mut runtime = self.runtime.borrow_mut();
+            match runtime.login_rx.as_ref().map(|rx| rx.try_recv()) {
+                Some(Ok(value)) => {
+                    runtime.login_rx = None;
+                    Some(value)
+                }
+                Some(Err(TryRecvError::Disconnected)) => {
+                    runtime.login_rx = None;
+                    Some(Err(
+                        "The login thread stopped without an answer.".to_string()
+                    ))
+                }
+                Some(Err(TryRecvError::Empty)) | None => None,
+            }
+        };
+        if let Some(result) = login {
+            match result {
+                Ok(success) => self.finish_login(success, None),
+                Err(message) => self.login_failed(message),
+            }
+        }
+
+        let run = {
+            let mut runtime = self.runtime.borrow_mut();
+            match runtime.sync_rx.as_ref().map(|rx| rx.try_recv()) {
+                Some(Ok(value)) => {
+                    runtime.sync_rx = None;
+                    Some(value)
+                }
+                Some(Err(TryRecvError::Disconnected)) => {
+                    runtime.sync_rx = None;
+                    Some(Err(SyncFailure {
+                        message: "The sync thread stopped without an answer.".to_string(),
+                        unauthorized: false,
+                        retryable: true,
+                        retry_after: None,
+                    }))
+                }
+                Some(Err(TryRecvError::Empty)) | None => None,
+            }
+        };
+        if let Some(result) = run {
+            match result {
+                Ok(report) => self.apply_sync_report(report),
+                Err(failure) => self.apply_sync_failure(failure),
+            }
+        }
+
+        let devices = {
+            let mut runtime = self.runtime.borrow_mut();
+            match runtime.devices_rx.as_ref().map(|rx| rx.try_recv()) {
+                Some(Ok(value)) => {
+                    runtime.devices_rx = None;
+                    Some(value)
+                }
+                Some(Err(TryRecvError::Disconnected)) => {
+                    runtime.devices_rx = None;
+                    Some(Err(
+                        "The device thread stopped without an answer.".to_string()
+                    ))
+                }
+                Some(Err(TryRecvError::Empty)) | None => None,
+            }
+        };
+        if let Some(result) = devices {
+            self.finish_devices(result);
+        }
+    }
+
+    /// PLAN.md's loop: start, three seconds after an edit, every minute while
+    /// visible, and on focus. Never while hidden or dirty.
+    fn maybe_sync(&self) {
+        let visible = sync::document_visible();
+        let focused = sync::document_focused();
+        let (connected, busy, last_attempt, failures, retry_after, stopped, focus) = {
+            let mut runtime = self.runtime.borrow_mut();
+            if focused && !runtime.was_focused {
+                runtime.focus_pending = true;
+            }
+            runtime.was_focused = focused;
+            (
+                runtime.client.is_some() && runtime.account.is_some(),
+                runtime.busy,
+                runtime.last_attempt,
+                runtime.failures,
+                runtime.retry_after,
+                runtime.stopped,
+                runtime.focus_pending,
+            )
+        };
+        let (dirty, last_synced, last_saved) = {
+            let state = self.state.peek();
+            (
+                state.dirty,
+                state.sync.last_synced.unwrap_or(0),
+                state.saved_at,
+            )
+        };
+        let due = Due {
+            connected,
+            busy,
+            visible,
+            dirty,
+            last_synced,
+            last_saved,
+            last_attempt,
+            failures,
+            retry_after,
+            stopped,
+            focus,
+        };
+        if sync::is_due(now(), &due) {
+            self.start_sync(false);
+        }
+    }
+
+    /// Install a successful run and reconcile the editor.
+    fn apply_sync_report(&self, report: SyncReport) {
+        let (base, deferred, manual) = {
+            let mut runtime = self.runtime.borrow_mut();
+            runtime.busy = false;
+            runtime.failures = 0;
+            runtime.retry_after = None;
+            runtime.stopped = false;
+            let manual = runtime.manual_run;
+            runtime.manual_run = false;
+            (
+                runtime.open_base.take(),
+                runtime.deferred_save.take(),
+                manual,
+            )
+        };
+        {
+            let mut state = self.state.write_unchecked();
+            state.sync.status = SyncStatus::Idle;
+            state.sync.last_synced = Some(report.finished_at);
+            state.sync.error = report.attachment_error.clone();
+            state.profile.sync_connected = true;
+        }
+        if report.outcome.pulled > 0 {
+            self.reload();
+        }
+        // Raise the summary before resolving the open note: a reload or a
+        // conflict has a more useful message and must not be hidden by it.
+        if manual {
+            match &report.attachment_error {
+                Some(error) => self.toast_danger(error.clone()),
+                None => self.toast_success(sync::run_summary(&report)),
+            }
+        }
+        let base_id = base.as_ref().map(|(id, _)| *id);
+        if let Some((id, base_text)) = base {
+            self.resolve_open_note(id, &base_text, &report, deferred);
+        } else if let Some((id, text, at)) = deferred {
+            // No base means the run and the editor got out of step; still keep
+            // the unsigned edit rather than dropping it.
+            let current = self
+                .store()
+                .and_then(|store| store.open_note(&id).ok())
+                .map(|note| note.text())
+                .unwrap_or_default();
+            if text != current {
+                let _ = self.keep_conflict_copy(id, &text, at);
+            }
+        }
+        // The user may have switched to another note while the run was in
+        // flight. Its merged body is newer than what the editor read.
+        self.refresh_selected_after_run(base_id, report.finished_at);
+        if report.attachments.downloaded > 0 {
+            if let Some(id) = self.state.peek().selected {
+                self.load_attachments(id);
+            }
+        }
+        if self.state.peek().history_open && report.outcome.pulled > 0 {
+            self.open_history();
+        }
+    }
+
+    /// Compare the merged body with what the editor holds and never overwrite
+    /// a local edit.
+    fn resolve_open_note(
+        &self,
+        id: NoteId,
+        base: &str,
+        report: &SyncReport,
+        deferred: Option<(NoteId, String, i64)>,
+    ) {
+        let live = self.state.peek().selected == Some(id);
+        let (ours, at) = if live {
+            (self.state.peek().draft.clone(), report.finished_at)
+        } else if let Some((_, text, at)) = deferred.filter(|(note, _, _)| *note == id) {
+            (text, at)
+        } else {
+            (base.to_string(), report.finished_at)
+        };
+        let Some(remote) = report.open_note.as_deref() else {
+            if live && ours != base {
+                self.state.write_unchecked().sync.error =
+                    Some("Could not compare the open note after sync.".to_string());
+            }
+            return;
+        };
+        match sync::plan_open_note(base, &ours, remote) {
+            OpenNotePlan::Unchanged => {
+                if !live && ours != base {
+                    self.save_detached(id, ours, at);
+                }
+            }
+            OpenNotePlan::Reload(merged) => {
+                if live {
+                    self.adopt_open_note(id, &merged, report.finished_at);
+                    self.toast_info("Updated from another device");
+                }
+            }
+            OpenNotePlan::Conflict { keep, remote } => {
+                let copy = self.keep_conflict_copy(id, &keep, at);
+                if live {
+                    self.adopt_open_note(id, &remote, report.finished_at);
+                }
+                match copy {
+                    Some(title) => self.toast_info(format!(
+                        "Remote changes arrived while you were typing. Your version is in \"{title}\"."
+                    )),
+                    None => self.toast_danger(
+                        "Remote changes arrived and the local copy could not be saved. Your text is still in the editor.",
+                    ),
+                }
+            }
+        }
+    }
+
+    /// Show a merged body for a note the user switched to during the run.
+    ///
+    /// Only a clean editor is refreshed; a dirty one keeps the user's text and
+    /// the next save merges it, so nothing typed is thrown away.
+    fn refresh_selected_after_run(&self, base: Option<NoteId>, at: i64) {
+        let Some(store) = self.store() else {
+            return;
+        };
+        let (selected, draft, saved_text, dirty) = {
+            let state = self.state.peek();
+            (
+                state.selected,
+                state.draft.clone(),
+                state.saved_text.clone(),
+                state.dirty,
+            )
+        };
+        let Some(selected) = selected else {
+            return;
+        };
+        if base == Some(selected) || dirty || draft != saved_text {
+            return;
+        }
+        if let Ok(note) = store.open_note(&selected) {
+            let text = note.text();
+            if text != draft {
+                self.adopt_open_note(selected, &text, at);
+            }
+        }
+    }
+
+    /// Put the merged body into the editor without saving the stale draft.
+    fn adopt_open_note(&self, id: NoteId, text: &str, at: i64) {
+        {
+            let mut state = self.state.write_unchecked();
+            if state.selected != Some(id) {
+                return;
+            }
+            state.draft = text.to_string();
+            state.saved_text = text.to_string();
+            state.dirty = false;
+            state.saved_at = at;
+            state.seen_seq = state.edit_seq;
+            state.undo.clear();
+            state.redo.clear();
+            hide_history(&mut state);
+        }
+        self.load_attachments(id);
+    }
+
+    /// Keep a local body as a new note tagged `conflict`, under the merged one.
+    fn keep_conflict_copy(&self, original: NoteId, text: &str, at: i64) -> Option<String> {
+        let store = self.store()?;
+        let meta = store.note_summary(&original).ok();
+        let original_title = meta
+            .as_ref()
+            .map(|summary| summary.title.trim().to_string())
+            .filter(|title| !title.is_empty())
+            .unwrap_or_else(|| "untitled note".to_string());
+        let body = format!("Conflict copy of {original_title}\n\n{text}");
+        let mut tags = meta
+            .as_ref()
+            .map(|summary| summary.tags.clone())
+            .unwrap_or_default();
+        if !tags.iter().any(|tag| tag == "conflict") {
+            tags.push("conflict".to_string());
+        }
+        let created = store.create_note(NewNote {
+            text: body,
+            created_at: at,
+            notebook_id: meta.as_ref().and_then(|summary| summary.notebook_id),
+            tags,
+        });
+        match created {
+            Ok(note) => {
+                // The copy is a local change outside the editor's save path.
+                // Ask for a follow-up run after the minimum gap so it reaches
+                // the Worker before a web reload can drop the in-memory store.
+                self.runtime.borrow_mut().focus_pending = true;
+                self.reload();
+                Some(note.title())
+            }
+            Err(error) => {
+                self.toast_danger(format!("Could not keep the local version: {error}"));
+                None
+            }
+        }
+    }
+
+    /// Save a deferred edit for a note that is no longer open, when the merge
+    /// did not touch it.
+    fn save_detached(&self, id: NoteId, text: String, at: i64) {
+        let Some(store) = self.store() else {
+            return;
+        };
+        let result = (|| -> Result<(), String> {
+            let note = store
+                .open_note(&id)
+                .map_err(|error| format!("Could not load the note: {error}"))?;
+            if note.text() == text {
+                return Ok(());
+            }
+            note.set_next_commit_timestamp(at);
+            note.replace_text(&text)
+                .map_err(|error| format!("Could not apply the edit: {error}"))?;
+            store
+                .save_note(&note, at)
+                .map_err(|error| format!("Could not save: {error}"))?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                self.reload();
+                self.toast_info("Saved an edit made while sync was running.");
+            }
+            Err(message) => self.toast_danger(message),
+        }
+    }
+
+    /// Record a failed run, preserve any held-back edit, and schedule a retry.
+    fn apply_sync_failure(&self, failure: SyncFailure) {
+        let (base, deferred, manual) = {
+            let mut runtime = self.runtime.borrow_mut();
+            runtime.busy = false;
+            runtime.failures = runtime.failures.saturating_add(1);
+            runtime.retry_after = failure.retry_after;
+            // A permanent error waits for the user instead of quietly
+            // spending a request every few minutes.
+            runtime.stopped = !failure.retryable;
+            let manual = runtime.manual_run;
+            runtime.manual_run = false;
+            (
+                runtime.open_base.take(),
+                runtime.deferred_save.take(),
+                manual,
+            )
+        };
+
+        let base_id = base.as_ref().map(|(id, _)| *id);
+        let mut preserved = None;
+        match (base, deferred) {
+            (Some((id, base_text)), Some((deferred_id, text, at))) if deferred_id == id => {
+                let live = self.state.peek().selected == Some(id);
+                let ours = if live {
+                    self.state.peek().draft.clone()
+                } else {
+                    text
+                };
+                if ours != base_text {
+                    preserved = self.keep_conflict_copy(id, &ours, at);
+                    if live {
+                        let current = self
+                            .store()
+                            .and_then(|store| store.open_note(&id).ok())
+                            .map(|note| note.text());
+                        if let Some(current) = current {
+                            self.adopt_open_note(id, &current, now());
+                        }
+                    }
+                }
+            }
+            (_, Some((id, text, at))) => {
+                let current = self
+                    .store()
+                    .and_then(|store| store.open_note(&id).ok())
+                    .map(|note| note.text())
+                    .unwrap_or_default();
+                if text != current {
+                    preserved = self.keep_conflict_copy(id, &text, at);
+                }
+            }
+            _ => {}
+        }
+
+        // A partially applied pull can have changed the note the user switched
+        // to. Show its committed body when the editor is clean.
+        self.refresh_selected_after_run(base_id, now());
+
+        let message = match &preserved {
+            Some(title) => format!(
+                "{} Your last edit was kept as \"{title}\".",
+                failure.message
+            ),
+            None => failure.message.clone(),
+        };
+        if failure.unauthorized {
+            #[cfg(not(target_arch = "wasm32"))]
+            sync::clear_session();
+            self.runtime.borrow_mut().client = None;
+        }
+        {
+            let mut state = self.state.write_unchecked();
+            state.sync.error = Some(message.clone());
+            state.profile.sync_connected = !failure.unauthorized;
+            state.sync.status = if failure.unauthorized {
+                SyncStatus::NeedsLogin
+            } else if failure.retryable {
+                SyncStatus::Offline
+            } else {
+                SyncStatus::Error
+            };
+        }
+        if manual || preserved.is_some() {
+            self.toast_danger(message);
+        }
+    }
+
+    /// Fetch the account's device list.
+    pub fn refresh_devices(&self) {
+        if self.state.peek().sync.devices_loading {
+            return;
+        }
+        let client = {
+            let runtime = self.runtime.borrow();
+            if runtime.busy {
+                return;
+            }
+            runtime.client.clone()
+        };
+        let Some(client) = client else {
+            return;
+        };
+        {
+            let mut state = self.state.write_unchecked();
+            state.sync.devices_loading = true;
+            state.sync.devices_error = None;
+            state.sync.confirm_revoke = None;
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let account = self.runtime.borrow().account.clone();
+            let session = client.session();
+            let (Some(account), Some(session)) = (account, session) else {
+                self.state.write_unchecked().sync.devices_loading = false;
+                return;
+            };
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let spawned = std::thread::Builder::new()
+                .name("notebox-devices".to_string())
+                .spawn(move || {
+                    let result = sync::devices_blocking(&account, &session)
+                        .map(|list| (list, false))
+                        .map_err(|error| sync::friendly_sync_error(&error));
+                    let _ = sender.send(result);
+                });
+            match spawned {
+                Ok(_) => self.runtime.borrow_mut().devices_rx = Some(receiver),
+                Err(error) => {
+                    self.finish_devices(Err(format!("Could not start the device thread: {error}")))
+                }
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let context = self.clone();
+            spawn_forever(async move {
+                let result = client
+                    .devices()
+                    .await
+                    .map(|list| (list, false))
+                    .map_err(|error| sync::friendly_sync_error(&error));
+                context.finish_devices(result);
+            });
+        }
+    }
+
+    fn finish_devices(&self, result: Result<(notes_proto::DeviceList, bool), String>) {
+        if !self.state.peek().profile.sync_connected {
+            return;
+        }
+        let mut state = self.state.write_unchecked();
+        state.sync.devices_loading = false;
+        match result {
+            Ok((list, revoked)) => {
+                state.sync.devices = list.devices;
+                state.sync.devices_error = None;
+                if revoked {
+                    state.sync.confirm_revoke = None;
+                    drop(state);
+                    self.toast_success("Device revoked");
+                }
+            }
+            Err(error) => state.sync.devices_error = Some(error),
+        }
+    }
+
+    /// Revoke one device; the first click asks for confirmation.
+    pub fn revoke_device(&self, id: String) {
+        if self.state.peek().sync.devices_loading {
+            return;
+        }
+        if self.state.peek().sync.confirm_revoke.as_deref() != Some(id.as_str()) {
+            self.state.write_unchecked().sync.confirm_revoke = Some(id);
+            return;
+        }
+        let client = {
+            let runtime = self.runtime.borrow();
+            if runtime.busy {
+                return;
+            }
+            runtime.client.clone()
+        };
+        let Some(client) = client else {
+            return;
+        };
+        {
+            let mut state = self.state.write_unchecked();
+            state.sync.confirm_revoke = None;
+            state.sync.devices_loading = true;
+            state.sync.devices_error = None;
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let account = self.runtime.borrow().account.clone();
+            let session = client.session();
+            let (Some(account), Some(session)) = (account, session) else {
+                self.state.write_unchecked().sync.devices_loading = false;
+                return;
+            };
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let spawned = std::thread::Builder::new()
+                .name("notebox-revoke".to_string())
+                .spawn(move || {
+                    let result = (|| -> Result<notes_proto::DeviceList, notes_sync::SyncError> {
+                        sync::revoke_blocking(&account, &session, &id)?;
+                        sync::devices_blocking(&account, &session)
+                    })()
+                    .map(|list| (list, true))
+                    .map_err(|error| sync::friendly_sync_error(&error));
+                    let _ = sender.send(result);
+                });
+            match spawned {
+                Ok(_) => self.runtime.borrow_mut().devices_rx = Some(receiver),
+                Err(error) => {
+                    self.finish_devices(Err(format!("Could not start the device thread: {error}")))
+                }
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let context = self.clone();
+            spawn_forever(async move {
+                let result = async {
+                    client.revoke_device(&id).await?;
+                    client.devices().await
+                }
+                .await
+                .map(|list| (list, true))
+                .map_err(|error| sync::friendly_sync_error(&error));
+                context.finish_devices(result);
+            });
+        }
+    }
+
+    /// Forget the local session. The web cookie is cleared by the Worker so a
+    /// reload cannot sign the browser straight back in.
+    pub fn sign_out(&self) {
+        if self.runtime.borrow().busy {
+            self.toast_info("Wait for the current sync to finish.");
+            return;
+        }
+        let client = self.runtime.borrow().client.clone();
+
+        #[cfg(target_arch = "wasm32")]
+        if let Some(client) = client {
+            use notes_sync::SyncTransport as _;
+
+            spawn_forever(async move {
+                let _ = client.transport().logout().await;
+            });
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = client;
+            sync::clear_session();
+        }
+        let _ = sync::clear_account();
+        {
+            let mut runtime = self.runtime.borrow_mut();
+            runtime.client = None;
+            runtime.account = None;
+            runtime.failures = 0;
+            runtime.retry_after = None;
+            runtime.stopped = false;
+            runtime.focus_pending = false;
+            runtime.open_base = None;
+            runtime.deferred_save = None;
+        }
+        let (server, device) = {
+            let state = self.state.peek();
+            (state.login.server.clone(), state.login.device.clone())
+        };
+        {
+            let mut state = self.state.write_unchecked();
+            state.profile = Profile::default();
+            state.sync = SyncUi::default();
+            state.login.username.clear();
+            state.login.passphrase.clear();
+            state.login.error = None;
+            state.login.server = server;
+            state.login.device = device;
+        }
+        self.toast_info("Signed out. Your notes stay on this device.");
     }
 
     /// Write a zip of all notes and show where it went.

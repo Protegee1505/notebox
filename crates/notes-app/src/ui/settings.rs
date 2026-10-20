@@ -3,6 +3,7 @@
 use dioxus::prelude::*;
 
 use crate::state::{AppContext, Layout, Screen, Theme};
+use crate::time::relative_time;
 use crate::ui::icons::Icon;
 
 #[component]
@@ -19,7 +20,9 @@ pub fn SettingsPane() -> Element {
     let confirm_empty = state.confirm_empty_trash;
     let username = state.profile.username.clone();
     let sync_connected = state.profile.sync_connected;
+    let sync = state.sync.clone();
     drop(state);
+    let now = crate::time::now();
 
     let initial = username
         .chars()
@@ -27,6 +30,11 @@ pub fn SettingsPane() -> Element {
         .unwrap_or('L')
         .to_uppercase()
         .to_string();
+    let status = sync.status;
+    let last_synced = sync
+        .last_synced
+        .map(|at| format!("Last synced {}", relative_time(now, at)))
+        .unwrap_or_else(|| "Not synced yet".to_string());
 
     rsx! {
         main { class: "settings-pane", aria_label: "Settings",
@@ -52,27 +60,136 @@ pub fn SettingsPane() -> Element {
                 section { class: "settings-card account-card",
                     div { class: "card-heading",
                         h2 { "Account" }
-                        span { class: "muted-label", if sync_connected { "Synced" } else { "Local only" } }
+                        span { class: "sync-state {status.tone()}",
+                            span { class: "status-dot" }
+                            "{status.label()}"
+                        }
                     }
                     div { class: "account-row",
                         div { class: "avatar large", "{initial}" }
                         div { class: "account-copy",
-                            strong { "{username}" }
-                            span { if sync_connected { "Connected to your Worker" } else { "No account connected" } }
+                            strong { if sync_connected { "{username}" } else { "Local only" } }
+                            span {
+                                if sync_connected {
+                                    "{last_synced}"
+                                } else {
+                                    "No account connected"
+                                }
+                            }
                         }
                     }
-                    p { class: "card-note",
-                        "Sync through your own free Cloudflare Worker is wired in the next phase. Until then every note stays in the local database."
+                    if let Some(error) = sync.error.clone() {
+                        div { class: "form-error", role: "status",
+                            span { "{error}" }
+                        }
                     }
-                    button {
-                        class: "primary-button",
-                        r#type: "button",
-                        onclick: {
-                            let context = context.clone();
-                            move |_| context.go(Screen::Login)
-                        },
-                        Icon { name: "user" }
-                        span { "Sign in to sync" }
+                    if sync_connected {
+                        p { class: "card-note",
+                            "Your Worker keeps a copy and passes updates between your devices. Notes stay readable when it cannot be reached."
+                        }
+                        div { class: "button-row",
+                            button {
+                                class: "primary-button",
+                                r#type: "button",
+                                disabled: status.busy(),
+                                onclick: {
+                                    let context = context.clone();
+                                    move |_| context.sync_now()
+                                },
+                                Icon { name: "refresh" }
+                                span { if status.busy() { "Syncing…" } else { "Sync now" } }
+                            }
+                            button {
+                                class: "secondary-button",
+                                r#type: "button",
+                                disabled: status.busy(),
+                                onclick: {
+                                    let context = context.clone();
+                                    move |_| context.sign_out()
+                                },
+                                Icon { name: "logout" }
+                                span { "Sign out" }
+                            }
+                        }
+                    } else {
+                        p { class: "card-note",
+                            "Sign in with the account you set up on your Worker. Every note is copied to the server and merged with the other devices. You can keep working offline at any time."
+                        }
+                        button {
+                            class: "primary-button",
+                            r#type: "button",
+                            onclick: {
+                                let context = context.clone();
+                                move |_| context.go(Screen::Login)
+                            },
+                            Icon { name: "user" }
+                            span { "Sign in to sync" }
+                        }
+                    }
+                }
+
+                if sync_connected {
+                    section { class: "settings-card devices-card",
+                        div { class: "card-heading",
+                            h2 { "Devices" }
+                            button {
+                                class: "icon-button small",
+                                r#type: "button",
+                                aria_label: "Refresh devices",
+                                title: "Refresh devices",
+                                disabled: sync.devices_loading,
+                                onclick: {
+                                    let context = context.clone();
+                                    move |_| context.refresh_devices()
+                                },
+                                Icon { name: "refresh" }
+                            }
+                        }
+                        if let Some(error) = sync.devices_error.clone() {
+                            div { class: "form-error", role: "status", span { "{error}" } }
+                        }
+                        if sync.devices.is_empty() {
+                            p { class: "card-note",
+                                if sync.devices_loading {
+                                    "Loading devices…"
+                                } else {
+                                    "Refresh to see the devices that can reach your account."
+                                }
+                            }
+                        } else {
+                            div { class: "device-list",
+                                for device in sync.devices.iter() {
+                                    div { key: "{device.id}", class: "device-row",
+                                        div { class: "device-copy",
+                                            strong { "{device.name}" }
+                                            span { "Last active {relative_time(now, device.last_seen)}" }
+                                        }
+                                        if device.current {
+                                            span { class: "device-pill", "This device" }
+                                        } else {
+                                            button {
+                                                class: "text-button danger-text",
+                                                r#type: "button",
+                                                disabled: sync.devices_loading,
+                                                onclick: {
+                                                    let context = context.clone();
+                                                    let id = device.id.clone();
+                                                    move |_| context.revoke_device(id.clone())
+                                                },
+                                                if sync.confirm_revoke.as_deref() == Some(device.id.as_str()) {
+                                                    "Confirm revoke"
+                                                } else {
+                                                    "Revoke"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        p { class: "card-note",
+                            "Revoking a device asks it to sign in again. Its local notes stay where they are."
+                        }
                     }
                 }
 
@@ -276,7 +393,7 @@ pub fn SettingsPane() -> Element {
                     p { class: "card-note",
                         "Notebox 0.1.0 \u{00b7} local-first notes in Rust. One codebase for web, desktop and Android; Loro history; SQLite storage; a Cloudflare Worker for sync."
                     }
-                    div { class: "phase-pill", "Phase 4 \u{00b7} app shell" }
+                    div { class: "phase-pill", "Phase 7 \u{00b7} sync wiring" }
                 }
             }
         }
