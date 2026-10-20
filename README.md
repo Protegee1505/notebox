@@ -8,10 +8,13 @@ The full specification and phase plan is [PLAN.md](PLAN.md). Agent rules are in
 
 ## Status
 
-Phase 0 spikes. The note document (Loro 1.16.2), the text-box binding, the
-web/desktop boot checks and the browser SQLite store (OPFS in a worker) are
-implemented. No full app features yet. See [docs/STATUS.md](docs/STATUS.md) and
-[docs/adr/](docs/adr/) for progress and decision records.
+Phase 2: the sync server. The note document, store, search, history, export
+and the browser SQLite spike from Phase 1 are implemented. The server now has
+setup, login with backoff, sync push/pull, attachment chunks, device
+revocation, D1 migrations and an end-to-end test against a real local Worker.
+A remote deploy and the S3 CPU measurement wait for `wrangler login`. The sync
+engine and app UI are next. See [docs/STATUS.md](docs/STATUS.md),
+[docs/API.md](docs/API.md) and [docs/adr/](docs/adr/).
 
 ## Layout
 
@@ -35,6 +38,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo nextest run --workspace
 cargo deny check
 ./scripts/budget-check
+python3 scripts/free-tier-sim.py
 ./scripts/wasm-size.sh
 dx build -p notes-app --platform web --release --features web
 node scripts/web-budget.mjs target/dx/notebox/release/web/public
@@ -80,6 +84,48 @@ target setting:
 
 See [docs/DISK.md](docs/DISK.md) for the layout, the 512 MiB free-space guard,
 and recovery steps.
+
+## Local sync server
+
+Install `worker-build` once (the Worker build runs it), then apply both D1
+migrations and start Wrangler:
+
+```bash
+cargo install worker-build --version 0.8.7 --locked
+npx wrangler d1 migrations apply notebox-sync --local
+npx wrangler d1 migrations apply notebox-blobs --local
+npx wrangler dev --local --var SETUP_TOKEN:local-dev-token
+```
+
+Run the full HTTP test, including setup, login backoff, sync pagination,
+attachment chunks and device revocation, against a throwaway local Worker:
+
+```bash
+node scripts/server-e2e.mjs
+```
+
+It needs Node 20+, `npx`, and `worker-build` on `PATH` (`~/.cargo/bin` if you
+installed Rust with rustup). The script downloads no account resources.
+
+## Deploying the free Worker
+
+These steps need the owner's Cloudflare login; agents cannot run them.
+
+```bash
+npx wrangler login
+npx wrangler d1 create notebox-sync     # copy the database_id
+npx wrangler d1 create notebox-blobs    # copy the database_id
+# put both ids in wrangler.toml, replacing the placeholder UUIDs
+npx wrangler d1 migrations apply notebox-sync --remote
+npx wrangler d1 migrations apply notebox-blobs --remote
+npx wrangler secret put SETUP_TOKEN     # generate a long random value
+npx wrangler deploy
+```
+
+After deploying, call `POST /v1/auth/setup` once with the setup token to create
+the account. Then measure CPU time for the S3 spike with `npx wrangler tail` and
+write `docs/adr/0003-*.md`. See [docs/API.md](docs/API.md) for the request
+shapes.
 
 ## Free-tier rule
 
