@@ -1,34 +1,50 @@
 # Status
 
 Updated: 2026-10-20
-Phase: 0 (spikes), bootstrap
+Phase: 0 (spikes)
 
 ## Shipped
 
-- Cargo workspace and six crate skeletons.
-- `AGENTS.md`, `CLAUDE.md`, `README.md`.
-- `wrangler.toml` with the `sync` and `blobs` D1 bindings (placeholder ids).
-- CI workflow for the standard gates.
-- Static budget ceiling check; no runtime measurements yet.
+- Cargo workspace and six crate skeletons; CI gates run on every push.
+- `notes-core`: `NoteDocument` on Loro 1.16.2 with create, edit, snapshot
+  export/import, update export/import and time travel (S2).
+- `notes-core`: Unicode-safe prefix/suffix text-box binding with 1,000-edit
+  convergence and remote-cursor tests (S5).
+- Web release build via `dx` 0.7.10; brotli budget script and a headless
+  Chromium boot check at 360, 900 and 1400 px (S1 web).
+- CI jobs for wasm tests and size, web build/budget, Linux desktop boot under
+  Xvfb, Windows build and Android NDK compile.
+- ADR-0001, ADR-0002 and ADR-0005 record the spike evidence.
 
 ## Measurements
 
-None yet. Spike results and sizes go in the matching ADR.
+| Check | Result |
+| --- | --- |
+| Web bundle (release, brotli) | 390,825 bytes (0.37 MiB); wasm 379,118 bytes |
+| Loro wasm delta (brotli) | 712,053 bytes (0.68 MiB), budget 1.5 MiB |
+| 10,000 edits | 46,000 chars; snapshot 998 B; updates 46,106 B |
+| Native tests | 17 passed |
+| Loro wasm smoke (Node) | 1 passed |
+| 3-replica convergence | 120 random edits, drops and random sync order |
+| Text-box convergence | 1,000 randomized whole-value edits |
 
 ## Blocked
 
-- **Cloudflare**: no account login on this machine. S3 needs a deployed Worker
-  for the real 10 ms CPU check.
-- **GitHub**: no remote yet. Windows and Android CI runs need a pushed repo.
-- **Android device**: this machine has no Android SDK/NDK and no `/dev/kvm`, so
-  no local emulator. Android boot and IME checks need CI or a physical device.
-- **Desktop display**: no X/Wayland display here; the Linux desktop binary can
-  be built but not launched locally without a virtual display.
+- **Cloudflare**: no `wrangler login` on this machine. S3 needs a deployed
+  Worker for the 10 ms CPU check and the Argon2 timing.
+- **Android runtime**: no `/dev/kvm` and no Android SDK, so S2/S5 cannot be run
+  on a device or emulator locally. Compile is verified with NDK r27c and in CI.
+- **Desktop display**: no X/Wayland display. Linux boot runs in CI under Xvfb;
+  cold start is not measured here.
+- **Windows**: build only in CI. No Windows machine for a boot check.
 
 ## Next
 
-1. Run the bootstrap gates and commit.
-2. S1: Dioxus hello app on web and Linux; Windows and Android in CI.
-3. S2 and S5: Loro native/WASM, then the text box binding.
-4. S4: sqlite-wasm OPFS versus IndexedDB.
-5. S3: Worker CPU and client-side Argon2.
+1. Push and confirm the new `wasm`, `web`, `desktop`, `windows` and `android`
+   CI jobs pass; attach the web and Windows artifacts.
+2. Run S2/S5 on an Android emulator with `/dev/kvm` (CI or a physical device) to
+   close the runtime gap, including Gboard composition.
+3. S4: sqlite-wasm OPFS versus IndexedDB in Chromium, Firefox and Safari.
+4. S3: after `wrangler login`, deploy the Worker and measure CPU and Argon2.
+5. Start P1 once S2 is accepted: note metadata, store trait, search, history
+   API and the full 3-replica property test.
