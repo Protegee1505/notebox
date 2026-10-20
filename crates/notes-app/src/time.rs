@@ -57,6 +57,31 @@ pub fn iso_date(timestamp: i64) -> String {
     format!("{year:04}-{month:02}-{day:02}")
 }
 
+/// A calendar day for a history row: Today, Yesterday, or the date.
+pub fn day_label(now: i64, timestamp: i64) -> String {
+    if timestamp <= 0 {
+        return "Unknown time".to_string();
+    }
+    let (year, month, day) = civil_from_unix(timestamp);
+    let (today_year, today_month, today_day) = civil_from_unix(now);
+    if (year, month, day) == (today_year, today_month, today_day) {
+        return "Today".to_string();
+    }
+    let (yesterday_year, yesterday_month, yesterday_day) = civil_from_unix(now - 86_400);
+    if (year, month, day) == (yesterday_year, yesterday_month, yesterday_day) {
+        return "Yesterday".to_string();
+    }
+    let month = MONTHS
+        .get(month.saturating_sub(1) as usize)
+        .copied()
+        .unwrap_or("?");
+    if year == today_year {
+        format!("{month} {day}")
+    } else {
+        format!("{month} {day}, {year}")
+    }
+}
+
 const MONTHS: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
@@ -82,7 +107,7 @@ fn civil_from_unix(timestamp: i64) -> (i64, u32, u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{civil_from_unix, iso_date, relative_time};
+    use super::{civil_from_unix, day_label, iso_date, relative_time};
 
     #[test]
     fn civil_dates_match_known_days() {
@@ -103,5 +128,16 @@ mod tests {
     #[test]
     fn an_empty_timestamp_has_no_label() {
         assert_eq!(relative_time(100, 0), "");
+    }
+
+    #[test]
+    fn history_days_read_as_today_yesterday_or_a_date() {
+        // 2026-10-20 12:00 UTC.
+        let now = 1_792_497_600;
+        assert_eq!(day_label(now, now - 60), "Today");
+        assert_eq!(day_label(now, now - 86_400), "Yesterday");
+        assert_eq!(day_label(now, now - 3 * 86_400), "Oct 17");
+        assert_eq!(day_label(now, 1_700_000_000), "Nov 14, 2023");
+        assert_eq!(day_label(now, 0), "Unknown time");
     }
 }

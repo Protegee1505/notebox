@@ -1,6 +1,7 @@
 //! Screens and reusable pieces of the shell.
 
 pub mod editor;
+pub mod history;
 pub mod icons;
 pub mod login;
 pub mod note_list;
@@ -12,6 +13,7 @@ pub mod toast;
 pub mod topbar;
 
 pub use editor::EditorPane;
+pub use history::HistoryPanel;
 pub use login::LoginScreen;
 pub use note_list::NoteList;
 pub use palette::CommandPalette;

@@ -17,6 +17,7 @@ pub fn NoteList() -> Element {
     let notes = state.notes.clone();
     let snippets = state.snippets.clone();
     let selected = state.selected;
+    let confirm_empty = state.confirm_empty_trash;
     let tag = state.tag.clone();
     let notebook = state.notebook.and_then(|id| {
         state
@@ -71,30 +72,84 @@ pub fn NoteList() -> Element {
                         }
                     }
                 }
-                div { class: "list-tools",
-                    button {
-                        class: if layout == Layout::Grid { "segmented-button is-active" } else { "segmented-button" },
-                        r#type: "button",
-                        aria_label: "Card grid",
-                        aria_pressed: if layout == Layout::Grid { "true" } else { "false" },
-                        title: "Cards",
-                        onclick: {
-                            let context = context.clone();
-                            move |_| context.set_layout(Layout::Grid)
-                        },
-                        Icon { name: "grid" }
+                div { class: "list-actions",
+                    if view == NoteView::Trash && !notes.is_empty() {
+                        button {
+                            class: "trash-empty-button",
+                            r#type: "button",
+                            aria_label: "Empty trash",
+                            aria_expanded: if confirm_empty { "true" } else { "false" },
+                            title: "Empty the trash permanently",
+                            onclick: {
+                                let context = context.clone();
+                                move |_| {
+                                    let open = context.state.peek().confirm_empty_trash;
+                                    context.state.write_unchecked().confirm_empty_trash = !open;
+                                }
+                            },
+                            Icon { name: "trash" }
+                            span { "Empty trash" }
+                        }
                     }
-                    button {
-                        class: if layout == Layout::List { "segmented-button is-active" } else { "segmented-button" },
-                        r#type: "button",
-                        aria_label: "List view",
-                        aria_pressed: if layout == Layout::List { "true" } else { "false" },
-                        title: "List",
-                        onclick: {
-                            let context = context.clone();
-                            move |_| context.set_layout(Layout::List)
-                        },
-                        Icon { name: "list" }
+                    div { class: "list-tools",
+                        button {
+                            class: if layout == Layout::Grid { "segmented-button is-active" } else { "segmented-button" },
+                            r#type: "button",
+                            aria_label: "Card grid",
+                            aria_pressed: if layout == Layout::Grid { "true" } else { "false" },
+                            title: "Cards",
+                            onclick: {
+                                let context = context.clone();
+                                move |_| context.set_layout(Layout::Grid)
+                            },
+                            Icon { name: "grid" }
+                        }
+                        button {
+                            class: if layout == Layout::List { "segmented-button is-active" } else { "segmented-button" },
+                            r#type: "button",
+                            aria_label: "List view",
+                            aria_pressed: if layout == Layout::List { "true" } else { "false" },
+                            title: "List",
+                            onclick: {
+                                let context = context.clone();
+                                move |_| context.set_layout(Layout::List)
+                            },
+                            Icon { name: "list" }
+                        }
+                    }
+                }
+            }
+
+            if view == NoteView::Trash && confirm_empty && !notes.is_empty() {
+                div { class: "trash-confirm", role: "alert",
+                    div { class: "trash-confirm-copy",
+                        strong { "Erase the trash?" }
+                        span {
+                            "This removes {notes.len()} note"
+                            if notes.len() != 1 { "s" }
+                            " permanently. It cannot be undone."
+                        }
+                    }
+                    div { class: "trash-confirm-actions",
+                        button {
+                            class: "secondary-button",
+                            r#type: "button",
+                            onclick: {
+                                let context = context.clone();
+                                move |_| context.state.write_unchecked().confirm_empty_trash = false
+                            },
+                            "Cancel"
+                        }
+                        button {
+                            class: "danger-button trash-confirm-erase",
+                            r#type: "button",
+                            onclick: {
+                                let context = context.clone();
+                                move |_| context.empty_trash()
+                            },
+                            Icon { name: "trash" }
+                            span { "Erase" }
+                        }
                     }
                 }
             }

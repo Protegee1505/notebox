@@ -18,6 +18,8 @@ pub enum Command {
     ToggleLayout,
     /// Show the rendered note.
     TogglePreview,
+    /// Show the open note's version timeline.
+    History,
     /// Follow the system theme.
     ThemeSystem,
     /// Light theme.
@@ -44,11 +46,12 @@ pub enum Command {
 
 impl Command {
     /// Every command, in palette order.
-    pub const ALL: [Command; 16] = [
+    pub const ALL: [Command; 17] = [
         Command::NewNote,
         Command::Save,
         Command::Find,
         Command::TogglePreview,
+        Command::History,
         Command::ToggleLayout,
         Command::ViewNotes,
         Command::ViewArchive,
@@ -71,6 +74,7 @@ impl Command {
             Command::Find => "Find in note",
             Command::ToggleLayout => "Switch cards and list",
             Command::TogglePreview => "Show rendered note",
+            Command::History => "Note history",
             Command::ThemeSystem => "Theme: follow system",
             Command::ThemeLight => "Theme: light",
             Command::ThemeDark => "Theme: dark",
@@ -93,6 +97,7 @@ impl Command {
             Command::Find => "Ctrl F",
             Command::ToggleLayout => "",
             Command::TogglePreview => "Ctrl E",
+            Command::History => "",
             Command::ThemeSystem => "",
             Command::ThemeLight => "",
             Command::ThemeDark => "",
@@ -115,6 +120,7 @@ impl Command {
             Command::Find => "search",
             Command::ToggleLayout => "grid",
             Command::TogglePreview => "eye",
+            Command::History => "clock",
             Command::ThemeSystem => "monitor",
             Command::ThemeLight => "sun",
             Command::ThemeDark => "moon",
@@ -137,6 +143,7 @@ impl Command {
             Command::Find => "search in note",
             Command::ToggleLayout => "grid cards rows",
             Command::TogglePreview => "render markdown read",
+            Command::History => "versions timeline diff restore past",
             Command::ThemeSystem => "appearance follow system",
             Command::ThemeLight => "appearance light",
             Command::ThemeDark => "appearance dark",
@@ -167,6 +174,7 @@ impl Command {
             }
             Command::ToggleLayout => context.toggle_layout(),
             Command::TogglePreview => context.toggle_preview(),
+            Command::History => context.open_history(),
             Command::ThemeSystem => context.set_theme(Theme::System),
             Command::ThemeLight => context.set_theme(Theme::Light),
             Command::ThemeDark => context.set_theme(Theme::Dark),
@@ -179,8 +187,12 @@ impl Command {
             Command::Export => context.export_notes(),
             Command::EmptyTrash => {
                 context.set_view(NoteView::Trash);
-                context.state.write_unchecked().confirm_empty_trash = true;
-                context.toast_info("Use Empty trash in Settings to confirm");
+                if context.state.peek().notes.is_empty() {
+                    context.toast_info("The trash is empty");
+                } else {
+                    context.state.write_unchecked().confirm_empty_trash = true;
+                    context.toast_info("Confirm emptying the trash");
+                }
             }
         }
     }

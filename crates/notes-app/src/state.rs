@@ -8,7 +8,7 @@
 use std::rc::Rc;
 
 use dioxus::prelude::*;
-use notes_core::Note;
+use notes_core::{Note, NoteVersion};
 use notes_proto::{NoteId, Notebook, NotebookId};
 use notes_store::{NewNote, NoteQuery, NoteStore, NoteSummary, NoteView, SearchQuery, TagCount};
 use web_time::Instant;
@@ -85,6 +85,25 @@ pub enum EditorMode {
     Write,
     /// Rendered, read-only view.
     Preview,
+}
+
+/// How the history panel shows a selected version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoryMode {
+    /// Unified diff from the old version to the current body.
+    Changes,
+    /// The note exactly as it was after that version.
+    Preview,
+}
+
+impl HistoryMode {
+    /// Label for the segmented control.
+    pub fn label(self) -> &'static str {
+        match self {
+            HistoryMode::Changes => "Changes",
+            HistoryMode::Preview => "Preview",
+        }
+    }
 }
 
 /// Tone of a status message.
@@ -207,6 +226,24 @@ pub struct AppState {
     pub mobile_list: bool,
     /// Colour menu under the editor header.
     pub color_open: bool,
+    /// History panel over the editor.
+    pub history_open: bool,
+    /// Versions of the open note, oldest first.
+    pub history_versions: Vec<NoteVersion>,
+    /// Version id shown in the history detail.
+    pub history_selected: Option<String>,
+    /// Version whose text matches the current body.
+    pub history_current: Option<String>,
+    /// Peer id this device writes history under.
+    pub history_local_peer: u64,
+    /// Diff or read-only preview.
+    pub history_mode: HistoryMode,
+    /// Body as it was after the selected version.
+    pub history_preview: String,
+    /// Unified diff from the selected version to the current body.
+    pub history_diff: String,
+    /// History load error, shown inside the panel.
+    pub history_error: Option<String>,
     /// Inline notebook-name field in the sidebar.
     pub new_notebook: Option<String>,
     /// "Empty trash" requires a second click.
@@ -265,6 +302,15 @@ impl AppState {
             sidebar_open: false,
             mobile_list: true,
             color_open: false,
+            history_open: false,
+            history_versions: Vec::new(),
+            history_selected: None,
+            history_current: None,
+            history_local_peer: 0,
+            history_mode: HistoryMode::Changes,
+            history_preview: String::new(),
+            history_diff: String::new(),
+            history_error: None,
             new_notebook: None,
             confirm_empty_trash: false,
             toast: None,
@@ -484,8 +530,12 @@ impl AppContext {
 
     /// Update the FTS query. An empty box goes back to the filtered list.
     pub fn set_search(&self, text: String) {
-        self.state.write_unchecked().search = text;
-        self.state.write_unchecked().mobile_list = true;
+        {
+            let mut state = self.state.write_unchecked();
+            state.search = text;
+            state.mobile_list = true;
+            hide_history(&mut state);
+        }
         self.reload();
     }
 
@@ -496,6 +546,8 @@ impl AppContext {
             state.view = view;
             state.mobile_list = true;
             state.screen = Screen::Notes;
+            state.confirm_empty_trash = false;
+            hide_history(&mut state);
         }
         self.reload();
     }
@@ -508,6 +560,7 @@ impl AppContext {
             state.tag = None;
             state.mobile_list = true;
             state.screen = Screen::Notes;
+            hide_history(&mut state);
         }
         self.reload();
     }
@@ -520,6 +573,7 @@ impl AppContext {
             state.notebook = None;
             state.mobile_list = true;
             state.screen = Screen::Notes;
+            hide_history(&mut state);
         }
         self.reload();
     }
@@ -552,6 +606,7 @@ impl AppContext {
                 state.last_undo = None;
                 state.mobile_list = false;
                 state.editor_mode = EditorMode::Write;
+                hide_history(&mut state);
             }
             Err(error) => self.toast_danger(format!("Could not open note: {error}")),
         }
@@ -639,6 +694,9 @@ impl AppContext {
                 .open_note(&id)
                 .map_err(|error| format!("Could not load the note: {error}"))?;
             if note.text() != draft {
+                // Timestamp the edit when the user made it, not when the
+                // snapshot happens to be written, so history labels match.
+                note.set_next_commit_timestamp(stamp);
                 note.replace_text(&draft)
                     .map_err(|error| format!("Could not apply the edit: {error}"))?;
             }
@@ -933,9 +991,24 @@ impl AppContext {
         };
         match store.restore_note(&id, now()) {
             Ok(true) => {
+                {
+                    let mut state = self.state.write_unchecked();
+                    // Restore lands in the normal notes view so the note is
+                    // visible and editable again, not just open behind the
+                    // trash list.
+                    state.view = NoteView::Active;
+                    state.tag = None;
+                    state.notebook = None;
+                    state.search.clear();
+                    state.search_hits = None;
+                    state.snippets.clear();
+                    state.confirm_empty_trash = false;
+                    state.mobile_list = false;
+                    hide_history(&mut state);
+                }
                 self.reload();
-                self.toast_success("Note restored");
                 self.select_note(id);
+                self.toast_success("Note restored");
             }
             Ok(false) => {}
             Err(error) => self.toast_danger(format!("Could not restore the note: {error}")),
@@ -947,20 +1020,29 @@ impl AppContext {
         let Some(store) = self.store() else {
             return;
         };
+        let selected = self.state.peek().selected;
         match store.empty_trash() {
             Ok(count) => {
-                self.state.write_unchecked().confirm_empty_trash = false;
+                let selected_was_erased = selected
+                    .map(|id| store.note_summary(&id).is_err())
+                    .unwrap_or(false);
+                {
+                    let mut state = self.state.write_unchecked();
+                    state.confirm_empty_trash = false;
+                    hide_history(&mut state);
+                }
                 self.reload();
-                self.toast_success(format!(
-                    "{count} note{} erased",
-                    if count == 1 { "" } else { "s" }
-                ));
-                if self.state.peek().selected.is_none() {
+                if selected_was_erased {
+                    self.clear_selection();
                     let next = self.state.peek().notes.first().map(|note| note.id);
                     if let Some(next) = next {
                         self.select_note(next);
                     }
                 }
+                self.toast_success(format!(
+                    "{count} note{} erased",
+                    if count == 1 { "" } else { "s" }
+                ));
             }
             Err(error) => self.toast_danger(format!("Could not empty the trash: {error}")),
         }
@@ -975,6 +1057,7 @@ impl AppContext {
         state.undo.clear();
         state.redo.clear();
         state.mobile_list = true;
+        hide_history(&mut state);
     }
 
     fn mutate_selected(&self, edit: impl FnOnce(&Note) -> Result<bool, notes_core::NoteError>) {
@@ -1064,6 +1147,7 @@ impl AppContext {
         state.palette_open = false;
         state.shortcuts_open = false;
         state.sidebar_open = false;
+        hide_history(&mut state);
         if screen == Screen::Notes {
             state.mobile_list = state.selected.is_none();
         }
@@ -1115,6 +1199,200 @@ impl AppContext {
         }
     }
 
+    /// Load the open note's versions and show the history panel.
+    pub fn open_history(&self) {
+        // Capture the text box first: the panel shows saved versions, not a
+        // draft that only exists in the DOM.
+        self.save_now();
+        let Some(note_id) = self.state.peek().selected else {
+            self.toast_info("Open a note to see its history");
+            return;
+        };
+        let Some(store) = self.store() else {
+            return;
+        };
+        let loaded = (|| -> Result<(Vec<NoteVersion>, u64, Option<String>), String> {
+            let note = store
+                .open_note(&note_id)
+                .map_err(|error| format!("Could not load the note: {error}"))?;
+            let versions = note
+                .history()
+                .map_err(|error| format!("Could not read the history: {error}"))?;
+            // Only the newest version can be "Current"; a merge of concurrent
+            // branches may match none, and then no row gets the pill.
+            let current_text = note.text();
+            let current = versions
+                .iter()
+                .max_by_key(|version| version.ended_at)
+                .filter(|version| {
+                    note.text_at(version)
+                        .map(|text| text == current_text)
+                        .unwrap_or(false)
+                })
+                .map(|version| version.id.clone());
+            Ok((versions, note.peer_id(), current))
+        })();
+
+        let (versions, local_peer, current) = match loaded {
+            Ok(loaded) => loaded,
+            Err(message) => {
+                self.toast_danger(message);
+                return;
+            }
+        };
+
+        // Start on the version before the current one when there is one, so
+        // the panel opens on a visible change instead of an empty diff.
+        let selected = versions
+            .iter()
+            .filter(|version| Some(&version.id) != current.as_ref())
+            .max_by_key(|version| version.ended_at)
+            .or_else(|| versions.iter().max_by_key(|version| version.ended_at))
+            .map(|version| version.id.clone());
+
+        {
+            let mut state = self.state.write_unchecked();
+            state.history_open = true;
+            state.history_versions = versions;
+            state.history_selected = selected.clone();
+            state.history_current = current;
+            state.history_local_peer = local_peer;
+            state.history_mode = HistoryMode::Changes;
+            state.history_preview.clear();
+            state.history_diff.clear();
+            state.history_error = None;
+            state.find_open = false;
+            state.color_open = false;
+        }
+        if let Some(version_id) = selected {
+            self.load_history_version(&version_id);
+        }
+    }
+
+    /// Close the history panel.
+    pub fn close_history(&self) {
+        hide_history(&mut self.state.write_unchecked());
+    }
+
+    /// Switch the detail between the diff and the read-only preview.
+    pub fn set_history_mode(&self, mode: HistoryMode) {
+        self.state.write_unchecked().history_mode = mode;
+    }
+
+    /// Show one version in the detail pane.
+    pub fn select_history_version(&self, version_id: &str) {
+        {
+            let mut state = self.state.write_unchecked();
+            if state.history_selected.as_deref() == Some(version_id) {
+                // A second click is harmless; the detail body scrolls rather
+                // than reloading.
+                if !state.history_preview.is_empty() || !state.history_diff.is_empty() {
+                    return;
+                }
+            }
+            state.history_selected = Some(version_id.to_string());
+            state.history_error = None;
+        }
+        self.load_history_version(version_id);
+    }
+
+    /// Compute the preview and diff for a version already in the panel.
+    fn load_history_version(&self, version_id: &str) {
+        let version = {
+            let state = self.state.read();
+            state
+                .history_versions
+                .iter()
+                .find(|version| version.id == version_id)
+                .cloned()
+        };
+        let Some(version) = version else {
+            return;
+        };
+        let Some(note_id) = self.state.peek().selected else {
+            return;
+        };
+        let Some(store) = self.store() else {
+            return;
+        };
+        let loaded = (|| -> Result<(String, String), String> {
+            let note = store
+                .open_note(&note_id)
+                .map_err(|error| format!("Could not load the note: {error}"))?;
+            let preview = note
+                .text_at(&version)
+                .map_err(|error| format!("Could not read that version: {error}"))?;
+            let diff = note
+                .diff_from_current(&version)
+                .map_err(|error| format!("Could not compare that version: {error}"))?;
+            Ok((preview, diff))
+        })();
+
+        let mut state = self.state.write_unchecked();
+        match loaded {
+            Ok((preview, diff)) => {
+                state.history_preview = preview;
+                state.history_diff = diff;
+                state.history_error = None;
+            }
+            Err(message) => {
+                state.history_preview.clear();
+                state.history_diff.clear();
+                state.history_error = Some(message);
+            }
+        }
+    }
+
+    /// Restore a version's body as a new edit. History keeps both versions.
+    pub fn restore_history_version(&self, version_id: &str) {
+        self.save_now();
+        let (note_id, version) = {
+            let state = self.state.read();
+            let Some(note_id) = state.selected else {
+                return;
+            };
+            let Some(version) = state
+                .history_versions
+                .iter()
+                .find(|version| version.id == version_id)
+                .cloned()
+            else {
+                return;
+            };
+            (note_id, version)
+        };
+        let Some(store) = self.store() else {
+            return;
+        };
+        let stamp = now();
+        let result = (|| -> Result<bool, String> {
+            let note = store
+                .open_note(&note_id)
+                .map_err(|error| format!("Could not load the note: {error}"))?;
+            note.set_next_commit_timestamp(stamp);
+            let changed = note
+                .restore_version(&version)
+                .map_err(|error| format!("Could not restore that version: {error}"))?;
+            if changed {
+                store
+                    .save_note(&note, stamp)
+                    .map_err(|error| format!("Could not save the restored note: {error}"))?;
+            }
+            Ok(changed)
+        })();
+
+        match result {
+            Ok(true) => {
+                self.close_history();
+                self.reload();
+                self.select_note(note_id);
+                self.toast_success("Version restored. The old edit stays in history.");
+            }
+            Ok(false) => self.toast_info("That version matches the current note"),
+            Err(message) => self.toast_danger(message),
+        }
+    }
+
     /// Open Settings.
     pub fn open_settings(&self) {
         self.go(Screen::Settings);
@@ -1133,6 +1411,8 @@ impl AppContext {
             state.sidebar_open = false;
         } else if state.color_open {
             state.color_open = false;
+        } else if state.history_open {
+            hide_history(&mut state);
         } else if state.screen == Screen::Settings || state.screen == Screen::Login {
             state.screen = Screen::Notes;
             state.mobile_list = state.selected.is_none();
@@ -1285,6 +1565,21 @@ impl AppContext {
             at: Instant::now(),
         });
     }
+}
+
+/// Clear the history panel when the note or the list changes underneath it.
+///
+/// Separate from [`AppContext::close_history`] so callers already holding the
+/// state write lock can use it without a second borrow.
+fn hide_history(state: &mut AppState) {
+    state.history_open = false;
+    state.history_versions.clear();
+    state.history_selected = None;
+    state.history_current = None;
+    state.history_local_peer = 0;
+    state.history_preview.clear();
+    state.history_diff.clear();
+    state.history_error = None;
 }
 
 /// Replace a summary in a list and keep the list order the store uses.

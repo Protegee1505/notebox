@@ -10,6 +10,7 @@ use crate::state::{
     COLORS,
 };
 use crate::ui::icons::Icon;
+use crate::ui::HistoryPanel;
 
 #[component]
 pub fn EditorPane() -> Element {
@@ -25,10 +26,15 @@ pub fn EditorPane() -> Element {
     let find_query = state.find_query.clone();
     let find_index = state.find_index;
     let color_open = state.color_open;
+    let history_open = state.history_open;
     let notebooks = state.notebooks.clone();
     let summary = selected.and_then(|id| state.notes.iter().find(|note| note.id == id).cloned());
     let pinned = summary.as_ref().map(|note| note.pinned).unwrap_or(false);
     let archived = summary.as_ref().map(|note| note.archived).unwrap_or(false);
+    let trashed = summary
+        .as_ref()
+        .map(|note| note.trashed_at.is_some())
+        .unwrap_or(false);
     let tags = summary
         .as_ref()
         .map(|note| note.tags.clone())
@@ -44,7 +50,7 @@ pub fn EditorPane() -> Element {
         .unwrap_or_default();
     drop(state);
 
-    let Some(_id) = selected else {
+    let Some(id) = selected else {
         return rsx! {
             section { class: "editor-pane is-empty", aria_label: "Editor",
                 div { class: "editor-empty",
@@ -162,6 +168,24 @@ pub fn EditorPane() -> Element {
                         },
                         Icon { name: "archive" }
                     }
+                    button {
+                        class: if history_open { "icon-button is-active" } else { "icon-button" },
+                        r#type: "button",
+                        aria_label: "Note history",
+                        aria_pressed: if history_open { "true" } else { "false" },
+                        title: "History",
+                        onclick: {
+                            let context = context.clone();
+                            move |_| {
+                                if context.state.peek().history_open {
+                                    context.close_history();
+                                } else {
+                                    context.open_history();
+                                }
+                            }
+                        },
+                        Icon { name: "clock" }
+                    }
                     div { class: "menu-anchor",
                         button {
                             class: if color_open { "icon-button is-active" } else { "icon-button" },
@@ -214,16 +238,31 @@ pub fn EditorPane() -> Element {
                             }
                         }
                     }
-                    button {
-                        class: "icon-button danger-hover",
-                        r#type: "button",
-                        aria_label: "Move note to trash",
-                        title: "Move to trash",
-                        onclick: {
-                            let context = context.clone();
-                            move |_| context.trash_selected()
-                        },
-                        Icon { name: "trash" }
+                    if trashed {
+                        button {
+                            class: "secondary-button editor-restore",
+                            r#type: "button",
+                            aria_label: "Restore note",
+                            title: "Restore note",
+                            onclick: {
+                                let context = context.clone();
+                                move |_| context.restore_note(id)
+                            },
+                            Icon { name: "undo" }
+                            span { "Restore" }
+                        }
+                    } else {
+                        button {
+                            class: "icon-button danger-hover",
+                            r#type: "button",
+                            aria_label: "Move note to trash",
+                            title: "Move to trash",
+                            onclick: {
+                                let context = context.clone();
+                                move |_| context.trash_selected()
+                            },
+                            Icon { name: "trash" }
+                        }
                     }
                 }
             }
@@ -453,6 +492,10 @@ pub fn EditorPane() -> Element {
                         }
                     }
                 }
+            }
+
+            if history_open {
+                HistoryPanel {}
             }
         }
     }
