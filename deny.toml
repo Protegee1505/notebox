@@ -1,9 +1,9 @@
 [advisories]
 version = 2
 # Loro 1.16.2 still depends on the archived `im`, `sized-chunks`, `bitmaps`
-# and `atomic-polyfill` crates. There is no safe upgrade yet; track Loro
-# releases and remove these ignores when it moves to `imbl`. None of them is
-# exposed to untrusted input directly, and Loro's document layer wraps them.
+# and `atomic-polyfill` crates. These are unmaintained-advisory notices, not
+# known vulnerabilities, and there is no safe upgrade yet. Track Loro releases
+# and remove these ignores when it moves to `imbl`.
 ignore = [
     "RUSTSEC-2023-0089",
     "RUSTSEC-2026-0247",
