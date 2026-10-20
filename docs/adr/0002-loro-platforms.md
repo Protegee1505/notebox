@@ -54,12 +54,16 @@ Size probe (`scripts/wasm-size.sh`, release, brotli quality 11):
 
 The CRDT adds about **0.68 MiB brotli**, under the 1.5 MB budget. The complete
 web app measured separately is 0.37 MiB brotli because wasm-opt and dead-code
-elimination remove most of what the probe links.
+elimination remove most of what the probe links. CI measured a 712,105-byte
+delta; the few hundred bytes of difference from the local run are toolchain
+noise.
 
 Android: `cargo check -p notes-proto -p notes-core -p notes-store -p notes-sync
---target aarch64-linux-android` passes with NDK r27c. The CI `android` job
-repeats this. Runtime create/edit/export/import on an Android device or emulator
-is **not tested**: this machine has no `/dev/kvm` and no Android SDK.
+--target aarch64-linux-android` passes with NDK r27c, and the `android` job in
+CI run
+[39371140289](https://github.com/Protegee1505/notebox/actions/runs/39371140289)
+is green. Runtime create/edit/export/import on an Android device or emulator is
+**not tested**: this machine has no `/dev/kvm` and no Android SDK.
 
 Dependency note: Loro 1.16.2 pulls four unmaintained transitive crates
 (`im`, `sized-chunks`, `bitmaps`, `atomic-polyfill`). They have no safe upgrade;

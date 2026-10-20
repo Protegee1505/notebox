@@ -32,30 +32,37 @@ Web release build:
 dx build -p notes-app --platform web --release --features web
 ```
 
-- Bundle: 3 files, 2,002,199 bytes raw, **390,825 bytes brotli** (0.37 MiB).
-- WASM: 1,945,037 bytes raw, 379,118 bytes brotli. Budget is 3 MiB.
+- CI bundle: 3 files, 2,002,086 bytes raw, **390,856 bytes brotli** (0.37 MiB).
+- WASM: about 1.95 MB raw, 379 KB brotli. Budget is 3 MiB.
 - Boot at 360, 900 and 1400 px in Chromium: HTTP 200, title `Notebox`, heading
   `Notebox`, zero page or console errors. Screenshots:
   `docs/screenshots/s1-web-360.png`, `-900.png`, `-1400.png`.
 - `scripts/web-budget.mjs` checks the brotli budget in CI.
 
-CI jobs added for the remaining platforms:
+CI run
+[39371140289](https://github.com/Protegee1505/notebox/actions/runs/39371140289)
+is green for all six jobs:
 
-- `desktop`: builds and runs the Linux app for 20 seconds under Xvfb.
-- `windows`: builds `notebox.exe` on `windows-latest`.
-- `android`: compiles the headless crates with NDK r27c; the full app build and
-  emulator boot still need the Android SDK and Gradle.
+- `web`: release build, brotli budget, uploaded artifact.
+- `desktop`: built the Linux app and ran it for 20 seconds under Xvfb; the
+  process stayed up. Desktop-portal warnings are non-fatal in the headless
+  session.
+- `windows`: built `notebox.exe` on `windows-latest` and uploaded it.
+- `android`: compiled the headless crates with NDK r27c. The full Android app
+  build and an emulator boot still need the Android SDK and Gradle.
+- `gates`, `wasm`: the normal gates and the Loro wasm test.
 
 Bootstrap CI already passed `cargo clippy -p notes-app --features desktop` and
 the wasm compile of `notes-app`.
 
 Not yet measured: desktop cold start, Windows cold start, Android cold start.
-No local display or device exists for those numbers.
+No local display or device exists for those numbers. The Android app itself
+has not been built, only the headless crates it uses.
 
 ## Consequences
 
-- The S1 pass condition is not met yet: web passes, Linux/Windows/Android must
-  pass their new CI jobs and an Android boot still needs a device or emulator.
+- S1 is met for web, Linux desktop and a Windows build. It is not met for the
+  Android app or for any cold-start number; those remain open.
 - `Dioxus.toml` needs a `[web.resource.dev]` table in 0.7.10; without it `dx`
   rejects the file with `missing field dev`.
 - Every platform build must name its renderer feature explicitly. `README.md`
