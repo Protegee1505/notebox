@@ -8,7 +8,8 @@ The full specification and phase plan is [PLAN.md](PLAN.md). Agent rules are in
 
 ## Status
 
-Bootstrap only. No product features are implemented yet. See
+Phase 0 spikes. The note document (Loro 1.16.2), the text-box binding and the
+web/desktop boot checks are implemented. No full app features yet. See
 [docs/STATUS.md](docs/STATUS.md) and [docs/adr/](docs/adr/) for progress and
 decision records.
 
@@ -33,7 +34,10 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo nextest run --workspace
 cargo deny check
-dx serve --web
+./scripts/budget-check
+./scripts/wasm-size.sh
+dx build -p notes-app --platform web --release --features web
+node scripts/web-budget.mjs target/dx/notebox/release/web/public
 ```
 
 The UI has no default renderer. Select one explicitly:
@@ -41,6 +45,14 @@ The UI has no default renderer. Select one explicitly:
 ```bash
 cargo run -p notes-app --features desktop
 cargo check -p notes-app --no-default-features --features web --target wasm32-unknown-unknown
+```
+
+Run the Loro wasm test in Node after installing the matching
+`wasm-bindgen-test-runner`:
+
+```bash
+CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+  cargo test -p notes-core --target wasm32-unknown-unknown --test wasm_smoke
 ```
 
 ## Free-tier rule
