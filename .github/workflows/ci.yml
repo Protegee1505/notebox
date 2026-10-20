@@ -146,6 +146,19 @@ jobs:
       - name: Brotli first-load budget
         run: node scripts/web-budget.mjs target/dx/notebox/release/web/public
 
+      - name: Install Playwright Chromium
+        run: |
+          mkdir -p /tmp/notebox-web
+          cd /tmp/notebox-web
+          npm init -y >/dev/null
+          npm install playwright@1.64.1
+          npx playwright install --with-deps chromium
+
+      - name: Local notes, history and images survive a browser restart
+        env:
+          PLAYWRIGHT_MODULES: /tmp/notebox-web/node_modules
+        run: node scripts/web-persist.mjs
+
       - uses: actions/upload-artifact@v4
         with:
           name: notebox-web
