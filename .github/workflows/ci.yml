@@ -179,6 +179,9 @@ jobs:
       - name: End-to-end against a real local Worker and D1
         run: node scripts/server-e2e.mjs
 
+      - name: Two headless sync clients converge against the Worker
+        run: ./scripts/sync-e2e.sh
+
   desktop:
     runs-on: ubuntu-latest
     steps:
