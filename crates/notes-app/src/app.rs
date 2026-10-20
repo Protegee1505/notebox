@@ -31,6 +31,16 @@ pub fn App() -> Element {
         }
     });
 
+    // Storage opens after the first paint so the browser can show a boot
+    // screen instead of a blank page while OPFS is read.
+    let start_context = context.clone();
+    use_future(move || {
+        let context = start_context.clone();
+        async move {
+            context.start().await;
+        }
+    });
+
     let state = context.state.read();
     let screen = state.screen;
     let theme = state.theme;
@@ -38,6 +48,8 @@ pub fn App() -> Element {
     let palette_open = state.palette_open;
     let shortcuts_open = state.shortcuts_open;
     let storage_error = state.storage_error.clone();
+    let starting = state.starting;
+    let storage_blocked = state.storage_blocked.clone();
     drop(state);
 
     let mut workspace_class = String::from("workspace");
@@ -69,7 +81,32 @@ pub fn App() -> Element {
                 move |event| handle_shortcut(&context, &event)
             },
 
-            if screen == Screen::Login {
+            if starting {
+                main { class: "fatal-screen",
+                    div { class: "fatal-card",
+                        h1 { "Notebox" }
+                        p { "Opening your notes..." }
+                    }
+                }
+            } else if let Some(message) = storage_blocked {
+                main { class: "fatal-screen",
+                    div { class: "fatal-card",
+                        h1 { "Notebox is already open" }
+                        p { "{message}" }
+                        p { class: "card-note",
+                            "Only one tab can write this browser's notes. Nothing was deleted."
+                        }
+                        button {
+                            class: "secondary-button",
+                            r#type: "button",
+                            onclick: move |_| {
+                                let _ = document::eval("location.reload();");
+                            },
+                            "Reload"
+                        }
+                    }
+                }
+            } else if screen == Screen::Login {
                 LoginScreen {}
             } else {
                 TopBar {}
@@ -79,7 +116,7 @@ pub fn App() -> Element {
                             h1 { "The local database did not open" }
                             p { "{error}" }
                             p { class: "card-note",
-                                "Nothing was deleted. Fix the data directory or set NOTEBOX_DATA_DIR to a writable folder, then restart Notebox."
+                                "Nothing was deleted. The saved data was left untouched. Fix the problem, then restart Notebox."
                             }
                         }
                     }

@@ -6,13 +6,15 @@
 //! which transport a target uses.
 //!
 //! Layout follows PLAN.md: one pane under 700 px, two panes from 700 px and
-//! three from 1100 px. The browser build still keeps its database in memory;
-//! sync restores it from the Worker after a reload, and the OPFS worker is the
-//! next persistence step.
+//! three from 1100 px. The browser build keeps SQLite in memory and saves a
+//! database image to OPFS after changes, so local-only notes, history and
+//! attachment bytes survive a reload.
 
 #![forbid(unsafe_code)]
 
 mod app;
+#[cfg(target_arch = "wasm32")]
+mod browser_storage;
 mod commands;
 mod images;
 mod markdown_ops;

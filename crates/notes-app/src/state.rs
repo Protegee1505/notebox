@@ -5,7 +5,7 @@
 //! keeps the view free of storage details and gives the browser worker in P7
 //! one place to plug into.
 
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -18,12 +18,16 @@ use notes_store::{
     Attachment, NewNote, NoteQuery, NoteStore, NoteSummary, NoteView, SearchQuery, TagCount,
 };
 use notes_sync::BoxedTransport;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::closure::Closure;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::JsCast;
 use web_time::Instant;
 
 use crate::images;
 use crate::markdown_ops::{self, Mark};
 use crate::media;
-use crate::storage::{self, StorageInfo};
+use crate::storage::{self, Persistence, StorageInfo};
 use crate::sync::{self, Due, OpenNotePlan, SyncFailure, SyncReport, SyncStatus, SyncUi};
 use crate::time::{now, relative_time};
 
@@ -276,6 +280,10 @@ pub struct AppState {
     pub storage: StorageInfo,
     /// Error opening storage, shown instead of the note list.
     pub storage_error: Option<String>,
+    /// Waiting for the browser's saved database.
+    pub starting: bool,
+    /// Another tab owns browser storage, shown instead of the note list.
+    pub storage_blocked: Option<String>,
     /// Local profile.
     pub profile: Profile,
     /// Login form.
@@ -349,6 +357,8 @@ impl AppState {
             last_undo: None,
             storage,
             storage_error,
+            starting: true,
+            storage_blocked: None,
             profile: Profile::default(),
             login: LoginForm {
                 server,
@@ -365,41 +375,132 @@ impl AppState {
 /// Shared handle passed through the component tree.
 #[derive(Clone)]
 pub struct AppContext {
-    store: Option<Rc<dyn NoteStore>>,
+    store: Rc<OnceCell<StoreHandle>>,
     /// Reactive app state.
     pub state: Signal<AppState>,
     runtime: Rc<RefCell<sync::Runtime>>,
 }
 
+struct StoreHandle {
+    store: Rc<dyn NoteStore>,
+    persistence: Option<Rc<Persistence>>,
+}
+
 impl AppContext {
-    /// Open storage, load the first screen and restore a saved session.
+    /// Build the context immediately; storage opens in [`AppContext::start`].
     pub fn new() -> Self {
-        let (store, info, error) = match storage::open() {
-            Ok(opened) => (Some(Rc::from(opened.store)), opened.info, None),
-            Err(error) => (
-                None,
-                StorageInfo {
-                    label: "Unavailable".to_string(),
-                    detail: error.clone(),
-                    temporary: true,
-                },
-                Some(error),
-            ),
-        };
-        let state = Signal::new(AppState::new(info, error));
-        let context = Self {
-            store,
+        let state = Signal::new(AppState::new(
+            StorageInfo {
+                label: "Opening".to_string(),
+                detail: "Looking for your local notes.".to_string(),
+                temporary: true,
+            },
+            None,
+        ));
+        Self {
+            store: Rc::new(OnceCell::new()),
             state,
             runtime: Rc::new(RefCell::new(sync::Runtime::default())),
+        }
+    }
+
+    /// Open storage, load the first screen and restore a saved session.
+    pub async fn start(&self) {
+        match storage::open().await {
+            Ok(opened) => {
+                let sqlite = opened.store;
+                let store: Rc<dyn NoteStore> = sqlite.clone();
+                let handle = StoreHandle {
+                    store,
+                    persistence: opened.persistence,
+                };
+                if self.store.set(handle).is_err() {
+                    return;
+                }
+                {
+                    let mut state = self.state.write_unchecked();
+                    state.storage = opened.info;
+                    state.starting = false;
+                }
+                self.bootstrap();
+                self.restore_sync();
+                #[cfg(target_arch = "wasm32")]
+                self.install_pagehide();
+            }
+            Err(failure) => {
+                let blocked = matches!(failure, storage::OpenFailure::Locked);
+                let message = failure.message();
+                let mut state = self.state.write_unchecked();
+                state.starting = false;
+                if blocked {
+                    state.storage_blocked = Some(message);
+                } else {
+                    state.storage_error = Some(message);
+                }
+            }
+        }
+    }
+
+    /// Save the draft and the latest image when the tab goes away.
+    ///
+    /// The 700 ms tick normally covers this. A page hidden or closed inside
+    /// that window would otherwise lose the newest edit; `flush_now` also
+    /// sends past an image that is still being written.
+    #[cfg(target_arch = "wasm32")]
+    fn install_pagehide(&self) {
+        let Some(window) = web_sys::window() else {
+            return;
         };
-        context.bootstrap();
-        context.restore_sync();
-        context
+        let context = self.clone();
+        let closure = Closure::<dyn FnMut(web_sys::Event)>::new(move |_event: web_sys::Event| {
+            context.save_now();
+            if let Some(handle) = context.store.get() {
+                if let Some(persistence) = &handle.persistence {
+                    let _ = persistence.flush_now();
+                }
+            }
+        });
+        let Ok(function) = closure.into_js_value().dyn_into::<js_sys::Function>() else {
+            return;
+        };
+        let _ = window.add_event_listener_with_callback("pagehide", &function);
     }
 
     /// The store, when it opened.
     pub fn store(&self) -> Option<&dyn NoteStore> {
-        self.store.as_deref()
+        self.store.get().map(|handle| handle.store.as_ref())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn store_rc(&self) -> Option<Rc<dyn NoteStore>> {
+        self.store.get().map(|handle| handle.store.clone())
+    }
+
+    /// Save the browser image if SQLite changed since the last one.
+    fn persist_if_needed(&self) {
+        let Some(handle) = self.store.get() else {
+            return;
+        };
+        let Some(persistence) = handle.persistence.as_ref() else {
+            return;
+        };
+        let Err(error) = persistence.flush_if_needed() else {
+            return;
+        };
+        {
+            let mut state = self.state.write_unchecked();
+            if state.storage.temporary {
+                return;
+            }
+            state.storage = StorageInfo {
+                label: "Browser memory".to_string(),
+                detail: format!(
+                    "Could not save to browser storage ({error}). Notes stay in this tab only; export a zip to keep them."
+                ),
+                temporary: true,
+            };
+        }
+        self.toast_danger("Could not save to browser storage. Export a zip to keep your notes.");
     }
 
     fn bootstrap(&self) {
@@ -948,6 +1049,7 @@ impl AppContext {
             self.save_now();
         }
         self.poll_background();
+        self.persist_if_needed();
         self.maybe_sync();
     }
 
@@ -2049,7 +2151,7 @@ impl AppContext {
 
         #[cfg(target_arch = "wasm32")]
         {
-            let Some(store) = self.store.clone() else {
+            let Some(store) = self.store_rc() else {
                 return;
             };
             let context = self.clone();
