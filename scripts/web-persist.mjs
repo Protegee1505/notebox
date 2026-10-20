@@ -10,6 +10,7 @@
 //   PLAYWRIGHT_MODULES=/path/to/node_modules \
 //   node scripts/web-persist.mjs [dist-dir]
 
+import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -18,11 +19,32 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const targetDir = process.env.CARGO_TARGET_DIR
-  ? path.resolve(process.env.CARGO_TARGET_DIR)
-  : path.join(root, "target");
+
+function targetDirectory() {
+  if (process.env.CARGO_TARGET_DIR) {
+    return path.resolve(process.env.CARGO_TARGET_DIR);
+  }
+  try {
+    const metadata = JSON.parse(
+      execFileSync(
+        "cargo",
+        ["metadata", "--no-deps", "--locked", "--format-version", "1"],
+        { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+      ),
+    );
+    if (typeof metadata.target_directory === "string") {
+      return metadata.target_directory;
+    }
+  } catch {
+    // Fall through to the conventional path when cargo is unavailable or the
+    // lockfile is out of date.
+  }
+  return path.join(root, "target");
+}
+
 const dist =
-  process.argv[2] ?? path.join(targetDir, "dx/notebox/release/web/public");
+  process.argv[2] ??
+  path.join(targetDirectory(), "dx/notebox/release/web/public");
 const screenshot = path.join(tmpdir(), "notebox-web-persist-failure.png");
 const marker = `Persist-${Date.now()}`;
 const title = `${marker} note`;
