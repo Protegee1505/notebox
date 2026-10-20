@@ -42,6 +42,9 @@ mod util;
 #[cfg(not(target_arch = "wasm32"))]
 mod http;
 
+#[cfg(target_arch = "wasm32")]
+mod web;
+
 pub use blob::{
     chunk_count, sha256_hex, AttachmentData, AttachmentRef, CHUNK_BYTES, MAX_ATTACHMENT_BYTES,
 };
@@ -61,8 +64,17 @@ pub use retry::{
 pub use session::{MemoryTokenStore, NullTokenStore, SyncSession, TokenStore};
 pub use transport::SyncTransport;
 
+/// A transport chosen at runtime.
+///
+/// The app has one type on every target: native builds put an
+/// [`HttpTransport`] in the box, web builds a [`WebTransport`].
+pub type BoxedTransport = Box<dyn SyncTransport>;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub use http::{HttpTransport, MAX_RESPONSE_BYTES, REQUEST_TIMEOUT_SECS};
+
+#[cfg(target_arch = "wasm32")]
+pub use web::{WebTransport, REQUEST_TIMEOUT_SECS};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use retry::ThreadSleeper;

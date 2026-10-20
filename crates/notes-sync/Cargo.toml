@@ -19,9 +19,25 @@ thiserror.workspace = true
 uuid.workspace = true
 
 # The HTTP client is only needed where there is no browser fetch. The web
-# build gets its transport from the Worker's own origin in P7.
+# build talks to the Worker from its own origin with `fetch`.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { version = "0.3", features = [
+    "AbortController",
+    "AbortSignal",
+    "Headers",
+    "Request",
+    "RequestCredentials",
+    "RequestInit",
+    "RequestMode",
+    "Response",
+    "Window",
+] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
 
 [dev-dependencies]
 notes-server.workspace = true

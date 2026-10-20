@@ -4197,6 +4197,7 @@ version = "0.1.0"
 dependencies = [
  "argon2",
  "async-trait",
+ "js-sys",
  "notes-core",
  "notes-proto",
  "notes-server",
@@ -4209,6 +4210,9 @@ dependencies = [
  "thiserror 2.0.21",
  "ureq",
  "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

@@ -47,12 +47,7 @@ impl HttpTransport {
 
     /// Same, with an explicit per-request timeout.
     pub fn with_timeout(base_url: &str, timeout: Duration) -> Result<Self, SyncError> {
-        let base = base_url.trim().trim_end_matches('/').to_string();
-        if !(base.starts_with("http://") || base.starts_with("https://")) {
-            return Err(SyncError::Invalid(format!(
-                "server URL must start with http:// or https://: {base}"
-            )));
-        }
+        let base = crate::util::base_url(base_url)?;
         let agent = Agent::config_builder()
             .timeout_global(Some(timeout))
             // Error bodies carry the code the engine needs, so a 4xx or 5xx

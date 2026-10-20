@@ -29,6 +29,16 @@ pub trait SyncTransport {
     /// Exchange a login key for a new device token.
     async fn login(&self, request: &AuthRequest) -> Result<AuthResponse, SyncError>;
 
+    /// Clear a browser cookie session.
+    ///
+    /// Native clients keep their token until the caller forgets it, so the
+    /// default is a no-op. The web transport posts to the Worker, which
+    /// expires the `HttpOnly` cookie; without that, a reload would sign the
+    /// browser straight back in.
+    async fn logout(&self) -> Result<(), SyncError> {
+        Ok(())
+    }
+
     /// Push updates and pull everything after `request.cursor`.
     async fn sync(&self, token: &str, request: &SyncRequest) -> Result<SyncResponse, SyncError>;
 
@@ -43,4 +53,47 @@ pub trait SyncTransport {
 
     /// Revoke one device's token.
     async fn revoke_device(&self, token: &str, device_id: &str) -> Result<(), SyncError>;
+}
+
+/// A boxed transport forwards to whatever it holds.
+///
+/// This is what lets the app name one client type on native and web while the
+/// concrete transport still comes from the platform.
+#[async_trait(?Send)]
+impl SyncTransport for Box<dyn SyncTransport> {
+    async fn setup(
+        &self,
+        setup_token: &str,
+        request: &AuthRequest,
+    ) -> Result<AuthResponse, SyncError> {
+        (**self).setup(setup_token, request).await
+    }
+
+    async fn login(&self, request: &AuthRequest) -> Result<AuthResponse, SyncError> {
+        (**self).login(request).await
+    }
+
+    async fn logout(&self) -> Result<(), SyncError> {
+        (**self).logout().await
+    }
+
+    async fn sync(&self, token: &str, request: &SyncRequest) -> Result<SyncResponse, SyncError> {
+        (**self).sync(token, request).await
+    }
+
+    async fn put_blob(&self, token: &str, chunk: &BlobChunk) -> Result<BlobStored, SyncError> {
+        (**self).put_blob(token, chunk).await
+    }
+
+    async fn get_blob(&self, token: &str, hash: &str, index: u32) -> Result<BlobChunk, SyncError> {
+        (**self).get_blob(token, hash, index).await
+    }
+
+    async fn devices(&self, token: &str) -> Result<DeviceList, SyncError> {
+        (**self).devices(token).await
+    }
+
+    async fn revoke_device(&self, token: &str, device_id: &str) -> Result<(), SyncError> {
+        (**self).revoke_device(token, device_id).await
+    }
 }
