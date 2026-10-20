@@ -8,13 +8,15 @@ The full specification and phase plan is [PLAN.md](PLAN.md). Agent rules are in
 
 ## Status
 
-Phase 2: the sync server. The note document, store, search, history, export
-and the browser SQLite spike from Phase 1 are implemented. The server now has
-setup, login with backoff, sync push/pull, attachment chunks, device
-revocation, D1 migrations and an end-to-end test against a real local Worker.
-A remote deploy and the S3 CPU measurement wait for `wrangler login`. The sync
-engine and app UI are next. See [docs/STATUS.md](docs/STATUS.md),
-[docs/API.md](docs/API.md) and [docs/adr/](docs/adr/).
+Phase 3: the sync engine. The note document, store, search, history, export,
+the browser SQLite spike and the Worker sync server are implemented, and
+`notes-sync` now logs in with an Argon2id-derived key, keeps the device token,
+pushes and pulls with a durable cursor and offline queue, retries with backoff,
+syncs the notebook list as a CRDT document, and transfers verified attachment
+chunks. Two headless clients converge against a real local Worker and D1.
+A remote deploy and the S3 CPU measurement wait for `wrangler login`. The app
+UI is next. See [docs/STATUS.md](docs/STATUS.md), [docs/API.md](docs/API.md)
+and [docs/adr/](docs/adr/).
 
 ## Layout
 
@@ -104,8 +106,16 @@ attachment chunks and device revocation, against a throwaway local Worker:
 node scripts/server-e2e.mjs
 ```
 
-It needs Node 20+, `npx`, and `worker-build` on `PATH` (`~/.cargo/bin` if you
-installed Rust with rustup). The script downloads no account resources.
+Then run the client gate: the same kind of throwaway Worker, driven by two
+headless `notes-sync` devices that converge after offline edits, trash and
+restore a note, rename a notebook, transfer an attachment and revoke a device.
+
+```bash
+./scripts/sync-e2e.sh
+```
+
+Both scripts need Node 20+, `npx`, and `worker-build` on `PATH` (`~/.cargo/bin`
+if you installed Rust with rustup). They download no account resources.
 
 ## Deploying the free Worker
 
