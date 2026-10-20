@@ -1,10 +1,44 @@
 # Status
 
 Updated: 2026-10-20
-Phase: 3 (sync); P1 and P2 complete, P3 code complete and green in CI, deploy and S3 next
+Phase: 4 (app shell); P1–P3 complete, P4 code complete and green in local gates
 
 ## Shipped
 
+- `notes-app`: the P4 shell — design tokens with light, dark and system
+  themes; a three-pane desktop layout that becomes two panes at 1100 px and
+  one pane at 700 px; a top bar; a sidebar with views, notebooks, tags, theme
+  and storage state; a Keep-style card grid/list; and a full-width settings
+  screen. Screenshots at 360, 900 and 1400 px in both themes are in
+  `docs/screenshots/` (`p4-web-*`, `p4-settings-*`, `p4-login-*`).
+- `notes-app`: Markdown editor with bold, italic, strike, heading, checklist,
+  bullet/numbered lists, quote, inline code, code block, link, find in note,
+  rendered preview, autosave, undo/redo, word and character counts, tags,
+  pin, archive, trash, restore, note colours and toast messages.
+- `notes-app`: command palette (Ctrl K), keyboard shortcut sheet, global
+  search, workspace shortcuts (Ctrl N/S/F/E/Z/1/2/3/,) and a visible Commands
+  entry so touch devices can reach the palette.
+- `notes-app`: local login screen (form complete; sync is wired in P7) and
+  settings for appearance, layout, account, notebooks, storage, zip export,
+  shortcuts and emptying the trash.
+- `notes-app`: all UI actions go through `AppContext` and the `NoteStore`
+  trait. Native uses the SQLite file in the XDG data directory; the web build
+  uses `SqliteStore::open_in_memory()` and labels the store "Browser memory"
+  until the OPFS worker lands.
+- P4 fixes found in the browser: `futures-timer` now enables its
+  `wasm-bindgen` backend instead of panicking on `std::time`; `web-time`
+  supplies the clock; the Dioxus `logger` feature is off because its
+  `tracing-subscriber` path also panics on wasm; palette and find inputs take
+  focus explicitly; find no longer steals focus on the first keystroke; and
+  the mobile top bar, wrapping toolbar and status row were repaired.
+- P4 browser verification: a Playwright flow passes 15 checks (seed, create,
+  autosave, preview, Markdown, palette filtering, search, find) with no
+  console errors, and every screenshot viewport has no horizontal overflow.
+- P4 desktop verification: `cargo build -p notes-app --features desktop` and a
+  20-second Xvfb boot smoke (`exit 124`) pass locally; the local runner now has
+  `libxdo-dev`, `xvfb` and `dbus-x11` installed.
+- CI: the web job installs `clang` for the SQLite wasm build, and the gates
+  job includes it with the desktop libraries.
 - Cargo workspace and six crate skeletons; CI gates run on every push.
 - `notes-proto`: UUIDv4 note and notebook ids, `Notebook`, and a versioned
   `Envelope<T>` shared by clients and the Worker.
@@ -111,11 +145,13 @@ Phase: 3 (sync); P1 and P2 complete, P3 code complete and green in CI, deploy an
 
 | Check | Result |
 | --- | --- |
-| Native tests | 133 passed, 1 skipped (the ignored Worker client e2e) |
+| Native tests | 150 passed, 1 skipped (the ignored Worker client e2e) |
 | Search, 10,000 notes | seeded in 14,534 ms; search 4 ms (budget 100 ms), 1 hit |
 | 3-store convergence | random updates, metadata changes and sync order; identical text, metadata and history |
 | 3-replica core convergence | random edits, drops and random sync order |
-| Web bundle (release, brotli) | 390,856 bytes (0.37 MiB); wasm about 379 KB |
+| Web bundle (release, brotli) | 1,479,074 bytes (1.41 MiB), limit 3.00 MiB; raw 6,087,996 B; wasm 5,986,977 B |
+| P4 browser flow (Playwright) | 15/15 checks: seed, create, autosave, preview, Markdown, palette, search and find |
+| P4 layout review | 360/900/1400 px, light and dark; no horizontal overflow, no console errors |
 | Loro wasm delta (brotli) | 712,105 bytes (0.68 MiB), budget 1.5 MiB |
 | 10,000 edits | 46,000 chars; snapshot 998 B; updates 46,106 B |
 | Browser SQLite (S4) | 1,000 notes across reload: Chromium 760/646 ms, Firefox 339/175 ms, WebKit 188/163 ms (seed/reload) |
@@ -133,7 +169,7 @@ Phase: 3 (sync); P1 and P2 complete, P3 code complete and green in CI, deploy an
 | wasm check | `notes-proto`, `notes-core`, `notes-store`, `notes-sync` compile for `wasm32-unknown-unknown`; `notes-server` clippy-clean for wasm |
 | Loro wasm smoke (Node) | 1 passed |
 | Text-box convergence | 1,000 randomized whole-value edits |
-| Linux desktop boot (CI) | stayed up 20 s under Xvfb |
+| Linux desktop boot (CI) | stayed up 20 s under Xvfb; P4 local build also stayed up 20 s (`exit 124`) |
 | Windows desktop build (CI) | `notebox.exe` built and uploaded |
 | Android headless compile (CI) | NDK r27c, four crates |
 
@@ -144,24 +180,27 @@ Phase: 3 (sync); P1 and P2 complete, P3 code complete and green in CI, deploy an
   secret and deploy are blocked for the same reason. The exact commands are in
   README, "Deploying the free Worker".
 - **Android runtime**: no `/dev/kvm` and no Android SDK, so S2/S5 cannot be run
-  on a device or emulator locally. The local `aarch64-linux-android` check now
-  also lacks `aarch64-linux-android-clang`; CI still compiles the four crates
-  with NDK r27c. The full Android app has not been built, and the Argon2id
-  timing on a mid-range phone is not measured.
+  on a device or emulator locally, and the P4 Android screenshot/boot check is
+  still missing. The local `aarch64-linux-android` check now also lacks
+  `aarch64-linux-android-clang`; CI still compiles the four crates with NDK
+  r27c. The full Android app has not been built, and the Argon2id timing on a
+  mid-range phone is not measured.
 - **Cold starts**: Linux desktop boot is verified under Xvfb, but the 600 ms
   cold-start number is not measured. Windows is build-only; Android has no
   boot or cold-start number.
-- **Browser store integration**: `SqliteStore` compiles for wasm, but only the
-  raw S4 probe runs in a browser worker. Wiring the real store into the app
-  worker, the browser sync transport and rerunning the OPFS check belong to P4
-  and P7.
+- **Browser persistence**: P4 runs the real `SqliteStore` schema through
+  `open_in_memory()` in the browser, so a reload starts from the seed notes.
+  The OPFS-backed worker and the browser sync transport remain for P7; until
+  then the UI labels the web store "Browser memory".
 
 ## Next
 
-1. P4 UI: app shell, editor, login and settings against the core traits; wire
-   `SqliteStore` into the browser worker and extend the OPFS probe to the real
+1. P5 history and trash UI against the existing core history API: version
+   timeline, diff, read-only preview and restore.
+2. Wire the OPFS-backed `SqliteStore` worker and browser sync transport in
+   P7, replacing `open_in_memory()` and extending the S4 probe to the real
    schema.
-2. S3 after `wrangler login`: deploy, create the account, measure request CPU
+3. S3 after `wrangler login`: deploy, create the account, measure request CPU
    with `wrangler tail` and write `docs/adr/0003-worker-free-tier.md`.
-3. Run S2/S5 on an Android emulator with `/dev/kvm` (CI or a physical device) to
+4. Run S2/S5 on an Android emulator with `/dev/kvm` (CI or a physical device) to
    close the runtime gap, including Gboard composition.

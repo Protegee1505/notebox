@@ -8,15 +8,17 @@ The full specification and phase plan is [PLAN.md](PLAN.md). Agent rules are in
 
 ## Status
 
-Phase 3: the sync engine. The note document, store, search, history, export,
+Phase 4: the app shell. The note document, store, search, history, export,
 the browser SQLite spike and the Worker sync server are implemented, and
-`notes-sync` now logs in with an Argon2id-derived key, keeps the device token,
-pushes and pulls with a durable cursor and offline queue, retries with backoff,
-syncs the notebook list as a CRDT document, and transfers verified attachment
-chunks. Two headless clients converge against a real local Worker and D1.
-A remote deploy and the S3 CPU measurement wait for `wrangler login`. The app
-UI is next. See [docs/STATUS.md](docs/STATUS.md), [docs/API.md](docs/API.md)
-and [docs/adr/](docs/adr/).
+`notes-sync` logs in with an Argon2id-derived key, pushes and pulls with a
+durable cursor and retries with backoff. The Dioxus app now has a responsive
+shell (one, two and three panes), a Markdown editor with rendered preview,
+find, tags, card and list views, command palette, shortcuts, login and
+settings, with light and dark themes. On the web the store is in memory until
+the OPFS worker in P7; native uses the SQLite file. A remote deploy and the S3
+CPU measurement wait for `wrangler login`, and Android runtime testing still
+needs an emulator. See [docs/STATUS.md](docs/STATUS.md),
+[docs/API.md](docs/API.md) and [docs/adr/](docs/adr/).
 
 ## Layout
 
