@@ -39,6 +39,13 @@ type WorkspaceRow = (Vec<u8>, Option<Vec<u8>>, Option<Vec<u8>>);
 /// Database file name used by native builds and by the browser build.
 pub const APP_DB_NAME: &str = "notebox.db";
 
+/// Header in front of a serialized database image.
+///
+/// The body is a normal SQLite database file. The header lets the browser
+/// reject a truncated or unrelated file before SQLite reads it. A future
+/// worker-backed store can strip the four bytes and open the body directly.
+pub const IMAGE_MAGIC: &[u8; 4] = b"NBX1";
+
 /// OPFS directory that holds the browser database.
 pub const BROWSER_DB_DIR: &str = "notebox";
 
@@ -259,6 +266,45 @@ impl SqliteStore {
     /// Stable Loro peer id this database uses for new changes.
     pub fn device_peer_id(&self) -> u64 {
         self.peer_id
+    }
+
+    /// Count of rows changed on this connection.
+    ///
+    /// The browser build uses this to notice saves, pulls and attachment
+    /// writes without marking every store method. Reads do not move it.
+    pub fn change_count(&self) -> u64 {
+        self.conn.borrow().total_changes()
+    }
+
+    /// Serialize the whole database with the [`IMAGE_MAGIC`] header.
+    ///
+    /// This is intended for the browser's in-memory database, which uses a
+    /// rollback journal and has no separate WAL file to miss. A native file
+    /// store in WAL mode is not a safe image source.
+    pub fn to_image(&self) -> Result<Vec<u8>, StoreError> {
+        let conn = self.conn.borrow();
+        let data = conn.serialize(rusqlite::MAIN_DB)?;
+        let mut image = Vec::with_capacity(IMAGE_MAGIC.len() + data.len());
+        image.extend_from_slice(IMAGE_MAGIC);
+        image.extend_from_slice(&data);
+        Ok(image)
+    }
+
+    /// Load a database written by [`SqliteStore::to_image`].
+    ///
+    /// The image is copied into a fresh in-memory connection, then the normal
+    /// migrations and device-peer lookup run. An image from an older schema is
+    /// therefore migrated on open.
+    pub fn from_image(bytes: &[u8]) -> Result<Self, StoreError> {
+        let body = bytes.strip_prefix(IMAGE_MAGIC).ok_or_else(|| {
+            StoreError::Corrupt("database image does not start with NBX1".to_string())
+        })?;
+        if body.is_empty() {
+            return Err(StoreError::Corrupt("database image is empty".to_string()));
+        }
+        let mut conn = Connection::open_in_memory()?;
+        conn.deserialize_read_exact(rusqlite::MAIN_DB, body, body.len(), false)?;
+        Self::from_connection(conn)
     }
 
     fn connection(&self) -> std::cell::RefMut<'_, Connection> {

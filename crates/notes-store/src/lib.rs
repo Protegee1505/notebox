@@ -15,7 +15,7 @@ mod error;
 mod sqlite;
 
 pub use error::StoreError;
-pub use sqlite::{SqliteStore, APP_DB_NAME, BROWSER_DB_DIR, SCHEMA_VERSION};
+pub use sqlite::{SqliteStore, APP_DB_NAME, BROWSER_DB_DIR, IMAGE_MAGIC, SCHEMA_VERSION};
 
 #[cfg(target_arch = "wasm32")]
 pub use sqlite::{install_browser_vfs, open_browser};
