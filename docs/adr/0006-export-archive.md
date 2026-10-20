@@ -48,8 +48,8 @@ records the import.
 
 Use `zip` 9.0.5 with only `deflate-flate2-zlib-rs`; disable default features so
 zopfli and the other codecs do not grow the wasm build. The workspace
-`rust-version` moves from 1.85 to 1.88 to match. This is the only dependency
-added for P1 after the spike ADRs.
+`rust-version` moves from 1.85 to 1.88 to match. `zip` is the only runtime
+dependency added for P1 after the spike ADRs; `tempfile` is test-only.
 
 ## Consequences
 
@@ -60,8 +60,10 @@ added for P1 after the spike ADRs.
 - Rust 1.88 is the minimum supported toolchain. CI and the development
   toolchain are newer (1.99.1); an older toolchain now fails with a clear
   `rust-version` error rather than a confusing build failure.
-- Attachments are referenced by content hash, so exporting the same photo twice
-  stores it once. P6 will reuse this index for upload and lazy download.
+- Attachments are referenced by content hash, so exporting the same bytes with
+  the same extension stores one archive entry, and two files with the same
+  display name cannot overwrite each other. P6 will reuse this index for upload
+  and lazy download.
 - History export is deliberately deferred; a backup restores current notes,
   not the version timeline. P5/P8 can add it under a new manifest version
   without breaking P1 archives.
