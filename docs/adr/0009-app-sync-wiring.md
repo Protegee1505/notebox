@@ -2,6 +2,8 @@
 
 - **Status:** accepted
 - **Date:** 2026-10-20
+- **Update:** ADR-0010 adds browser persistence; the web build no longer ends
+  a reload with only an in-memory store.
 - **Phase:** P7 app sync wiring (packaging remains P7)
 - **Owner:** app + sync
 
@@ -124,3 +126,8 @@ reload, or if a sync request stalls the editor.
   own. Revoking the device from another client is the hard stop.
 - `PLAN.md`'s P7 packaging work (installers, tagged artifacts, offline cache)
   is unchanged and still follows this slice.
+
+## Update
+
+ADR-0010 closes the browser-persistence gap described above. This record's
+context and consequences describe the app-sync slice before that change.

@@ -20,10 +20,12 @@ view restores notes and confirms before emptying; image attachments are
 compressed to WebP and transferred by content hash. The running app can sign
 in, run the sync loop on start, focus, after an edit and every minute, show
 status, list and revoke devices, and keep both bodies when an edit collides
-with a remote change. Native uses the SQLite file; the web build still uses an
-in-memory store, so its notes do not survive a reload until the OPFS worker
-lands. A remote deploy and the S3 CPU measurement wait for `wrangler login`,
-and Android runtime testing still needs an emulator. See
+with a remote change. Native uses the SQLite file; the web build keeps SQLite
+in memory and saves a versioned database image to OPFS, so local notes, history
+and image bytes survive a reload without an account. A second tab is held at an
+"already open" screen rather than writing over the first. A remote deploy and
+the S3 CPU measurement wait for `wrangler login`, and Android runtime testing
+still needs an emulator. See
 [docs/STATUS.md](docs/STATUS.md), [docs/API.md](docs/API.md) and
 [docs/adr/](docs/adr/).
 
@@ -55,6 +57,8 @@ python3 scripts/free-tier-sim.py
 rm -rf target/dx/notebox/release/web/public
 dx build -p notes-app --platform web --release --features web
 node scripts/web-budget.mjs target/dx/notebox/release/web/public
+PLAYWRIGHT_MODULES=/path/to/node_modules \
+  node scripts/web-persist.mjs target/dx/notebox/release/web/public
 ```
 
 The UI has no default renderer. Select one explicitly:
@@ -86,6 +90,19 @@ PLAYWRIGHT_BROWSERS_PATH=/path/to/playwright-browsers \
 The script uses a persistent browser profile per run because WebKit refuses
 OPFS handles in an ephemeral context. Pass `--browser chromium` to shorten the
 loop and `--skip-build` to reuse the last build.
+
+The app-level persistence check uses the same persistent-profile idea. It
+creates a local-only note with a PNG, restarts Chromium, and verifies the text,
+image reference, attachment row, decoded WebP bytes and history panel. It also
+opens a second tab and expects the store lock screen.
+
+```bash
+PLAYWRIGHT_MODULES=/path/to/node_modules \
+  node scripts/web-persist.mjs
+```
+
+The release build must already exist; the script accepts an explicit public
+directory when `dx` wrote outside `target/dx`.
 
 If `/home` is a small partition, keep build artifacts and caches on the larger
 disk before building; the script is idempotent and also creates the local Cargo

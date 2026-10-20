@@ -1,6 +1,6 @@
 # ADR-0004: Browser storage — SQLite over OPFS
 
-- **Status:** proposed
+- **Status:** accepted for the OPFS stack; runtime shape amended by ADR-0010
 - **Date:** 2026-10-20
 - **Spike:** S4
 - **Owner:** Core
@@ -75,3 +75,11 @@ bundle; the 3 MB brotli budget has ample room.
 - OPFS persistence is per origin and per browser profile. Private/ephemeral
   contexts may refuse handles, so the app needs a clear storage-unavailable
   error and the exported Markdown zip remains the backup path.
+
+## Amendment
+
+ADR-0010 keeps the OPFS stack and the S4 evidence, but the v1 app writes a
+versioned SQLite image from the in-memory store through a small worker instead
+of putting the whole `NoteStore` behind the SAH-pool VFS. The worker-only
+runtime clause above is therefore deferred, not disproved; it is the path to
+revisit if image saves become too large.

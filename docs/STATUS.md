@@ -4,8 +4,8 @@ Updated: 2026-10-20
 Phase: 7 (app sync wiring); P1–P6 complete. The running app can sign in,
 restore a session, sync notes and attachments, show status, list and revoke
 devices, and keep a conflict copy. The web build is served by the Worker and
-syncs same-origin; browser persistence and the packaging/deploy side of P7
-remain.
+syncs same-origin; local notes, history and images now persist in OPFS, with
+no account needed. The packaging/deploy side of P7 remains.
 
 ## Shipped
 
@@ -39,6 +39,32 @@ remain.
 - `notes-app`: a saved account makes an empty database wait for the first
   pull instead of seeding demo notes, which would otherwise push a fresh set
   on every in-memory web reload.
+- `notes-store`: browser database images. `to_image()` writes `NBX1` plus a
+  normal SQLite file; `from_image()` rejects a foreign or empty image before
+  running the normal migrations; `change_count()` exposes
+  `Connection::total_changes`. A round-trip test covers notes, metadata,
+  notebooks, three history versions, FTS search, attachment links and bytes,
+  the sync cursor, `last_pushed` and the device peer. Bad headers are rejected.
+- `notes-app`: browser persistence. The web build loads the saved image from
+  `notebox.db` in OPFS, keeps SQLite in memory, and writes a new image from the
+  700 ms tick when `change_count` moved. `opfs_store.js` asks for persistent
+  storage and holds the exclusive `notebox-opfs-store-v1` Web Lock, so a second
+  tab shows "Notebox is already open" instead of overwriting the first. A
+  corrupt image stops on a fatal screen without replacing it; missing OPFS
+  falls back to a clearly labelled "Browser memory". Settings shows "Browser
+  storage" when the image is live. The cookie/restore and sync cursor paths are
+  unchanged, and no new server request is made.
+- `scripts/web-persist.mjs`: release-build Playwright check with a persistent
+  Chromium profile. It creates a local-only note, attaches a PNG, waits for the
+  WebP row, closes and reopens the browser, and finds the text, image reference,
+  attachment row and decoded `data:image/webp` bytes. It also checks the second
+  tab lock, the history panel, the Settings label after restart and a
+  synthetic page-hide after a just-typed edit. 13/13 checks pass with no
+  console errors.
+- `docs/adr/0010-browser-persistence.md` records the image, lock and fallback
+  decisions. It amends ADR-0004's runtime shape: the app keeps the synchronous
+  `NoteStore` for v1, and revisits a worker-backed store if image writes grow
+  past roughly 100 ms.
 - P7 browser verification: a Playwright flow passes 22 checks (login, first
   sync, last-sync label, devices, current marker, two-click revoke, manual
   sync, sign-out, account clearing, reload stays local, login reopens) and a
@@ -132,8 +158,8 @@ remain.
   shortcuts and emptying the trash.
 - `notes-app`: all UI actions go through `AppContext` and the `NoteStore`
   trait. Native uses the SQLite file in the XDG data directory; the web build
-  uses `SqliteStore::open_in_memory()` and labels the store "Browser memory"
-  until the OPFS worker lands.
+  keeps SQLite in memory and persists a versioned image to OPFS, labelled
+  "Browser storage" unless the browser cannot provide it.
 - P4 fixes found in the browser: `futures-timer` now enables its
   `wasm-bindgen` backend instead of panicking on `std::time`; `web-time`
   supplies the clock; the Dioxus `logger` feature is off because its
@@ -256,7 +282,7 @@ remain.
 
 | Check | Result |
 | --- | --- |
-| Native tests | 201 passed, 1 skipped (the ignored Worker client e2e) |
+| Native tests | 204 passed, 1 skipped (the ignored Worker client e2e) |
 | Search, 10,000 notes | seeded in 14,534 ms; search 4 ms (budget 100 ms), 1 hit |
 | 3-store convergence | random updates, metadata changes and sync order; identical text, metadata and history |
 | 3-replica core convergence | random edits, drops and random sync order |
@@ -265,8 +291,9 @@ remain.
 | P6 image ingest | 951,612 B 1200×700 PNG → 29,450 B WebP (3.1%), 1.3 s from picker to row in a release web build (headless Chromium) |
 | P6 note + photo transfer | two stores, 180,000 B photo: note and link arrive first, placeholder shows, download fills bytes, second pass is a no-op; a missing blob is counted without failing |
 | P7 browser flow (Playwright) | 22/22 checks: login, first sync, last sync, devices, current marker, two-click revoke, manual sync, sign-out, cookie/account clearing, reload, login reopen; no console errors |
+| P7 browser persistence (Playwright) | 13/13 checks: Browser storage label, local-only note and PNG, WebP attachment, second-tab lock, browser restart, text/image/history, page-hide save, no console errors |
 | P7 conflict flow (Playwright) | 13/13 checks with two device contexts plus a third puller: delayed sync, edit during the run, conflict toast, merged original, `conflict`-tagged copy holding the typed text, follow-up sync before the minute timer, copy pulled by another device |
-| Web bundle (release, brotli) | P7 Dioxus build 1,786,340 B (1.70 MiB), raw 7,457,436 B, limit 3.00 MiB; P6 manual build 1,955,393 B (1.86 MiB), raw 9,353,273 B; P5 CI was 1,545,831 B |
+| Web bundle (release, brotli) | P7 Dioxus build 1,792,565 B (1.71 MiB), raw 7,489,034 B, limit 3.00 MiB; P6 manual build 1,955,393 B (1.86 MiB), raw 9,353,273 B; P5 CI was 1,545,831 B |
 | P5 browser flow (Playwright) | 26/26 checks: autosave, timeline, diff, preview, restore, version retention, trash, confirm, cancel, restore and empty |
 | P5 layout review | 360/900/1400 px, light and dark; no horizontal overflow, no console errors |
 | Restore across stores | older version restored on store B reached store A after one update exchange; both reported the same three version ids |
@@ -315,26 +342,18 @@ remain.
   runtime. The native desktop path is compile-checked and shares the engine
   tests, but this slice did not drive its login/sync threads through the UI
   against a live Worker.
-- **Browser persistence**: the web build still runs the real `SqliteStore`
-  schema through `open_in_memory()`. A signed-in reload pulls from the Worker,
-  but local-only notes (including an unsynced conflict copy) and attachment
-  bytes do not survive, and the UI labels the store "Browser memory". The
-  OPFS-backed worker is the first item in Next; it is not part of this
-  app-sync slice.
-
 ## Next
 
-1. Browser persistence: wire the OPFS-backed `SqliteStore` worker, replacing
-   `open_in_memory()`, and extend the S4 probe to the real v4 schema so notes
-   and image bytes survive a reload. Keep the cookie/restore path as it is.
-2. S3 after `wrangler login`: deploy the Worker with the P7 assets, create the
+1. S3 after `wrangler login`: deploy the Worker with the P7 assets, create the
    account, measure request CPU with `wrangler tail` and write
    `docs/adr/0003-worker-free-tier.md`. Then run the human P5/P6/P7 acceptance
    on a desktop and a phone, including a photo and a version restore.
-3. Run S2/S5/P6/P7 on an Android emulator with `/dev/kvm` (CI or a physical
+2. Run S2/S5/P6/P7 on an Android emulator with `/dev/kvm` (CI or a physical
    device) to close the runtime gap, including Gboard composition, the camera
    picker and the in-app login/sync loop.
-4. P7 packaging: tagged `.msi`/`.exe`, AppImage, `.deb` and signed `.apk`
+3. P7 packaging: tagged `.msi`/`.exe`, AppImage, `.deb` and signed `.apk`
    artifacts, an update-available notice, an offline app cache and a
    fresh-machine README check. A native UI sync smoke test under Xvfb can ride
    with that CI work.
+4. Measure an OPFS image write on 1,000 notes and 50 images; if it exceeds
+   roughly 100 ms, schedule the worker-backed `SqliteStore` from ADR-0004.
