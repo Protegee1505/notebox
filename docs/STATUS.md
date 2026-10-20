@@ -1,12 +1,56 @@
 # Status
 
 Updated: 2026-10-20
-Phase: 6 (attachments); P1–P5 complete, P6 local complete and transfer proven
-between two sync-engine stores. The running app has no account/sync loop or
-browser transport yet, so the human cross-device check waits on P7.
+Phase: 7 (app sync wiring); P1–P6 complete. The running app can sign in,
+restore a session, sync notes and attachments, show status, list and revoke
+devices, and keep a conflict copy. The web build is served by the Worker and
+syncs same-origin; browser persistence and the packaging/deploy side of P7
+remain.
 
 ## Shipped
 
+- `notes-app`: P7 sync wiring. The running app signs in, restores a saved
+  session, saves the open draft before each run, and syncs on start, focus,
+  three seconds after an edit and every 60 seconds while visible, with a five
+  second floor and the server's backoff. Native login/sync/device calls run on
+  named threads with their own SQLite connection; browser calls run in
+  `spawn_forever` tasks. The top bar and Settings show Local / Connecting /
+  Syncing / Synced / Offline / Sign in / Problem and the last run; Settings
+  lists devices, marks the current one and revokes another after a second
+  click. A permanent error stops automatic retries until Sync now.
+- `notes-app`: conflicts never overwrite. A save for the note open when a run
+  starts is held until the report, then `plan_open_note` compares the base,
+  the editor and the merged body. A clean editor takes the merged body; an
+  edit made during the run becomes a new note titled `Conflict copy of ...`
+  with the `conflict` tag, while the original takes the merged body. A note
+  the user switches to during a run is refreshed when clean, and a failed run
+  keeps a held edit in the same way. A successful copy asks for a follow-up
+  run after the five second floor, so it does not wait for the minute timer.
+- `notes-sync`: browser `WebTransport` over same-origin `fetch` with a 30 s
+  abort, `BoxedTransport` for one `SyncClient<BoxedTransport>` alias on every
+  target, and a no-op `logout` default. The token stays in memory; the
+  `HttpOnly; SameSite=Strict` cookie carries the session across reloads and is
+  `Secure` only on HTTPS.
+- `notes-server`: `POST /v1/auth/logout` expires the cookie with `204`; the
+  Worker serves the Dioxus build through `[assets]`, so browser requests are
+  same-origin and no CORS surface is added.
+- `notes-store`: `notes_with_attachment_work` returns notes that need an
+  upload or a missing download, so one run moves up to eight notes' images.
+- `notes-app`: a saved account makes an empty database wait for the first
+  pull instead of seeding demo notes, which would otherwise push a fresh set
+  on every in-memory web reload.
+- P7 browser verification: a Playwright flow passes 22 checks (login, first
+  sync, last-sync label, devices, current marker, two-click revoke, manual
+  sync, sign-out, account clearing, reload stays local, login reopens) and a
+  two-device conflict flow passes 13 (delayed sync, edit during the run,
+  conflict toast, merged original, tagged copy with the typed text, follow-up
+  sync before the minute timer, copy pulled by a third device).
+  Screenshots are `docs/screenshots/p7-settings-synced-1400-light.png`,
+  `p7-settings-local-1400-light.png`, `p7-login-1400-light.png` and
+  `p7-conflict-1400-light.png`.
+- `docs/adr/0009-app-sync-wiring.md` records the transport, threading,
+  scheduling, conflict and cookie decisions, including the `spawn_forever`
+  scope fix found by the browser run.
 - `notes-app`: P6 image ingest. The file picker, drag and drop and a page-level
   paste listener all route through one path: read the file, apply EXIF
   orientation, cap the longest side at 1600 px, encode lossy WebP at quality
@@ -66,7 +110,7 @@ browser transport yet, so the human cross-device check waits on P7.
 - `notes-store`: a focused two-store test restores an older version on the
   second store, syncs the update back, and checks identical text and version
   ids. This proves restore is an append-only edit that travels through sync;
-  the UI-level acceptance is still blocked on P7.
+  the UI-level acceptance waits on a deployed Worker.
 - P5 browser verification: a Playwright flow passes 26 checks (seed, autosave,
   timeline, diff, preview, restore, version retention, trash, confirm, cancel,
   restore and empty) with no console errors at 1400 px.
@@ -83,7 +127,7 @@ browser transport yet, so the human cross-device check waits on P7.
 - `notes-app`: command palette (Ctrl K), keyboard shortcut sheet, global
   search, workspace shortcuts (Ctrl N/S/F/E/Z/1/2/3/,) and a visible Commands
   entry so touch devices can reach the palette.
-- `notes-app`: local login screen (form complete; sync is wired in P7) and
+- `notes-app`: local login screen (form complete; sync is wired) and
   settings for appearance, layout, account, notebooks, storage, zip export,
   shortcuts and emptying the trash.
 - `notes-app`: all UI actions go through `AppContext` and the `NoteStore`
@@ -161,9 +205,9 @@ browser transport yet, so the human cross-device check waits on P7.
 - `notes-sync`: Argon2id login key (19 MiB, t=2, p=1) with a pinned known
   answer; the passphrase and the key never reach the server.
 - `notes-sync`: `SyncTransport` trait and a blocking `ureq` (rustls) HTTP
-  transport for native builds; a browser transport follows in P7. Session
+  transport for native builds; the browser transport is in P7. Session
   stores: memory, file (mode 0600, atomic rename) and a null store for the
-  future cookie-based web client.
+  cookie-based web client.
 - `notes-sync`: sync engine with one push batch of at most 25 updates, paged
   pulls until the server is drained, an append-only offline queue, pull cursor
   saved with the updates it covers, notebook list as the reserved
@@ -212,7 +256,7 @@ browser transport yet, so the human cross-device check waits on P7.
 
 | Check | Result |
 | --- | --- |
-| Native tests | 188 passed, 1 skipped (the ignored Worker client e2e) |
+| Native tests | 201 passed, 1 skipped (the ignored Worker client e2e) |
 | Search, 10,000 notes | seeded in 14,534 ms; search 4 ms (budget 100 ms), 1 hit |
 | 3-store convergence | random updates, metadata changes and sync order; identical text, metadata and history |
 | 3-replica core convergence | random edits, drops and random sync order |
@@ -220,21 +264,23 @@ browser transport yet, so the human cross-device check waits on P7.
 | P6 layout review | 360/900/1400 px, light and dark; no horizontal page overflow; the 900 px toolbar wraps instead of hiding Preview |
 | P6 image ingest | 951,612 B 1200×700 PNG → 29,450 B WebP (3.1%), 1.3 s from picker to row in a release web build (headless Chromium) |
 | P6 note + photo transfer | two stores, 180,000 B photo: note and link arrive first, placeholder shows, download fills bytes, second pass is a no-op; a missing blob is counted without failing |
-| Web bundle (release, brotli) | local P6 manual static build 1,955,393 B (1.86 MiB), limit 3.00 MiB; raw 9,353,273 B. P5 CI was 1,545,831 B |
+| P7 browser flow (Playwright) | 22/22 checks: login, first sync, last sync, devices, current marker, two-click revoke, manual sync, sign-out, cookie/account clearing, reload, login reopen; no console errors |
+| P7 conflict flow (Playwright) | 13/13 checks with two device contexts plus a third puller: delayed sync, edit during the run, conflict toast, merged original, `conflict`-tagged copy holding the typed text, follow-up sync before the minute timer, copy pulled by another device |
+| Web bundle (release, brotli) | P7 Dioxus build 1,786,340 B (1.70 MiB), raw 7,457,436 B, limit 3.00 MiB; P6 manual build 1,955,393 B (1.86 MiB), raw 9,353,273 B; P5 CI was 1,545,831 B |
 | P5 browser flow (Playwright) | 26/26 checks: autosave, timeline, diff, preview, restore, version retention, trash, confirm, cancel, restore and empty |
 | P5 layout review | 360/900/1400 px, light and dark; no horizontal overflow, no console errors |
 | Restore across stores | older version restored on store B reached store A after one update exchange; both reported the same three version ids |
 | P4 browser flow (Playwright) | 15/15 checks: seed, create, autosave, preview, Markdown, palette, search and find |
 | P4 layout review | 360/900/1400 px, light and dark; no horizontal overflow, no console errors |
-| Loro wasm delta (brotli) | 712,105 bytes (0.68 MiB), budget 1.5 MiB |
+| Loro wasm delta (brotli) | 713,227 bytes (0.68 MiB), budget 1.5 MiB |
 | 10,000 edits | 46,000 chars; snapshot 998 B; updates 46,106 B |
 | Browser SQLite (S4) | 1,000 notes across reload: Chromium 760/646 ms, Firefox 339/175 ms, WebKit 188/163 ms (seed/reload) |
 | Browser DB size | 122,880 B for 1,000 notes; rollback journal, one worker connection |
 | SQLite wasm (release) | 1,783,762 B raw; 510,738 B brotli; 679,936 B gzip |
 | Worker wasm (release, wasm-opt) | 644,372 B raw; 177,142 B brotli; limit 64 MiB |
-| Server end-to-end | 48 checks green against `wrangler dev --local` and local D1 |
+| Server end-to-end | 51 checks green against `wrangler dev --local` and local D1, including logout and cookie expiry |
 | Client sync, in-process | 14 two-client tests on the real handler stack; lost response, dropped request, `429` and corrupt chunks all converge |
-| Client sync, real Worker | 1 test / 24 assertions green through `wrangler dev --local` and D1 in about 2.4 s |
+| Client sync, real Worker | 1 test / 24 assertions green through `wrangler dev --local` and D1 in 3.23 s |
 | Argon2id login key | 0.05 s per derivation (release build, this machine); debug build 0.61–0.66 s |
 | Offline queue | 30 new notes: 25 pushed in one run, 5 in the next; queue empty after the server accepts |
 | Attachment round trip | client-to-client 2.5 MiB / 3 chunks in-process; 150 KB through real D1 with bytes and metadata identical |
@@ -262,33 +308,33 @@ browser transport yet, so the human cross-device check waits on P7.
 - **Cold starts**: Linux desktop boot is verified under Xvfb, but the 600 ms
   cold-start number is not measured. Windows is build-only; Android has no
   boot or cold-start number.
-- **P5 cross-device acceptance**: restore itself is proven across two stores in
-  `sync_convergence`, but the app has no account/sync screen wired to the
-  engine and the web build uses a per-tab in-memory database. "A version
-  restored on one device appears on another within a minute" cannot be
-  demonstrated in the running app until P7.
-- **P6 app cross-device acceptance**: the engine test moves a note and its
-  photo between two stores, but the app does not start that engine yet and has
-  no browser transport. "A photo added on the phone shows on the desktop"
-  therefore waits on the P7 account and sync loop. Native SQLite keeps cached
-  image bytes offline; the web build loses them on reload with the rest of its
-  in-memory database.
-- **Browser persistence**: P4 runs the real `SqliteStore` schema through
-  `open_in_memory()` in the browser, so a reload starts from the seed notes.
-  The OPFS-backed worker and the browser sync transport remain for P7; until
-  then the UI labels the web store "Browser memory".
+- **Human cross-device acceptance**: the app-side account, sync loop and
+  browser transport are wired, and a two-device browser run passes the P7
+  login, device, conflict and sign-out checks. The human P5/P6/P7 check across
+  a desktop and a phone still waits on a deployed Worker and an Android
+  runtime. The native desktop path is compile-checked and shares the engine
+  tests, but this slice did not drive its login/sync threads through the UI
+  against a live Worker.
+- **Browser persistence**: the web build still runs the real `SqliteStore`
+  schema through `open_in_memory()`. A signed-in reload pulls from the Worker,
+  but local-only notes (including an unsynced conflict copy) and attachment
+  bytes do not survive, and the UI labels the store "Browser memory". The
+  OPFS-backed worker is the first item in Next; it is not part of this
+  app-sync slice.
 
 ## Next
 
-1. P7 sync wiring: add the browser `SyncTransport`, an account screen backed
-   by the existing engine, and a sync loop that calls
-   `sync_note_attachments` after notes are pulled or saved. Then run the P5 and
-   P6 acceptance with two browser profiles or a web and a native client.
-2. P7 persistence: wire the OPFS-backed `SqliteStore` worker, replacing
-   `open_in_memory()`, and extend the S4 probe to the real v4 schema so images
-   survive a reload.
-3. S3 after `wrangler login`: deploy, create the account, measure request CPU
-   with `wrangler tail` and write `docs/adr/0003-worker-free-tier.md`.
-4. Run S2/S5/P6 on an Android emulator with `/dev/kvm` (CI or a physical
-   device) to close the runtime gap, including Gboard composition and the
-   camera picker.
+1. Browser persistence: wire the OPFS-backed `SqliteStore` worker, replacing
+   `open_in_memory()`, and extend the S4 probe to the real v4 schema so notes
+   and image bytes survive a reload. Keep the cookie/restore path as it is.
+2. S3 after `wrangler login`: deploy the Worker with the P7 assets, create the
+   account, measure request CPU with `wrangler tail` and write
+   `docs/adr/0003-worker-free-tier.md`. Then run the human P5/P6/P7 acceptance
+   on a desktop and a phone, including a photo and a version restore.
+3. Run S2/S5/P6/P7 on an Android emulator with `/dev/kvm` (CI or a physical
+   device) to close the runtime gap, including Gboard composition, the camera
+   picker and the in-app login/sync loop.
+4. P7 packaging: tagged `.msi`/`.exe`, AppImage, `.deb` and signed `.apk`
+   artifacts, an update-available notice, an offline app cache and a
+   fresh-machine README check. A native UI sync smoke test under Xvfb can ride
+   with that CI work.

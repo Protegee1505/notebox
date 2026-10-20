@@ -8,7 +8,7 @@ The full specification and phase plan is [PLAN.md](PLAN.md). Agent rules are in
 
 ## Status
 
-Phase 5: history and trash. The note document, store, search, history, export,
+Phase 7: app sync wiring. The note document, store, search, history, export,
 the browser SQLite spike and the Worker sync server are implemented, and
 `notes-sync` logs in with an Argon2id-derived key, pushes and pulls with a
 durable cursor and retries with backoff. The Dioxus app has a responsive shell
@@ -16,11 +16,16 @@ durable cursor and retries with backoff. The Dioxus app has a responsive shell
 tags, card and list views, command palette, shortcuts, login and settings,
 with light and dark themes. Note history shows a version timeline, a diff and
 a read-only preview, and restore writes the old text as a new edit; the trash
-view restores notes and confirms before emptying. On the web the store is in
-memory until the OPFS worker in P7; native uses the SQLite file. A remote deploy and the S3
-CPU measurement wait for `wrangler login`, and Android runtime testing still
-needs an emulator. See [docs/STATUS.md](docs/STATUS.md),
-[docs/API.md](docs/API.md) and [docs/adr/](docs/adr/).
+view restores notes and confirms before emptying; image attachments are
+compressed to WebP and transferred by content hash. The running app can sign
+in, run the sync loop on start, focus, after an edit and every minute, show
+status, list and revoke devices, and keep both bodies when an edit collides
+with a remote change. Native uses the SQLite file; the web build still uses an
+in-memory store, so its notes do not survive a reload until the OPFS worker
+lands. A remote deploy and the S3 CPU measurement wait for `wrangler login`,
+and Android runtime testing still needs an emulator. See
+[docs/STATUS.md](docs/STATUS.md), [docs/API.md](docs/API.md) and
+[docs/adr/](docs/adr/).
 
 ## Layout
 
@@ -46,6 +51,8 @@ cargo deny check
 ./scripts/budget-check
 python3 scripts/free-tier-sim.py
 ./scripts/wasm-size.sh
+# dx leaves old hashed files in the output; clear it for a clean bundle.
+rm -rf target/dx/notebox/release/web/public
 dx build -p notes-app --platform web --release --features web
 node scripts/web-budget.mjs target/dx/notebox/release/web/public
 ```
@@ -100,8 +107,14 @@ migrations and start Wrangler:
 cargo install worker-build --version 0.8.7 --locked
 npx wrangler d1 migrations apply notebox-sync --local
 npx wrangler d1 migrations apply notebox-blobs --local
+# Serve the real web app from the Worker (optional for the API scripts):
+dx build -p notes-app --platform web --release --features web
 npx wrangler dev --local --var SETUP_TOKEN:local-dev-token
 ```
+
+Open the Worker origin (`http://127.0.0.1:8787`) to use the web app. Sync is
+same-origin by design, so a `dx serve` page on another port cannot reach the
+Worker: open the build the Worker serves instead, or use the desktop app.
 
 Run the full HTTP test, including setup, login backoff, sync pagination,
 attachment chunks and device revocation, against a throwaway local Worker:
@@ -133,8 +146,13 @@ npx wrangler d1 create notebox-blobs    # copy the database_id
 npx wrangler d1 migrations apply notebox-sync --remote
 npx wrangler d1 migrations apply notebox-blobs --remote
 npx wrangler secret put SETUP_TOKEN     # generate a long random value
+rm -rf target/dx/notebox/release/web/public
+dx build -p notes-app --platform web --release --features web
 npx wrangler deploy
 ```
+
+The Worker serves the built web app through `[assets]` in `wrangler.toml`, so
+open the deployed URL itself rather than a separate static host.
 
 After deploying, call `POST /v1/auth/setup` once with the setup token to create
 the account. Then measure CPU time for the S3 spike with `npx wrangler tail` and
