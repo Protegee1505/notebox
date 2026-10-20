@@ -7,7 +7,23 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+notes-core.workspace = true
 notes-proto.workspace = true
+notes-store.workspace = true
+argon2.workspace = true
+async-trait = "0.1"
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
+uuid.workspace = true
+
+# The HTTP client is only needed where there is no browser fetch. The web
+# build gets its transport from the Worker's own origin in P7.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ureq.workspace = true
+
+[dev-dependencies]
+notes-server.workspace = true
+pollster = "0.4"
+tempfile.workspace = true

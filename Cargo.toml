@@ -35,8 +35,11 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 # two copies of the C library would not share the installed OPFS VFS.
 # See docs/adr/0004-browser-storage.md.
 sqlite-wasm-rs = "0.5.1"
-reqwest = { version = "0.13.5", default-features = false, features = ["rustls-tls"] }
-argon2 = "0.6.0"
+# Argon2id runs on the device, so it must build for native and wasm without a
+# random-number source of its own: the login salt is derived from the username.
+argon2 = { version = "0.6.0", default-features = false, features = ["alloc"] }
+# The native HTTP client. rustls is the default backend, never OpenSSL.
+ureq = { version = "3.4.2", features = ["json"] }
 pulldown-cmark = "0.13.4"
 similar = "3.2.0"
 # Deflate only: zopfli and the other codecs would bloat the wasm build for no
