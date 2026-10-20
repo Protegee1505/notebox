@@ -1,7 +1,7 @@
 # Status
 
 Updated: 2026-10-20
-Phase: 4 (app shell); P1–P3 complete, P4 code complete and green in local gates
+Phase: 4 (app shell); P1–P3 complete, P4 complete and green in CI
 
 ## Shipped
 
@@ -38,7 +38,9 @@ Phase: 4 (app shell); P1–P3 complete, P4 code complete and green in local gate
   20-second Xvfb boot smoke (`exit 124`) pass locally; the local runner now has
   `libxdo-dev`, `xvfb` and `dbus-x11` installed.
 - CI: the web job installs `clang` for the SQLite wasm build, and the gates
-  job includes it with the desktop libraries.
+  job includes it with the desktop libraries. Run 39415175131 passed all eight
+  jobs (gates, web, desktop, windows, wasm, android, server, s4-opfs); the web
+  job measured 1,478,616 bytes brotli at 1.41 MiB against the 3.00 MiB limit.
 - Cargo workspace and six crate skeletons; CI gates run on every push.
 - `notes-proto`: UUIDv4 note and notebook ids, `Notebook`, and a versioned
   `Envelope<T>` shared by clients and the Worker.
@@ -149,7 +151,7 @@ Phase: 4 (app shell); P1–P3 complete, P4 code complete and green in local gate
 | Search, 10,000 notes | seeded in 14,534 ms; search 4 ms (budget 100 ms), 1 hit |
 | 3-store convergence | random updates, metadata changes and sync order; identical text, metadata and history |
 | 3-replica core convergence | random edits, drops and random sync order |
-| Web bundle (release, brotli) | 1,479,074 bytes (1.41 MiB), limit 3.00 MiB; raw 6,087,996 B; wasm 5,986,977 B |
+| Web bundle (release, brotli) | local 1,479,074 B, CI 1,478,616 B (1.41 MiB), limit 3.00 MiB; raw 6,087,996 B; wasm 5,986,977 B |
 | P4 browser flow (Playwright) | 15/15 checks: seed, create, autosave, preview, Markdown, palette, search and find |
 | P4 layout review | 360/900/1400 px, light and dark; no horizontal overflow, no console errors |
 | Loro wasm delta (brotli) | 712,105 bytes (0.68 MiB), budget 1.5 MiB |
