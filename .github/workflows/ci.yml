@@ -55,6 +55,9 @@ jobs:
       - name: Licences and advisories
         run: cargo deny check
 
+      - name: Free-tier simulator
+        run: python3 scripts/free-tier-sim.py
+
       - name: Budget ceilings
         run: ./scripts/budget-check
 
@@ -146,6 +149,35 @@ jobs:
           name: notebox-web
           path: target/dx/notebox/release/web/public
           retention-days: 7
+
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cache worker-build
+        id: worker-build-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/worker-build
+            ~/.cargo/bin/worker-codegen
+          key: worker-build-0.8.7-${{ runner.os }}
+
+      - name: Install worker-build
+        if: steps.worker-build-cache.outputs.cache-hit != 'true'
+        run: cargo install worker-build --version 0.8.7 --locked
+
+      - name: Worker compiles on wasm without warnings
+        run: cargo clippy -p notes-server --target wasm32-unknown-unknown -- -D warnings
+
+      - name: End-to-end against a real local Worker and D1
+        run: node scripts/server-e2e.mjs
 
   desktop:
     runs-on: ubuntu-latest
