@@ -1,0 +1,9 @@
+[application]
+name = "notebox"
+
+[web.app]
+title = "Notebox"
+
+[web.resource]
+style = []
+script = []

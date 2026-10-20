@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System libraries for the desktop renderer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+
+      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@cargo-deny
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo nextest run --workspace
+
+      - name: Desktop app check
+        run: cargo clippy -p notes-app --no-default-features --features desktop -- -D warnings
+
+      - name: Web compile
+        run: cargo check -p notes-app --no-default-features --features web --target wasm32-unknown-unknown
+
+      - name: Headless crate compile for wasm
+        run: cargo check -p notes-proto -p notes-core -p notes-store -p notes-sync --target wasm32-unknown-unknown
+
+      - name: Licences and advisories
+        run: cargo deny check
+
+      - name: Budget ceilings
+        run: ./scripts/budget-check

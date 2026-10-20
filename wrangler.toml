@@ -1,0 +1,26 @@
+name = "notebox"
+main = "build/worker/shim.mjs"
+compatibility_date = "2026-09-01"
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+# One D1 database for notes/updates, a second for attachment chunks.
+# Replace the placeholder ids with the real ones from `wrangler d1 create`
+# before the first remote deploy. Local development ignores the ids.
+[[d1_databases]]
+binding = "DB_SYNC"
+database_name = "notebox-sync"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations/sync"
+
+[[d1_databases]]
+binding = "DB_BLOBS"
+database_name = "notebox-blobs"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations/blobs"
+
+# Phase 7: serve the Dioxus web build from the same Worker.
+# [assets]
+# directory = "target/dx/notebox/release/web/public"
+# binding = "ASSETS"

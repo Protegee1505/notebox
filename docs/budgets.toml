@@ -1,0 +1,22 @@
+[desktop]
+# Cold start from launch to an editable note.
+cold_start_ms = 600
+# Opening an existing note.
+open_note_ms = 50
+# Dropped frames while typing in a 100 KB note.
+typing_dropped_frames = 0
+
+[search]
+# Search corpus size and the latency target for a full query.
+notes = 10000
+max_ms = 100
+
+[web]
+# Compressed (brotli) first load, including the WASM bundle.
+first_load_brotli_mb = 3
+
+[android]
+apk_mb = 25
+
+[installer]
+desktop_mb = 20

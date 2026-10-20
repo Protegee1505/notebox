@@ -1,0 +1,15 @@
+/target
+/build
+/dist
+/web-dist
+/node_modules
+/.wrangler
+/.dev.vars
+.env
+.env.*
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+.DS_Store
