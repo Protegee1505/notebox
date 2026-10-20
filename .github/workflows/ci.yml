@@ -86,6 +86,41 @@ jobs:
       - name: Compressed wasm size
         run: ./scripts/wasm-size.sh
 
+  s4-opfs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install clang and the matching wasm-bindgen
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+          version=$(awk '/^name = "wasm-bindgen"$/{getline; gsub(/version = "|"/, ""); print; exit}' Cargo.lock)
+          echo "wasm-bindgen $version"
+          mkdir -p /tmp/wasm-bindgen
+          curl -sSL --fail \
+            "https://github.com/rustwasm/wasm-bindgen/releases/download/${version}/wasm-bindgen-${version}-x86_64-unknown-linux-musl.tar.gz" \
+            -o /tmp/wasm-bindgen.tar.gz
+          tar -xzf /tmp/wasm-bindgen.tar.gz -C /tmp/wasm-bindgen --strip-components=1
+
+      - name: Install Playwright and browsers
+        run: |
+          mkdir -p /tmp/s4
+          cd /tmp/s4
+          npm init -y >/dev/null
+          npm install playwright@1.64.1
+          npx playwright install --with-deps chromium firefox webkit
+
+      - name: SQLite over OPFS survives a reload in three browsers
+        env:
+          WASM_BINDGEN: /tmp/wasm-bindgen/wasm-bindgen
+          PLAYWRIGHT_MODULES: /tmp/s4/node_modules
+        run: node scripts/opfs-spike.mjs
+
   web:
     runs-on: ubuntu-latest
     steps:

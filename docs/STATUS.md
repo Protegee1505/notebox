@@ -10,6 +10,9 @@ Phase: 0 (spikes)
   export/import, update export/import and time travel (S2).
 - `notes-core`: Unicode-safe prefix/suffix text-box binding with 1,000-edit
   convergence and remote-cursor tests (S5).
+- `notes-store`: browser SQLite probe using `rusqlite` over the OPFS SAH-pool
+  VFS in a dedicated worker. 1,000 notes survive a page reload in Chromium,
+  Firefox and WebKit (S4, ADR-0004); a CI job reruns the check.
 - Web release build via `dx` 0.7.10; brotli budget script and a headless
   Chromium boot check at 360, 900 and 1400 px (S1 web).
 - CI jobs for wasm tests and size, web build/budget, Linux desktop boot under
@@ -29,6 +32,9 @@ Phase: 0 (spikes)
 | Web bundle (release, brotli) | 390,856 bytes (0.37 MiB); wasm about 379 KB |
 | Loro wasm delta (brotli) | 712,105 bytes (0.68 MiB), budget 1.5 MiB |
 | 10,000 edits | 46,000 chars; snapshot 998 B; updates 46,106 B |
+| Browser SQLite (S4) | 1,000 notes across reload: Chromium 760/646 ms, Firefox 339/175 ms, WebKit 188/163 ms (seed/reload) |
+| Browser DB size | 122,880 B for 1,000 notes; rollback journal, one worker connection |
+| SQLite wasm (release) | 1,783,762 B raw; 510,738 B brotli; 679,936 B gzip |
 | Native tests | 17 passed |
 | Loro wasm smoke (Node) | 1 passed |
 | 3-replica convergence | 120 random edits, drops and random sync order |
@@ -50,9 +56,9 @@ Phase: 0 (spikes)
 
 ## Next
 
-1. Run S2/S5 on an Android emulator with `/dev/kvm` (CI or a physical device) to
+1. P1: note model, note metadata, `NoteStore` trait, SQLite native and browser
+   backends, search, history API, Markdown render, and export/import. Start with
+   the 3-replica property test and the 10,000-note search measurement.
+2. S3: after `wrangler login`, deploy the Worker and measure CPU and Argon2.
+3. Run S2/S5 on an Android emulator with `/dev/kvm` (CI or a physical device) to
    close the runtime gap, including Gboard composition.
-2. S4: sqlite-wasm OPFS versus IndexedDB in Chromium, Firefox and Safari.
-3. S3: after `wrangler login`, deploy the Worker and measure CPU and Argon2.
-4. Start P1 once S2 is accepted: note metadata, store trait, search, history
-   API and the full 3-replica property test.

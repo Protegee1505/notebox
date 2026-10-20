@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Notebox S4 - OPFS SQLite probe</title>
+    <style>
+      body {
+        color: #1d1d1f;
+        background: #f7f6f2;
+        font: 15px/1.45 system-ui, sans-serif;
+        margin: 0;
+        padding: 2rem;
+      }
+      h1 {
+        font-size: 1.1rem;
+        margin: 0 0 1rem;
+      }
+      pre {
+        background: #fff;
+        border: 1px solid #ddd9d0;
+        border-radius: 6px;
+        overflow: auto;
+        padding: 1rem;
+        white-space: pre-wrap;
+      }
+      body[data-status="error"] pre {
+        border-color: #b42318;
+        color: #b42318;
+      }
+    </style>
+  </head>
+  <body data-status="running">
+    <main id="app">
+      <h1>Notebox S4: sqlite-wasm over OPFS</h1>
+      <pre id="result">starting worker...</pre>
+    </main>
+    <script type="module">
+      const params = new URLSearchParams(location.search);
+      const reset = params.get("reset") === "1";
+      const result = document.getElementById("result");
+      const worker = new Worker("./worker.js", { type: "module" });
+
+      function finish(payload) {
+        result.textContent = JSON.stringify(payload, null, 2);
+        document.body.dataset.status = payload.ok ? "ok" : "error";
+        window.__s4 = payload;
+      }
+
+      worker.addEventListener("message", (event) => {
+        finish(event.data);
+        if (event.data.ok) {
+          // A reload must not reset the database: drop the query string.
+          history.replaceState({}, "", location.pathname);
+        }
+      });
+      worker.addEventListener("error", (event) => {
+        finish({ ok: false, error: event.message || String(event) });
+      });
+      worker.postMessage({ reset });
+    </script>
+  </body>
+</html>

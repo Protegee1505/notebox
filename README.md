@@ -8,10 +8,10 @@ The full specification and phase plan is [PLAN.md](PLAN.md). Agent rules are in
 
 ## Status
 
-Phase 0 spikes. The note document (Loro 1.16.2), the text-box binding and the
-web/desktop boot checks are implemented. No full app features yet. See
-[docs/STATUS.md](docs/STATUS.md) and [docs/adr/](docs/adr/) for progress and
-decision records.
+Phase 0 spikes. The note document (Loro 1.16.2), the text-box binding, the
+web/desktop boot checks and the browser SQLite store (OPFS in a worker) are
+implemented. No full app features yet. See [docs/STATUS.md](docs/STATUS.md) and
+[docs/adr/](docs/adr/) for progress and decision records.
 
 ## Layout
 
@@ -54,6 +54,21 @@ Run the Loro wasm test in Node after installing the matching
 CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
   cargo test -p notes-core --target wasm32-unknown-unknown --test wasm_smoke
 ```
+
+The S4 browser database probe builds SQLite for wasm (needs clang), then drives
+Chromium, Firefox and WebKit through a reload:
+
+```bash
+# wasm-bindgen must match Cargo.lock (0.2.129 currently)
+WASM_BINDGEN=/path/to/wasm-bindgen \
+PLAYWRIGHT_MODULES=/path/to/node_modules \
+PLAYWRIGHT_BROWSERS_PATH=/path/to/playwright-browsers \
+  node scripts/opfs-spike.mjs
+```
+
+The script uses a persistent browser profile per run because WebKit refuses
+OPFS handles in an ephemeral context. Pass `--browser chromium` to shorten the
+loop and `--skip-build` to reuse the last build.
 
 If `/home` is a small partition, keep build artifacts and caches on the larger
 disk before building; the script is idempotent and also creates the local Cargo
