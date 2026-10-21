@@ -52,7 +52,9 @@ the keyboard opens.
   with nothing in-flow below it, and the phone editor adding then removing a
   tag. The flow is 48 checks; all pass on the fixed build, while the old
   CSS/HTML fails 4 of them (app height 780 px, body scroll height 780 px, a
-  transparent `html` background and no tag field).
+  transparent `html` background and no tag field). Deployed as `c3eeddf`; the
+  live `/version.json` reports that build and the served `index.html` carries
+  the keyboard viewport hint and the `--app-height` script.
 - `notes-app`: **note cards keep their full titles once the list scrolls**.
   The note list is both the scroll container and the grid. When its content was
   taller than the viewport, the implicit grid rows resolved to each card's
