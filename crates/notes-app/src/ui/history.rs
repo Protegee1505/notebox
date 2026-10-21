@@ -75,6 +75,13 @@ pub fn HistoryPanel() -> Element {
             role: "dialog",
             aria_label: "Note history",
             aria_modal: "true",
+            onkeydown: move |event| {
+                if event.key() == Key::Tab {
+                    event.prevent_default();
+                    let backwards = event.modifiers().contains(Modifiers::SHIFT);
+                    crate::ui::focus::trap_tab(".history-panel", backwards);
+                }
+            },
 
             header { class: "history-header",
                 div { class: "history-heading",
@@ -89,11 +96,17 @@ pub fn HistoryPanel() -> Element {
                     if version_count != 1 { "s" }
                 }
                 button {
+                    id: "history-close",
                     class: "icon-button",
                     r#type: "button",
                     aria_label: "Close history",
                     title: "Close history",
                     autofocus: true,
+                    onmounted: move |_| {
+                        let _ = document::eval(
+                            "requestAnimationFrame(() => document.getElementById('history-close')?.focus());",
+                        );
+                    },
                     onclick: {
                         let context = context.clone();
                         move |_| context.close_history()

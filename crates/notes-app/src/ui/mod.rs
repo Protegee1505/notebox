@@ -1,6 +1,7 @@
 //! Screens and reusable pieces of the shell.
 
 pub mod editor;
+pub mod focus;
 pub mod history;
 pub mod icons;
 pub mod login;

@@ -96,8 +96,9 @@ PLAYWRIGHT_MODULES=/path/to/node_modules \
 `web-persist.mjs` restarts Chromium and checks local notes, images and history.
 `web-restore.mjs` exports a backup in one profile and restores it in a fresh
 one, including its version history. `web-a11y.mjs` runs axe-core against every
-main screen in light and dark themes, and checks the note list's arrow keys and
-focus return after closing a panel; install `axe-core` beside Playwright.
+main screen in light and dark themes, and checks the note list's arrow keys,
+that Tab stays inside each dialog, and focus return after closing a panel;
+install `axe-core` beside Playwright.
 `web-perf.mjs` creates a 100 KB note, measures its open time and typing frame
 health, and reopens it after a reload. `web-wipe-login.mjs` starts
 `wrangler dev --local` (install the matching `worker-build` first), wipes a

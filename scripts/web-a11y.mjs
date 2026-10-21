@@ -3,8 +3,8 @@
 //
 // Serves the release web build, drives the real app with Playwright and runs
 // axe-core on every main screen in light and dark themes. It also checks the
-// keyboard path: note-list arrow keys, focus return after closing a panel, and
-// autofocus on Settings and Login.
+// keyboard path: note-list arrow keys, Tab trapped inside each dialog, focus
+// return after closing a panel, and autofocus on Settings, Login and dialogs.
 //
 //   PLAYWRIGHT_MODULES=/path/to/node_modules \
 //   node scripts/web-a11y.mjs [dist-dir]
@@ -133,6 +133,19 @@ async function activeCardIndex(page) {
   });
 }
 
+async function tabStay(page, selector, key = "Tab", presses = 40) {
+  for (let press = 0; press < presses; press += 1) {
+    await page.keyboard.press(key);
+    await page.waitForTimeout(25);
+    const inside = await page.evaluate((target) => {
+      const root = document.querySelector(target);
+      return Boolean(root && root.contains(document.activeElement));
+    }, selector);
+    if (!inside) return { ok: false, press: press + 1 };
+  }
+  return { ok: true, press: presses };
+}
+
 const results = [];
 const errors = [];
 let browser;
@@ -224,6 +237,17 @@ try {
   await page.locator(".history-panel").waitFor({ timeout: 10_000 });
   await settle(page);
   await audit("history, light");
+  const historyTab = await tabStay(page, ".history-panel");
+  const historyBack = await tabStay(page, ".history-panel", "Shift+Tab", 5);
+  results.push(
+    check(
+      "Tab stays inside the history panel",
+      historyTab.ok && historyBack.ok,
+      historyTab.ok && historyBack.ok
+        ? ""
+        : `escaped after ${historyTab.ok ? historyBack.press : historyTab.press} presses`,
+    ),
+  );
   await page.keyboard.press("Escape");
   await page.waitForFunction(
     () => document.activeElement?.id === "app-root",
@@ -250,6 +274,17 @@ try {
   await page.locator("#palette-input").waitFor({ timeout: 10_000 });
   await settle(page);
   await audit("command palette, light");
+  const paletteTab = await tabStay(page, ".palette");
+  const paletteBack = await tabStay(page, ".palette", "Shift+Tab", 5);
+  results.push(
+    check(
+      "Tab stays inside the command palette",
+      paletteTab.ok && paletteBack.ok,
+      paletteTab.ok && paletteBack.ok
+        ? ""
+        : `escaped after ${paletteTab.ok ? paletteBack.press : paletteTab.press} presses`,
+    ),
+  );
   await page.keyboard.press("Escape");
   await page.waitForFunction(
     () => document.activeElement?.id === "app-root",
@@ -273,6 +308,17 @@ try {
   await page.locator(".shortcuts-sheet").waitFor({ timeout: 10_000 });
   await settle(page);
   await audit("keyboard shortcuts, light");
+  const sheetTab = await tabStay(page, ".shortcuts-sheet");
+  const sheetBack = await tabStay(page, ".shortcuts-sheet", "Shift+Tab", 5);
+  results.push(
+    check(
+      "Tab stays inside the shortcut sheet",
+      sheetTab.ok && sheetBack.ok,
+      sheetTab.ok && sheetBack.ok
+        ? ""
+        : `escaped after ${sheetTab.ok ? sheetBack.press : sheetTab.press} presses`,
+    ),
+  );
   await page.keyboard.press("Escape");
   await page.waitForFunction(
     () => document.activeElement?.id === "app-root",

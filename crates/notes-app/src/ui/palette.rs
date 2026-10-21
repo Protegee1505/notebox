@@ -29,7 +29,18 @@ pub fn CommandPalette() -> Element {
                     move |_| context.close_palette()
                 }
             }
-            div { class: "palette", role: "dialog", aria_modal: "true", aria_label: "Command palette",
+            div {
+                class: "palette",
+                role: "dialog",
+                aria_modal: "true",
+                aria_label: "Command palette",
+                onkeydown: move |event| {
+                    if event.key() == Key::Tab {
+                        event.prevent_default();
+                        let backwards = event.modifiers().contains(Modifiers::SHIFT);
+                        crate::ui::focus::trap_tab(".palette", backwards);
+                    }
+                },
                 div { class: "palette-search",
                     Icon { name: "search" }
                     input {

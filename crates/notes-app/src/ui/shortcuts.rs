@@ -50,18 +50,35 @@ pub fn ShortcutSheet() -> Element {
                     move |_| context.state.write_unchecked().shortcuts_open = false
                 }
             }
-            div { class: "shortcuts-sheet", role: "dialog", aria_modal: "true", aria_label: "Keyboard shortcuts",
+            div {
+                class: "shortcuts-sheet",
+                role: "dialog",
+                aria_modal: "true",
+                aria_label: "Keyboard shortcuts",
+                onkeydown: move |event| {
+                    if event.key() == Key::Tab {
+                        event.prevent_default();
+                        let backwards = event.modifiers().contains(Modifiers::SHIFT);
+                        crate::ui::focus::trap_tab(".shortcuts-sheet", backwards);
+                    }
+                },
                 header { class: "sheet-header",
                     div {
                         h2 { "Keyboard shortcuts" }
                         p { "Small moves that keep your hands on the keys." }
                     }
                     button {
+                        id: "shortcuts-close",
                         class: "icon-button",
                         r#type: "button",
                         aria_label: "Close shortcuts",
                         title: "Close",
                         autofocus: true,
+                        onmounted: move |_| {
+                            let _ = document::eval(
+                                "requestAnimationFrame(() => document.getElementById('shortcuts-close')?.focus());",
+                            );
+                        },
                         onclick: {
                             let context = context.clone();
                             move |_| context.state.write_unchecked().shortcuts_open = false

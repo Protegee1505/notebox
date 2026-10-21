@@ -7,7 +7,8 @@ from the command palette, and export format v2 carries each note's Loro history,
 so a fresh device gets the version timeline back. P1 archives still import. A
 wiped browser profile also signs in to a local Worker and pulls its note, tag,
 pin and history back. An accessibility audit of every main screen and theme
-passes, including note-list arrow keys and focus return after closing a panel.
+passes, including note-list arrow keys, Tab trapped inside dialogs and focus
+return after closing a panel.
 A 100 KB note opens in a median under 50 ms in the web UI and typing drops no
 frames; Linux desktop cold start is 555 ms warm. The installer budget now
 measures the `.deb` (9.9 MB), not the self-contained AppImage. The rest of P8 —
@@ -56,20 +57,22 @@ owner action.
   with the same passphrase and pulls the note body, tag, pin and a history
   version labelled as the other device. The pull does not duplicate it. The CI
   web job installs `worker-build` and runs it after the backup round trip.
-- `scripts/web-a11y.mjs`: 27-check P8 accessibility flow. It runs axe-core's
+- `scripts/web-a11y.mjs`: 30-check P8 accessibility flow. It runs axe-core's
   WCAG 2.0, 2.1 and 2.2 A/AA rules on notes, history, the command palette,
   shortcuts, trash, Settings, Login and the mobile layout, each in light and
-  dark themes. The same run checks note-list Arrow/Home/Enter handling, focus
-  return after closing history, the palette or the shortcut sheet, Settings'
-  back button and Login's first field. The CI web job installs `axe-core` and
-  runs it after the backup round trip.
+  dark themes. The same run checks note-list Arrow/Home/Enter handling, keeps
+  Tab and Shift+Tab inside the three modal dialogs, checks focus return after
+  closing history, the palette or the shortcut sheet, Settings' back button and
+  Login's first field. The CI web job installs `axe-core` and runs it after the
+  backup round trip.
 - `notes-app`: accessibility pass. Muted text now meets 4.5:1 on every surface,
   the note list is a labelled listbox with arrow-key focus, the editor is a
   `main` landmark, icon-only file inputs have labels, tag remove and restore
   targets are at least 24 px, and closing an overlay returns focus to the app.
-  Trashed notes are restored from the editor header; the duplicate button
-  inside the selectable card is gone. The theme audit caught a low-opacity
-  palette hint, which no longer dims below AA.
+  History, the palette and the shortcut sheet take focus on open and keep Tab
+  inside themselves. Trashed notes are restored from the editor header; the
+  duplicate button inside the selectable card is gone. The theme audit caught a
+  low-opacity palette hint, which no longer dims below AA.
 - `scripts/web-perf.mjs`: 7-check P8 large-note flow. It creates a note of
   102,415 bytes, saves it, leaves and opens it five times, types 120 characters
   while recording input-to-next-frame time, saves again and reopens it after a
@@ -406,8 +409,8 @@ owner action.
 | Native tests | 215 passed, 1 skipped (the ignored Worker client e2e) |
 | P8 backup restore (Playwright) | 18/18 checks: fresh-profile export/import of a notebook, pinned tagged note and trashed note; text, tag, pin, trash, attachment row, decoded WebP, history peer label and idempotent second import; no console errors |
 | P8 wipe and sign-in (Playwright + local Worker) | 11/11 checks: derived login key, account setup, first sync, OPFS/localStorage/cookie/cache wipe, note gone, sign in, note body/tag/pin, history labelled as the other device, no duplicate, no console errors |
-| P8 accessibility (Playwright + axe-core) | 27/27 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; note-list Arrow/Home/Enter, focus return after overlays, Settings and Login autofocus; no console errors |
-| P8 large note (web UI) | 102,415 B note: open median 11.5–42.9 ms across three runs (one 53 ms sample); 120 typed characters, input-to-frame p95 8.4–9.0 ms, max 10.9–22.0 ms, none over 34 ms; text survives a reload; web cold start 786–1010 ms |
+| P8 accessibility (Playwright + axe-core) | 30/30 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; note-list Arrow/Home/Enter, Tab and Shift+Tab stay inside the three dialogs, focus return after overlays, Settings/Login/dialog autofocus; no console errors |
+| P8 large note (web UI) | 102,415 B note: open median 11.5–42.9 ms across four runs (individual opens up to 57.7 ms); 120 typed characters, input-to-frame p95 8.4–9.0 ms, max 10.9–22.0 ms, none over 34 ms; text survives a reload; web cold start 786–1010 ms |
 | P8 desktop cold start (Linux release) | warm median 555 ms over 5 runs (547–587 ms), budget 600 ms; first run 628 ms with sample seeding, 2,170 ms when WebKit's cache is cold; Xvfb with isolated XDG directories |
 | P8 backup archive | v2 manifest plus one full Loro snapshot per note; v1 archives still read; restore over newer local edits keeps both timelines |
 | Search, 10,000 notes | seeded in 14,534 ms; search 4 ms (budget 100 ms), 1 hit |
@@ -420,7 +423,7 @@ owner action.
 | P7 browser flow (Playwright) | 22/22 checks: login, first sync, last sync, devices, current marker, two-click revoke, manual sync, sign-out, cookie/account clearing, reload, login reopen; no console errors |
 | P7 installable web app (Playwright) | 12/12 functional checks: manifest and icons, empty installability errors, service-worker control, offline note and edit across reloads, second build waits for the banner, Reload replaces the cache, note survives, no `/v1/*` requests, no console errors; 6 layout captures with `NBX_PWA_SCREENSHOTS=1` |
 | P7 PWA install/update layout | 360/900/1400 px, light and dark; banner wraps without horizontal overflow; screenshots `docs/screenshots/p7-pwa-*` |
-| PWA bundle | 10 precached files; 32,626 bytes of manifest, icons, HTML and worker; pre-cache assets from the Dioxus manifest only |
+| PWA bundle | 10 precached files; 32,625 bytes of manifest, icons, HTML and worker; pre-cache assets from the Dioxus manifest only |
 | P7 browser persistence (Playwright) | 13/13 checks: Browser storage label, local-only note and PNG, WebP attachment, second-tab lock, browser restart, text/image/history, page-hide save, no console errors |
 | P7 conflict flow (Playwright) | 13/13 checks with two device contexts plus a third puller: delayed sync, edit during the run, conflict toast, merged original, `conflict`-tagged copy holding the typed text, follow-up sync before the minute timer, copy pulled by another device |
 | Web bundle (release, brotli) | P8 backup restore 1,787,615 B (1.70 MiB), raw 7,501,597 B, limit 3.00 MiB; P7 release build 1,818,284 B (1.73 MiB), raw 7,529,584 B; P7 Dioxus build 1,792,565 B (1.71 MiB), raw 7,489,034 B; P6 manual build 1,955,393 B (1.86 MiB), raw 9,353,273 B; P5 CI was 1,545,831 B |
