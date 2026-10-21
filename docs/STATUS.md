@@ -1,13 +1,16 @@
 # Status
 
 Updated: 2026-10-21
-Phase: 7 (installable web app; installers remain); P1–P6 complete. The running
-app can sign in, restore a session, sync notes and attachments, show status,
-list and revoke devices, and keep a conflict copy. The web build is served by
-the Worker and syncs same-origin; local notes, history and images persist in
-OPFS, with no account needed. The web build is now installable and works
-offline after one visit, and a waiting deployment updates only when the user
-chooses Reload. The installer and release-artifact side of P7 remains.
+Phase: 7 (installable web app and tagged release workflow; first tagged
+release remains); P1–P6 complete. The running app can sign in, restore a
+session, sync notes and attachments, show status, list and revoke devices, and
+keep a conflict copy. The web build is served by the Worker and syncs
+same-origin; local notes, history and images persist in OPFS, with no account
+needed. The web build is now installable and works offline after one visit,
+and a waiting deployment updates only when the user chooses Reload. The
+release workflow builds Linux, Windows, Android and web artifacts when a
+version tag is pushed; it has not run yet because the Android signing key is an
+owner action.
 
 ## Shipped
 
@@ -35,6 +38,18 @@ chooses Reload. The installer and release-artifact side of P7 remains.
   changed. `NBX_PWA_SCREENSHOTS=1` adds six layout captures.
 - `.github/workflows/ci.yml`: the web job builds through `web-build.sh`, runs
   both browser flows, and uploads the release output including the PWA files.
+- `.github/workflows/release.yml`: a `v*` tag whose name matches the
+  `notes-app` version runs the gates and builds Linux `.deb` and `.AppImage`,
+  Windows `.msi`, NSIS setup `.exe` and portable `.exe`, an arm64 Android APK
+  signed from CI secrets, and the installable web `.zip`. It installs and boots
+  the Linux packages and the Windows MSI on clean runners, verifies the APK
+  with `apksigner` and `aapt`, runs the PWA checks, writes `SHA256SUMS` and
+  publishes a GitHub Release. Missing Android signing secrets fail the job
+  before it builds; it never publishes an unsigned or debug APK. The workflow
+  has not run yet.
+- `Dioxus.toml`: bundle identifier, publisher, icon, category, description and
+  Debian runtime dependencies for `dx bundle`. The Android signing block is
+  added only on the CI runner from secrets and restored afterward.
 - `docs/adr/0011-installable-web-app.md` records the precache, update and
   cache-header decisions and the offline/update evidence.
 - `notes-app`: P7 sync wiring. The running app signs in, restores a saved
@@ -262,6 +277,9 @@ chooses Reload. The installer and release-artifact side of P7 remains.
   transport for native builds; the browser transport is in P7. Session
   stores: memory, file (mode 0600, atomic rename) and a null store for the
   cookie-based web client.
+- `Cargo.lock`: `rustls-webpki` 0.103.16 from 0.103.15, fixing
+  RUSTSEC-2026-0382 in the native sync TLS path; ADR-0013 records the
+  lockfile-only update. Dioxus remains pinned at 0.7.10.
 - `notes-sync`: sync engine with one push batch of at most 25 updates, paged
   pulls until the server is drained, an append-only offline queue, pull cursor
   saved with the updates it covers, notebook list as the reserved
@@ -300,8 +318,9 @@ chooses Reload. The installer and release-artifact side of P7 remains.
   is green across all eight jobs, including the client sync step in `server`.
 - ADR-0001, ADR-0002, ADR-0004, ADR-0005, ADR-0006 and ADR-0007 record the
   spike, dependency and encoding decisions; ADR-0008 covers attachments,
-  ADR-0009 sync wiring, ADR-0010 browser persistence and ADR-0011 the
-  installable web app. `docs/API.md` documents the v1 endpoints the P3 engine
+  ADR-0009 sync wiring, ADR-0010 browser persistence, ADR-0011 the installable
+  web app, ADR-0012 tagged release artifacts and ADR-0013 the rustls-webpki
+  security patch. `docs/API.md` documents the v1 endpoints the P3 engine
   implements.
 - Development disk: Cargo target, Rust/Cargo/npm/yarn/dx caches and Playwright
   browsers now live under `/tmp/opencode`; `scripts/relocate-caches.sh` repairs
@@ -323,10 +342,11 @@ chooses Reload. The installer and release-artifact side of P7 remains.
 | P7 browser flow (Playwright) | 22/22 checks: login, first sync, last sync, devices, current marker, two-click revoke, manual sync, sign-out, cookie/account clearing, reload, login reopen; no console errors |
 | P7 installable web app (Playwright) | 12/12 functional checks: manifest and icons, empty installability errors, service-worker control, offline note and edit across reloads, second build waits for the banner, Reload replaces the cache, note survives, no `/v1/*` requests, no console errors; 6 layout captures with `NBX_PWA_SCREENSHOTS=1` |
 | P7 PWA install/update layout | 360/900/1400 px, light and dark; banner wraps without horizontal overflow; screenshots `docs/screenshots/p7-pwa-*` |
-| PWA bundle | 10 precached files; 32,623 bytes of manifest, icons, HTML and worker; pre-cache assets from the Dioxus manifest only |
+| PWA bundle | 10 precached files; 32,615 bytes of manifest, icons, HTML and worker; pre-cache assets from the Dioxus manifest only |
 | P7 browser persistence (Playwright) | 13/13 checks: Browser storage label, local-only note and PNG, WebP attachment, second-tab lock, browser restart, text/image/history, page-hide save, no console errors |
 | P7 conflict flow (Playwright) | 13/13 checks with two device contexts plus a third puller: delayed sync, edit during the run, conflict toast, merged original, `conflict`-tagged copy holding the typed text, follow-up sync before the minute timer, copy pulled by another device |
-| Web bundle (release, brotli) | P7 PWA build 1,818,081 B (1.73 MiB), raw 7,529,317 B, limit 3.00 MiB; P7 Dioxus build 1,792,565 B (1.71 MiB), raw 7,489,034 B; P6 manual build 1,955,393 B (1.86 MiB), raw 9,353,273 B; P5 CI was 1,545,831 B |
+| Web bundle (release, brotli) | P7 release build 1,818,993 B (1.73 MiB), raw 7,529,588 B, limit 3.00 MiB; P7 Dioxus build 1,792,565 B (1.71 MiB), raw 7,489,034 B; P6 manual build 1,955,393 B (1.86 MiB), raw 9,353,273 B; P5 CI was 1,545,831 B |
+| Linux bundles | `notebox_0.1.0_amd64.deb` 9,867,218 B; `notebox_0.1.0_x86_64.AppImage` 89,597,120 B. The `.deb` installed and stayed up for 20 s under Xvfb; the extracted AppImage did the same. Both from `dx bundle` 0.7.10 with the patched lockfile |
 | P5 browser flow (Playwright) | 26/26 checks: autosave, timeline, diff, preview, restore, version retention, trash, confirm, cancel, restore and empty |
 | P5 layout review | 360/900/1400 px, light and dark; no horizontal overflow, no console errors |
 | Restore across stores | older version restored on store B reached store A after one update exchange; both reported the same three version ids |
@@ -365,6 +385,12 @@ chooses Reload. The installer and release-artifact side of P7 remains.
   lacks `aarch64-linux-android-clang`; CI still compiles the four crates with
   NDK r27c. The full Android app has not been built, and the Argon2id timing on
   a mid-range phone is not measured.
+- **Release execution**: `.github/workflows/release.yml` has not run. The
+  Android job needs the owner to create a keystore and set
+  `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`,
+  `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD`. The first `v*` tag will also
+  exercise the clean-runner Linux and Windows install smoke jobs. The desktop
+  update-available notice is not implemented; only the web build has one.
 - **Cold starts**: Linux desktop boot is verified under Xvfb, but the 600 ms
   cold-start number is not measured. Windows is build-only; Android has no
   boot or cold-start number.
@@ -377,13 +403,10 @@ chooses Reload. The installer and release-artifact side of P7 remains.
   against a live Worker.
 ## Next
 
-1. P7 installers and releases: tag-triggered CI for `.msi`/`.exe`, AppImage,
-   `.deb` and a signed `.apk`, size checks, clean-install boot smoke, checksums
-   and GitHub Release upload. Add the desktop update-available notice and a
-   fresh-machine README check. The Android keystore and release secrets are
-   owner actions; the release job must fail rather than publish an unsigned
-   APK. The web half of P7 (installable app, offline cache, update banner) is
-   done.
+1. P7 release execution: create and back up the Android keystore, set the four
+   repository secrets, push a `v0.1.0` tag and fix any clean-runner smoke
+   failure. Then add the desktop update-available notice (the web banner is
+   done) and a fresh-machine README check. Do not publish an unsigned APK.
 2. S3 after `wrangler login`: deploy the Worker with the P7 assets, create the
    account, measure request CPU with `wrangler tail` and write
    `docs/adr/0003-worker-free-tier.md`. Then run the human P5/P6/P7 acceptance

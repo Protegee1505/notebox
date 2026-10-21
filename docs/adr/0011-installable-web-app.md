@@ -65,8 +65,8 @@ version is ready?
   showing the banner, cache replacement on Reload, the note still open after
   the update, no `/v1/*` requests and no page or console errors. With
   `NBX_PWA_SCREENSHOTS=1` it also writes the six layout captures below.
-- Web release after the change: 1,818,081 bytes brotli (1.73 MiB), under the
-  3 MiB budget. The PWA adds 32,623 bytes of manifest, icons, HTML and worker
+- Web release after the change: 1,818,993 bytes brotli (1.73 MiB), under the
+  3 MiB budget. The PWA adds 32,615 bytes of manifest, icons, HTML and worker
   before brotli.
 - Service worker precaches 10 files (index, manifest, three icons and four
   hashed assets) for this build.

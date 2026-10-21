@@ -29,9 +29,10 @@ The web build is also an installable PWA. A manifest, icons and a service worker
 precache the hashed app shell, so it opens offline after the first visit. New
 deployments wait until the user chooses Reload from the update banner; the old
 worker never swaps under an open editor. A remote deploy and the S3 CPU
-measurement wait for `wrangler login`, Android runtime testing still needs an
-emulator, and the installer/release pipeline is the remaining P7 work. See
-[docs/STATUS.md](docs/STATUS.md), [docs/API.md](docs/API.md) and
+measurement wait for `wrangler login`, and Android runtime testing still needs
+an emulator. The tag-triggered release workflow builds Linux, Windows, Android
+and web artifacts; the first release also needs the owner's Android signing
+secrets. See [docs/STATUS.md](docs/STATUS.md), [docs/API.md](docs/API.md) and
 [docs/adr/](docs/adr/).
 
 ## Layout
@@ -219,6 +220,65 @@ After deploying, call `POST /v1/auth/setup` once with the setup token to create
 the account. Then measure CPU time for the S3 spike with `npx wrangler tail` and
 write `docs/adr/0003-*.md`. See [docs/API.md](docs/API.md) for the request
 shapes.
+
+## Releases
+
+Pushing a tag such as `v0.1.0` starts
+[.github/workflows/release.yml](.github/workflows/release.yml). The tag must
+match the `notes-app` version in `Cargo.toml`; the workflow stops before
+building otherwise. It runs the gates on a clean runner, then builds on native
+runners. The workflow has not run on GitHub yet; the first tag is its first
+full exercise:
+
+- Linux x86_64: `.deb` and `.AppImage`
+- Windows x64: `.msi`, an NSIS setup `.exe` and a portable `.exe`
+- Android arm64: a signed release `.apk`
+- Web: an installable PWA `.zip` with the service worker and manifest
+
+The Linux `.deb` and AppImage are installed and booted for 20 seconds on a
+clean runner. Windows installs the `.msi` and boots the installed app for 20
+seconds. Android is verified with `apksigner`, the package name and a
+non-debuggable manifest check; Android runtime testing still needs an emulator
+or phone. The web bundle runs the same PWA checks as CI. Every artifact is
+published on a GitHub Release with `SHA256SUMS`.
+
+```bash
+# Linux
+sudo apt install ./notebox_0.1.0_amd64.deb
+./notebox_0.1.0_x86_64.AppImage
+# Windows: run the .msi or *-setup.exe, or the portable .exe
+# Android: sideload the signed .apk
+# Web: deploy the unzipped public directory with wrangler
+sha256sum -c SHA256SUMS
+```
+
+### Android signing
+
+The release job refuses to publish an APK unless all four signing secrets are
+present. Create the keystore once and keep it and its passwords backed up:
+losing the key prevents in-place updates.
+
+```bash
+keytool -genkeypair -v \
+  -keystore notebox-release.jks \
+  -alias notebox \
+  -keyalg RSA -keysize 4096 -validity 10000
+# Use a hex password (no quotes or backslashes) because Dioxus writes it into
+# the generated Gradle file.
+base64 -w0 notebox-release.jks > notebox-release.jks.b64
+
+gh secret set ANDROID_KEYSTORE_BASE64 < notebox-release.jks.b64
+gh secret set ANDROID_KEYSTORE_PASSWORD
+gh secret set ANDROID_KEY_ALIAS
+gh secret set ANDROID_KEY_PASSWORD
+
+git tag -a v0.1.0 -m "Notebox 0.1.0"
+git push origin v0.1.0
+```
+
+Windows installers are not code-signed, so SmartScreen may warn; there is no
+paid certificate in this project. The Worker deploy remains manual: the release
+web `.zip` is a tested artifact, not an automatic deploy.
 
 ## Free-tier rule
 
