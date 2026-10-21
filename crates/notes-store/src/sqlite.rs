@@ -342,7 +342,8 @@ impl NoteStore for SqliteStore {
             created_at: new_note.created_at,
             ..NoteMeta::default()
         };
-        let note = Note::empty(NoteId::new());
+        // `NoteId::default()` is a fresh random id, not a nil UUID.
+        let note = Note::empty(new_note.id.unwrap_or_default());
         note.set_peer_id(self.peer_id)?;
         note.set_meta(&meta)?;
         if !new_note.text.is_empty() {
@@ -689,13 +690,18 @@ impl NoteStore for SqliteStore {
         notebook_rows(&conn)
     }
 
-    fn create_notebook(&self, name: &str, at: i64) -> Result<Notebook, StoreError> {
+    fn create_notebook_with_id(
+        &self,
+        id: NotebookId,
+        name: &str,
+        at: i64,
+    ) -> Result<Notebook, StoreError> {
         let name = name.trim();
         if name.is_empty() {
             return Err(StoreError::Invalid("notebook name is empty".to_string()));
         }
         let notebook = Notebook {
-            id: NotebookId::new(),
+            id,
             name: name.to_string(),
             created_at: at,
         };

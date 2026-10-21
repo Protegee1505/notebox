@@ -20,6 +20,7 @@ use notes_store::{
     TagCount,
 };
 use notes_sync::BoxedTransport;
+use uuid::Uuid;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::closure::Closure;
 #[cfg(target_arch = "wasm32")]
@@ -638,13 +639,24 @@ impl AppContext {
     }
 
     /// A small welcome set, only on a brand-new database.
+    ///
+    /// The ids are fixed so two fresh devices merge their welcome content
+    /// instead of adding a duplicate set to the account.
     fn seed(&self, store: &dyn NoteStore) {
         let timestamp = now();
         let personal = store
-            .create_notebook("Personal", timestamp - 86_400 * 3)
+            .create_notebook_with_id(
+                NotebookId::from_uuid(Uuid::from_u128(0xaaaa_aaaa_aaaa_4aaa_8aaa_aaaa_aaaa_aaaa)),
+                "Personal",
+                timestamp - 86_400 * 3,
+            )
             .ok();
         let projects = store
-            .create_notebook("Projects", timestamp - 86_400 * 2)
+            .create_notebook_with_id(
+                NotebookId::from_uuid(Uuid::from_u128(0xbbbb_bbbb_bbbb_4bbb_8bbb_bbbb_bbbb_bbbb)),
+                "Projects",
+                timestamp - 86_400 * 2,
+            )
             .ok();
 
         let welcome = "Welcome to Notebox\n\n\
@@ -675,6 +687,9 @@ impl AppContext {
             A slow Saturday, no alarm.";
 
         if let Ok(note) = store.create_note(NewNote {
+            id: Some(NoteId::from_uuid(Uuid::from_u128(
+                0x1111_1111_1111_4111_8111_1111_1111_1111,
+            ))),
             text: welcome.to_string(),
             created_at: timestamp - 3_600,
             notebook_id: projects.as_ref().map(|notebook| notebook.id),
@@ -688,6 +703,9 @@ impl AppContext {
         }
 
         if let Ok(note) = store.create_note(NewNote {
+            id: Some(NoteId::from_uuid(Uuid::from_u128(
+                0x2222_2222_2222_4222_8222_2222_2222_2222,
+            ))),
             text: reading.to_string(),
             created_at: timestamp - 86_400,
             notebook_id: personal.as_ref().map(|notebook| notebook.id),
@@ -700,6 +718,9 @@ impl AppContext {
         }
 
         if let Ok(note) = store.create_note(NewNote {
+            id: Some(NoteId::from_uuid(Uuid::from_u128(
+                0x3333_3333_3333_4333_8333_3333_3333_3333,
+            ))),
             text: weekend.to_string(),
             created_at: timestamp - 3_600 * 8,
             notebook_id: personal.as_ref().map(|notebook| notebook.id),
@@ -889,6 +910,7 @@ impl AppContext {
             (state.notebook, state.tag.clone())
         };
         match store.create_note(NewNote {
+            id: None,
             text: String::new(),
             created_at: now(),
             notebook_id: notebook,
@@ -2563,6 +2585,7 @@ impl AppContext {
             tags.push("conflict".to_string());
         }
         let created = store.create_note(NewNote {
+            id: None,
             text: body,
             created_at: at,
             notebook_id: meta.as_ref().and_then(|summary| summary.notebook_id),

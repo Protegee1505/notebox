@@ -19,12 +19,41 @@ devices, and keep a conflict copy. The web build is served by the Worker and
 syncs same-origin; local notes, history and images persist in OPFS, with no
 account needed. The web build is now installable and works offline after one
 visit, and a waiting deployment updates only when the user chooses Reload. The
-release workflow builds Linux, Windows, Android and web artifacts when a
-version tag is pushed; it has not run yet because the Android signing key is an
-owner action.
+release workflow builds Linux, Windows and web artifacts when a version tag is
+pushed, with Android opt-in through `RELEASE_ANDROID=true`; it has not run yet.
+A native build can bake in the owner's Worker URL with `NBX_SERVER_URL`, while
+the login screen still offers offline use and a different server.
 
 ## Shipped
 
+- `notes-app`: personal-server login. A native build reads `NBX_SERVER_URL` at
+  compile time and pre-fills the Worker URL; the login screen keeps it editable,
+  shows "Use the built-in server" after an edit, and explains when no URL is
+  baked in. The web login shows the serving origin read-only because sync is
+  same-origin. "Try it offline — no account" is the secondary action on every
+  build, so local notes, history and images need no Worker.
+- `notes-sync`: `scripts/create-account` and the
+  `create_account` example create the single account on a local or deployed
+  Worker. The passphrase and setup token are read without echo, the passphrase
+  must be at least 12 characters, setup errors are returned as typed sync
+  errors, the temporary setup device is revoked, and the output tells the owner
+  to delete `SETUP_TOKEN`.
+- `notes-store`: stable welcome ids. `NewNote` accepts an optional fixed
+  `NoteId`, and `create_notebook_with_id` creates a notebook with a supplied
+  id. The three welcome notes and two notebooks use fixed UUIDs, so a fresh
+  second device merges them with the account's copies instead of adding a new
+  set. Normal note and notebook creation still uses a random id.
+- `notes-server`: an unknown username now returns `invalid_credentials`
+  without incrementing the account's failed-login counter or writing to D1.
+  Only a wrong key for the real username counts toward the 1–300 s backoff, so
+  a stranger cannot lock the owner out by trying random usernames against a
+  public personal Worker. The server test covers the counter and a successful
+  login immediately after.
+- `.github/workflows/release.yml`: Linux, Windows (and the opt-in Android)
+  bundles receive the `NBX_SERVER_URL` repository variable. The Android job is
+  skipped unless `RELEASE_ANDROID=true`, and `publish` uses `always()` with a
+  failure guard so a skipped Android job no longer blocks a Windows/Linux/web
+  release. Release notes list Android only when an APK is present.
 - `notes-app`: restore from backup. Settings and the command palette open a zip
   picker, validate the archive before changing anything, and show note,
   notebook and attachment counts plus whether the archive carries history.
@@ -115,13 +144,13 @@ owner action.
   both browser flows, and uploads the release output including the PWA files.
 - `.github/workflows/release.yml`: a `v*` tag whose name matches the
   `notes-app` version runs the gates and builds Linux `.deb` and `.AppImage`,
-  Windows `.msi`, NSIS setup `.exe` and portable `.exe`, an arm64 Android APK
-  signed from CI secrets, and the installable web `.zip`. It installs and boots
-  the Linux packages and the Windows MSI on clean runners, verifies the APK
-  with `apksigner` and `aapt`, runs the PWA checks, writes `SHA256SUMS` and
-  publishes a GitHub Release. Missing Android signing secrets fail the job
-  before it builds; it never publishes an unsigned or debug APK. The workflow
-  has not run yet.
+  Windows `.msi`, NSIS setup `.exe` and portable `.exe`, and the installable web
+  `.zip`; the arm64 Android APK is built only with `RELEASE_ANDROID=true`. It
+  installs and boots the Linux packages and the Windows MSI on clean runners,
+  verifies an enabled APK with `apksigner` and `aapt`, runs the PWA checks,
+  writes `SHA256SUMS` and publishes a GitHub Release. When Android is enabled,
+  missing signing secrets fail the job before it builds; it never publishes an
+  unsigned or debug APK. The workflow has not run yet.
 - `Dioxus.toml`: bundle identifier, publisher, icon, category, description and
   Debian runtime dependencies for `dx bundle`. The Android signing block is
   added only on the CI runner from secrets and restored afterward.
@@ -395,8 +424,9 @@ owner action.
   spike, dependency and encoding decisions; ADR-0008 covers attachments,
   ADR-0009 sync wiring, ADR-0010 browser persistence, ADR-0011 the installable
   web app, ADR-0012 tagged release artifacts, ADR-0013 the rustls-webpki
-  security patch and ADR-0014 backup history. `docs/API.md` documents the v1
-  endpoints the P3 engine implements.
+  security patch, ADR-0014 backup history, ADR-0015 the installer budget and
+  ADR-0016 the personal-server/offline-first release. `docs/API.md` documents
+  the v1 endpoints the P3 engine implements.
 - Development disk: Cargo target, Rust/Cargo/npm/yarn/dx caches and Playwright
   browsers now live under `/tmp/opencode`; `scripts/relocate-caches.sh` repairs
   the layout and `scripts/budget-check` fails below 512 MiB free on `/home`.
@@ -406,7 +436,7 @@ owner action.
 
 | Check | Result |
 | --- | --- |
-| Native tests | 215 passed, 1 skipped (the ignored Worker client e2e) |
+| Native tests | 217 passed, 1 skipped (the ignored Worker client e2e) |
 | P8 backup restore (Playwright) | 18/18 checks: fresh-profile export/import of a notebook, pinned tagged note and trashed note; text, tag, pin, trash, attachment row, decoded WebP, history peer label and idempotent second import; no console errors |
 | P8 wipe and sign-in (Playwright + local Worker) | 11/11 checks: derived login key, account setup, first sync, OPFS/localStorage/cookie/cache wipe, note gone, sign in, note body/tag/pin, history labelled as the other device, no duplicate, no console errors |
 | P8 accessibility (Playwright + axe-core) | 30/30 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; note-list Arrow/Home/Enter, Tab and Shift+Tab stay inside the three dialogs, focus return after overlays, Settings/Login/dialog autofocus; no console errors |
@@ -466,19 +496,20 @@ owner action.
   lacks `aarch64-linux-android-clang`; CI still compiles the four crates with
   NDK r27c. The full Android app has not been built, and the Argon2id timing on
   a mid-range phone is not measured.
-- **Release execution**: `.github/workflows/release.yml` has not run. The
-  Android job needs the owner to create a keystore and set
-  `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`,
-  `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD`. The first `v*` tag will also
-  exercise the clean-runner Linux and Windows install smoke jobs. The desktop
-  update-available notice is not implemented; only the web build has one.
+- **Release execution**: `.github/workflows/release.yml` has not run. Android
+  is now opt-in through `RELEASE_ANDROID=true`; enabling it needs the owner to
+  create a keystore and set `ANDROID_KEYSTORE_BASE64`,
+  `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS` and
+  `ANDROID_KEY_PASSWORD`. The first `v*` tag will also exercise the clean-runner
+  Linux and Windows install smoke jobs. The desktop update-available notice is
+  not implemented; only the web build has one.
 - **P8 account drill**: the wipe, sign-in and history pull now passes against
   `wrangler dev --local`, including an OPFS and session wipe. The same drill
   against a deployed Worker still waits on a Cloudflare login and deploy. A
-  wiped device seeds the sample notes before sign-in, so the account's original
-  sample notes come back alongside the new local ones; user notes are not lost
-  or duplicated. Decide whether to defer seeding or give sample content stable
-  ids.
+  wiped device still seeds the welcome set before sign-in, but the fixed sample
+  ids make it merge with the account's copies instead of adding duplicates. If
+  the account had trashed those samples, a fresh device can still push their
+  metadata again; decide whether to seed only after offline mode is chosen.
 - **Cold starts and large notes**: Linux desktop cold start is 555 ms warm
   (median of five), under the 600 ms budget; the first run seeds sample notes
   and takes 628 ms, or 2,170 ms with a cold WebKit cache. A 102,415-byte note
@@ -501,15 +532,16 @@ owner action.
    wipe/sign-in/history drill. Close P8 with the same drill against a deployed
    Worker once one exists. Repeat the open-note and cold-start measurements on
    Windows and Android when those runtimes are available.
-2. P8 sample-content polish. A wiped device seeds welcome notes before sign-in,
-   so the account's original welcome notes also arrive. Either defer seeding
-   until sign-in is declined, or give the sample notes and notebooks stable ids
-   so the pull updates them instead of adding copies. Do not delete sample
-   notes that a person has edited.
-3. P7 release execution: create and back up the Android keystore, set the four
-   repository secrets, push a `v0.1.0` tag and fix any clean-runner smoke
-   failure. Then add the desktop update-available notice (the web banner is
-   done) and a fresh-machine README check. Do not publish an unsigned APK.
+2. Personal release execution: deploy the Worker, create the account with
+   `scripts/create-account`, delete `SETUP_TOKEN`, set the `NBX_SERVER_URL`
+   repository variable and push a `v0.1.0` tag. Verify login and sync on a
+   Windows install, a Linux install and the deployed web app. The welcome-note
+   merge and the unknown-username backoff change need this live check.
+3. P7 release execution for Android when wanted: create and back up the
+   keystore, set the four repository secrets, set `RELEASE_ANDROID=true`, and
+   publish a tagged release. Then add the desktop update-available notice (the
+   web banner is done) and a fresh-machine README check. Do not publish an
+   unsigned APK.
 4. S3 after `wrangler login`: deploy the Worker with the P7 assets, create the
    account, measure request CPU with `wrangler tail` and write
    `docs/adr/0003-worker-free-tier.md`. Then run the human P5/P6/P7 acceptance

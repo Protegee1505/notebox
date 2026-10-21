@@ -1,6 +1,6 @@
 # ADR-0012: Tagged release artifacts
 
-- **Status:** accepted
+- **Status:** accepted; Android gating amended by ADR-0016
 - **Date:** 2026-10-21
 - **Phase:** P7 release packaging
 - **Owner:** release
@@ -69,9 +69,11 @@ keys in the repository?
   installed `.deb` and the extracted AppImage each stayed up for 20 seconds
   under Xvfb. The web release built with `NBX_BUILD_ID=v0.1.0` and passed the
   3 MiB budget at 1,818,284 B brotli.
-- The workflow itself has not run on GitHub yet. The first tag needs the
-  owner's Android keystore secrets; until then the Android job fails by design.
-  No GitHub release artifact was published from this workstation.
+- The workflow itself has not run on GitHub yet. At the time of this record the
+  first tag needed the owner's Android keystore secrets. ADR-0016 later made the
+  Android job opt-in with `RELEASE_ANDROID=true`, so the Windows/Linux/web
+  release no longer waits on them. No GitHub release artifact was published
+  from this workstation.
 
 ## Consequences
 

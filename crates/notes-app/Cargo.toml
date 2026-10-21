@@ -16,6 +16,7 @@ serde.workspace = true
 serde_json.workspace = true
 base64.workspace = true
 thiserror.workspace = true
+uuid.workspace = true
 image.workspace = true
 webp-rust.workspace = true
 # A portable delay for the autosave loop: setTimeout in the browser and a

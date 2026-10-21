@@ -105,6 +105,7 @@ jobs:
         env:
           NBX_BUILD_ID: ${{ github.ref_name }}
           NBX_GIT_SHA: ${{ github.sha }}
+          NBX_SERVER_URL: ${{ vars.NBX_SERVER_URL }}
         run: |
           dx bundle -p notes-app --platform desktop --release --features desktop \
             --package-types deb --package-types appimage
@@ -222,6 +223,7 @@ jobs:
         env:
           NBX_BUILD_ID: ${{ github.ref_name }}
           NBX_GIT_SHA: ${{ github.sha }}
+          NBX_SERVER_URL: ${{ vars.NBX_SERVER_URL }}
         run: |
           dx bundle -p notes-app --platform desktop --release --features desktop `
             --package-types msi --package-types nsis
@@ -299,6 +301,9 @@ jobs:
   android-bundle:
     name: Signed Android APK
     needs: gates
+    # Android is not part of the initial Windows/Linux/web release. Set the
+    # repository variable RELEASE_ANDROID=true once the signing secrets exist.
+    if: vars.RELEASE_ANDROID == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -398,6 +403,7 @@ jobs:
         env:
           NBX_BUILD_ID: ${{ github.ref_name }}
           NBX_GIT_SHA: ${{ github.sha }}
+          NBX_SERVER_URL: ${{ vars.NBX_SERVER_URL }}
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
           ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
         run: |
@@ -461,6 +467,7 @@ jobs:
         env:
           NBX_BUILD_ID: ${{ needs.gates.outputs.version }}
           NBX_GIT_SHA: ${{ github.sha }}
+          NBX_SERVER_URL: ${{ vars.NBX_SERVER_URL }}
         run: ./scripts/web-build.sh
 
       - name: Brotli first-load budget
@@ -499,6 +506,9 @@ jobs:
 
   publish:
     name: Publish the GitHub release
+    # Android may be skipped by design; always() keeps the Windows/Linux/web
+    # release moving while failure() still stops it if a needed job broke.
+    if: always() && !failure() && !cancelled()
     needs:
       - gates
       - linux-bundle
@@ -534,14 +544,20 @@ jobs:
           (cd release-assets && find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' \
             | sort | xargs sha256sum > SHA256SUMS)
           mapfile -t assets < <(find release-assets -type f -print | sort)
-          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
-            --verify-tag \
-            --title "Notebox $VERSION" \
-            --notes "Notebox $VERSION.
+          notes="Notebox $VERSION.
 
           * Linux x86_64: .deb and .AppImage
           * Windows x64: .msi installer, NSIS setup .exe and portable .exe
-          * Android arm64: signed release APK
           * Web: installable PWA bundle for the Worker
+          "
+          if find release-assets -maxdepth 1 -type f -name '*.apk' -print -quit | grep -q .; then
+            notes="${notes}
+          * Android arm64: signed release APK"
+          fi
+          notes="${notes}
 
-          Verify downloads against SHA256SUMS. Windows installers are not code-signed. The Android APK is signed by the release key and is not a debug build."
+          Verify downloads against SHA256SUMS. Windows installers are not code-signed."
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+            --verify-tag \
+            --title "Notebox $VERSION" \
+            --notes "$notes"

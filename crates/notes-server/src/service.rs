@@ -130,12 +130,17 @@ impl<S: Storage> Server<S> {
         }
 
         let (username, login_key, device_name) = validate_auth(request)?;
-        let username_matches = constant_time_eq(username.as_bytes(), account.username.as_bytes());
+        // Only a wrong key for the real username counts toward the backoff.
+        // A random username must not let a stranger lock the owner out of a
+        // public deployment, and rejecting it costs no D1 write.
+        if !constant_time_eq(username.as_bytes(), account.username.as_bytes()) {
+            return Err(ServerError::InvalidCredentials);
+        }
         let key_matches = constant_time_eq(
             sha256_hex(login_key.as_bytes()).as_bytes(),
             account.auth_hash.as_bytes(),
         );
-        if !(username_matches && key_matches) {
+        if !key_matches {
             let failures = account.failed_logins.saturating_add(1);
             let delay = backoff_seconds(failures);
             self.storage

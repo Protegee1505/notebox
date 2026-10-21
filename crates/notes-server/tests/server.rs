@@ -124,6 +124,26 @@ fn a_bad_login_key_waits_before_the_next_attempt() {
 }
 
 #[test]
+fn an_unknown_username_does_not_count_as_a_failed_login() {
+    let server = server();
+    pollster::block_on(server.setup(Some("setup-secret"), &request("alice", "laptop", 7), 1_000))
+        .expect("setup");
+
+    assert_eq!(
+        pollster::block_on(server.login(&request("bob", "tablet", 8), 2_000)).unwrap_err(),
+        ServerError::InvalidCredentials
+    );
+    let account = pollster::block_on(server.storage().account())
+        .expect("account")
+        .expect("some");
+    assert_eq!(account.failed_logins, 0);
+    assert_eq!(account.blocked_until, 0);
+
+    // The real account is not blocked by a stranger's username.
+    pollster::block_on(server.login(&request("alice", "tablet", 7), 2_000)).expect("login");
+}
+
+#[test]
 fn repeated_failures_back_off_exponentially() {
     let server = server();
     pollster::block_on(server.setup(Some("setup-secret"), &request("alice", "laptop", 7), 1_000))

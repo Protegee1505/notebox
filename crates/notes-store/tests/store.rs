@@ -17,6 +17,31 @@ fn create(store: &SqliteStore, text: &str, at: i64) -> Note {
 }
 
 #[test]
+fn fixed_note_and_notebook_ids_are_honoured() {
+    let store = store();
+    let notebook_id =
+        NotebookId::parse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").expect("static notebook id");
+    let note_id = NoteId::parse("11111111-1111-4111-8111-111111111111").expect("static note id");
+
+    let notebook = store
+        .create_notebook_with_id(notebook_id, "Personal", 1_000)
+        .expect("notebook");
+    assert_eq!(notebook.id, notebook_id);
+
+    let note = store
+        .create_note(NewNote {
+            notebook_id: Some(notebook.id),
+            ..NewNote::new("Welcome", 1_000).with_id(note_id)
+        })
+        .expect("note");
+    assert_eq!(note.id(), note_id);
+    assert_eq!(
+        store.note_summary(&note_id).expect("summary").notebook_id,
+        Some(notebook_id)
+    );
+}
+
+#[test]
 fn a_note_round_trips_through_the_store() {
     let store = store();
     let note = create(&store, "# Hello\n\nbody text", 1_000);

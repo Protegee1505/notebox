@@ -42,4 +42,5 @@ js-sys = "0.3"
 [dev-dependencies]
 notes-server.workspace = true
 pollster = "0.4"
+rpassword.workspace = true
 tempfile.workspace = true

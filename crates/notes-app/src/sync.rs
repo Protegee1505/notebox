@@ -421,10 +421,36 @@ pub fn default_server() -> String {
         .unwrap_or_default()
 }
 
-/// Native builds have no origin to guess from.
+/// A server compiled into a native build with `NBX_SERVER_URL`.
+///
+/// The value is an address, not a secret: it is visible in the binary and on
+/// the login screen. A personal build sets it so the owner only has to enter a
+/// username and passphrase; a build without the variable starts empty.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn baked_server() -> Option<&'static str> {
+    option_env!("NBX_SERVER_URL")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+/// The web build can only sync to the Worker that served it.
+#[cfg(target_arch = "wasm32")]
+pub fn baked_server() -> Option<&'static str> {
+    None
+}
+
+/// Native builds use the compiled-in server when one exists.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn default_server() -> String {
-    String::new()
+    baked_server()
+        .unwrap_or_default()
+        .trim_end_matches('/')
+        .to_string()
+}
+
+/// Whether this build has a server compiled in.
+pub fn has_baked_server() -> bool {
+    baked_server().is_some()
 }
 
 /// A useful default for the device list.

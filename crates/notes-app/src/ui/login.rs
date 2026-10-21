@@ -16,6 +16,8 @@ pub fn LoginScreen() -> Element {
     let error = state.login.error.clone();
     let connecting = state.sync.status.busy();
     drop(state);
+    let default_server = crate::sync::default_server();
+    let server_baked = crate::sync::has_baked_server();
     let local_note = if cfg!(target_arch = "wasm32") {
         "Signed in, this tab keeps a working copy and syncs when it can. A reload pulls your notes back from your Worker."
     } else {
@@ -77,7 +79,7 @@ pub fn LoginScreen() -> Element {
                 div { class: "login-form-wrap",
                     div { class: "login-heading",
                         h2 { "Sign in" }
-                        p { "Use the username and passphrase you chose when you set up your Worker." }
+                        p { "Sign in to sync, or try it offline first — no account needed." }
                     }
                     if let Some(message) = error {
                         div { class: "form-error", role: "alert",
@@ -133,19 +135,52 @@ pub fn LoginScreen() -> Element {
                                 },
                             }
                         }
-                        label { class: "field",
-                            span { "Worker URL" }
-                            input {
-                                class: "input",
-                                r#type: "url",
-                                autocomplete: "url",
-                                placeholder: "https://notebox.you.workers.dev",
-                                value: "{server}",
-                                disabled: connecting,
-                                oninput: {
-                                    let context = context.clone();
-                                    move |event| context.state.write_unchecked().login.server = event.value()
-                                },
+                        if cfg!(target_arch = "wasm32") {
+                            div { class: "field",
+                                span { "Worker URL" }
+                                code { class: "server-value", "{server}" }
+                                p { class: "field-hint",
+                                    "This web app syncs to the Worker that serves it. To use your own server, deploy your own copy of the web app."
+                                }
+                            }
+                        } else {
+                            div { class: "field",
+                                label { class: "field-label", r#for: "login-server", "Worker URL" }
+                                input {
+                                    id: "login-server",
+                                    class: "input",
+                                    r#type: "url",
+                                    autocomplete: "url",
+                                    placeholder: "https://notebox.you.workers.dev",
+                                    value: "{server}",
+                                    disabled: connecting,
+                                    oninput: {
+                                        let context = context.clone();
+                                        move |event| context.state.write_unchecked().login.server = event.value()
+                                    },
+                                }
+                                if server_baked && server != default_server {
+                                    button {
+                                        class: "text-button server-reset",
+                                        r#type: "button",
+                                        disabled: connecting,
+                                        onclick: {
+                                            let context = context.clone();
+                                            let default_server = default_server.clone();
+                                            move |_| {
+                                                context.state.write_unchecked().login.server = default_server.clone();
+                                            }
+                                        },
+                                        "Use the built-in server"
+                                    }
+                                }
+                                p { class: "field-hint",
+                                    if server_baked {
+                                        "This build is pre-filled with its server. Replace it to use your own Worker."
+                                    } else {
+                                        "Enter the Worker URL you deployed, or continue offline below."
+                                    }
+                                }
                             }
                         }
                         label { class: "field",
@@ -179,7 +214,7 @@ pub fn LoginScreen() -> Element {
                             let context = context.clone();
                             move |_| context.continue_local()
                         },
-                        "Continue on this device"
+                        "Try it offline — no account"
                     }
                     p { class: "login-note", "{local_note}" }
                 }

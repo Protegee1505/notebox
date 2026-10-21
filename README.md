@@ -37,10 +37,36 @@ and Linux cold-start budgets pass, and a local-Worker wipe/sign-in drill returns
 every note and its history; the same drill against a deployed Worker is the
 last P8 step. A remote deploy and the S3 CPU
 measurement wait for `wrangler login`, and Android runtime testing still needs
-an emulator. The tag-triggered release workflow builds Linux, Windows, Android
-and web artifacts; the first release also needs the owner's Android signing
-secrets. See [docs/STATUS.md](docs/STATUS.md), [docs/API.md](docs/API.md) and
+an emulator. The tag-triggered release workflow builds Linux, Windows and web
+artifacts; the Android job stays off until you enable it with
+`RELEASE_ANDROID=true` and its signing secrets exist. See
+[docs/STATUS.md](docs/STATUS.md), [docs/API.md](docs/API.md) and
 [docs/adr/](docs/adr/).
+
+## Personal server and offline use
+
+A native build can carry one Worker URL so the owner only has to type a username
+and passphrase. Set `NBX_SERVER_URL` when building:
+
+```bash
+NBX_SERVER_URL="https://notebox.example.workers.dev" \
+  cargo run -p notes-app --features desktop
+```
+
+The release workflow passes the repository variable `NBX_SERVER_URL` to the
+Linux and Windows bundles. Set it before tagging to make the installers open
+with that server already filled in. The URL is visible in the binary and on the
+login screen; it is an address, not a secret. Leave the variable unset for a
+build that starts blank. The web build always uses the origin that serves it.
+
+The login screen keeps the server field editable on desktop, with a "Use the
+built-in server" action, and shows the fixed origin on web. "Try it offline — no
+account" is always available: notes, history, images and export work locally
+with no Worker. To sync with your own server, deploy your own Worker, create
+its single account, and enter its URL on desktop. On web, deploy your own copy
+of the app instead; sync is same-origin by design and there is no CORS surface.
+There is no in-app sign-up: only the one account created with the setup token
+can sign in.
 
 ## Layout
 
@@ -117,7 +143,9 @@ The Worker serves the built web app from the same origin as sync. To install
 it, open the deployed URL in a browser and use its "Install" action. The first
 visit caches the app shell; later visits work without a network connection,
 including notes stored in OPFS. Sync requests are never cached: when offline,
-the app shows the local status and retries when the network returns.
+the app shows the local status and retries when the network returns. The web
+login screen shows the serving origin and does not offer a different server, so
+self-hosters deploy their own copy of the web app on their own Worker.
 
 When a new deployment is published, the old service worker keeps serving the
 current build. The next check happens on load or when the tab becomes visible;
@@ -203,6 +231,17 @@ Worker: open the build the Worker serves instead, or use the desktop app.
 Restart `wrangler dev` after every `dx build`: Wrangler caches the asset
 manifest, so a running dev server can 404 the newly hashed files.
 
+Create the local account once, while the dev setup token is present:
+
+```bash
+NBX_SETUP_TOKEN=local-dev-token ./scripts/create-account \
+  --server http://127.0.0.1:8787 --username alice
+```
+
+The script asks for the passphrase twice and never prints it. It removes its
+temporary setup device, so the account starts clean. There is no in-app sign-up;
+this is also the command for a deployed self-hosted Worker.
+
 Run the full HTTP test, including setup, login backoff, sync pagination,
 attachment chunks and device revocation, against a throwaway local Worker:
 
@@ -244,10 +283,26 @@ open the deployed URL itself rather than a separate static host. Run
 `web-build.sh` before every deploy: it writes the service worker, manifest,
 icons and `_headers` that make the app installable and offline-ready.
 
-After deploying, call `POST /v1/auth/setup` once with the setup token to create
-the account. Then measure CPU time for the S3 spike with `npx wrangler tail` and
-write `docs/adr/0003-*.md`. See [docs/API.md](docs/API.md) for the request
-shapes.
+After deploying, create the single account while `SETUP_TOKEN` still exists:
+
+```bash
+NBX_SETUP_TOKEN="the value you just set" ./scripts/create-account \
+  --server https://notebox.<your-subdomain>.workers.dev --username alice
+npx wrangler secret delete SETUP_TOKEN
+```
+
+The second command closes setup permanently: `POST /v1/auth/setup` then answers
+`503`, and only the existing account can sign in. There is no in-app sign-up
+and no second account. For personal installers, set the URL as a repository
+variable before tagging:
+
+```bash
+gh variable set NBX_SERVER_URL \
+  --body "https://notebox.<your-subdomain>.workers.dev"
+```
+
+Then measure CPU time for the S3 spike with `npx wrangler tail` and write
+`docs/adr/0003-*.md`. See [docs/API.md](docs/API.md) for the request shapes.
 
 ## Releases
 
@@ -260,15 +315,20 @@ full exercise:
 
 - Linux x86_64: `.deb` and `.AppImage`
 - Windows x64: `.msi`, an NSIS setup `.exe` and a portable `.exe`
-- Android arm64: a signed release `.apk`
 - Web: an installable PWA `.zip` with the service worker and manifest
+- Android arm64: a signed release `.apk`, only when `RELEASE_ANDROID=true`
+
+Set `NBX_SERVER_URL` as a repository variable before tagging to pre-fill the
+server in the Linux and Windows builds. Without it, the login screen starts
+with an empty URL and the app works offline. The Android job is skipped by
+default, so a Windows/Linux/web release does not need the signing key.
 
 The Linux `.deb` and AppImage are installed and booted for 20 seconds on a
 clean runner. Windows installs the `.msi` and boots the installed app for 20
-seconds. Android is verified with `apksigner`, the package name and a
-non-debuggable manifest check; Android runtime testing still needs an emulator
-or phone. The web bundle runs the same PWA checks as CI. Every artifact is
-published on a GitHub Release with `SHA256SUMS`.
+seconds. When Android is enabled, the APK is verified with `apksigner`, the
+package name and a non-debuggable manifest check; Android runtime testing still
+needs an emulator or phone. The web bundle runs the same PWA checks as CI. Every
+artifact is published on a GitHub Release with `SHA256SUMS`.
 
 ```bash
 # Linux
@@ -286,9 +346,10 @@ is larger (89.6 MB) and is outside that budget by ADR-0015.
 
 ### Android signing
 
-The release job refuses to publish an APK unless all four signing secrets are
-present. Create the keystore once and keep it and its passwords backed up:
-losing the key prevents in-place updates.
+Android is not part of the initial Windows/Linux/web release. When you set the
+repository variable `RELEASE_ANDROID=true`, the release job refuses to publish
+an APK unless all four signing secrets are present. Create the keystore once and
+keep it and its passwords backed up: losing the key prevents in-place updates.
 
 ```bash
 keytool -genkeypair -v \
@@ -303,6 +364,7 @@ gh secret set ANDROID_KEYSTORE_BASE64 < notebox-release.jks.b64
 gh secret set ANDROID_KEYSTORE_PASSWORD
 gh secret set ANDROID_KEY_ALIAS
 gh secret set ANDROID_KEY_PASSWORD
+gh variable set RELEASE_ANDROID --body true
 
 git tag -a v0.1.0 -m "Notebox 0.1.0"
 git push origin v0.1.0

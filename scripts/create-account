@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Create the single account on a Notebox Worker.
+#
+#   NBX_SETUP_TOKEN=... ./scripts/create-account \
+#     --server https://notebox.example.workers.dev --username alice
+#
+# Delete SETUP_TOKEN with `npx wrangler secret delete SETUP_TOKEN` afterwards.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+exec cargo run -p notes-sync --example create_account -- "$@"

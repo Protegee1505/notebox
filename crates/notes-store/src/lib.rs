@@ -28,6 +28,11 @@ use notes_proto::{NoteId, Notebook, NotebookId};
 /// Fields needed to create a note.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewNote {
+    /// A fixed identity, or `None` for a fresh random id.
+    ///
+    /// The welcome notes use fixed ids so two fresh devices merge their copies
+    /// instead of adding duplicates to the account.
+    pub id: Option<NoteId>,
     /// Markdown body. The first line becomes the title.
     pub text: String,
     /// Unix seconds when the note was created.
@@ -42,11 +47,18 @@ impl NewNote {
     /// An untitled, untagged note created now.
     pub fn new(text: impl Into<String>, created_at: i64) -> Self {
         Self {
+            id: None,
             text: text.into(),
             created_at,
             notebook_id: None,
             tags: Vec::new(),
         }
+    }
+
+    /// Use a fixed identity instead of a fresh random one.
+    pub fn with_id(mut self, id: NoteId) -> Self {
+        self.id = Some(id);
+        self
     }
 }
 
@@ -330,7 +342,20 @@ pub trait NoteStore {
     fn list_notebooks(&self) -> Result<Vec<Notebook>, StoreError>;
 
     /// Create a notebook with a fresh id.
-    fn create_notebook(&self, name: &str, at: i64) -> Result<Notebook, StoreError>;
+    fn create_notebook(&self, name: &str, at: i64) -> Result<Notebook, StoreError> {
+        self.create_notebook_with_id(NotebookId::new(), name, at)
+    }
+
+    /// Create a notebook with a fixed id.
+    ///
+    /// The welcome notebooks use fixed ids so two fresh devices merge them
+    /// instead of adding duplicate notebooks to the account.
+    fn create_notebook_with_id(
+        &self,
+        id: NotebookId,
+        name: &str,
+        at: i64,
+    ) -> Result<Notebook, StoreError>;
 
     /// Rename a notebook. Returns whether the notebook exists.
     fn rename_notebook(&self, id: &NotebookId, name: &str) -> Result<bool, StoreError>;
