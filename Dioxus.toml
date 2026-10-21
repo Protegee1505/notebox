@@ -1,6 +1,23 @@
 [application]
 name = "notebox"
 
+[bundle]
+identifier = "app.notebox"
+publisher = "Notebox"
+icon = ["web/icon-512.png"]
+category = "Productivity"
+short_description = "Local-first notes with history, offline sync and attachments."
+long_description = "Notebox keeps notes, history and images on your device, works offline, and syncs through a Cloudflare Worker when you sign in."
+copyright = "Copyright 2026 Notebox contributors"
+
+[bundle.deb]
+depends = ["libwebkit2gtk-4.1-0", "libgtk-3-0", "libxdo3"]
+section = "utils"
+priority = "optional"
+
+[bundle.windows.webview_install_mode.DownloadBootstrapper]
+silent = true
+
 [web.app]
 title = "Notebox"
 
