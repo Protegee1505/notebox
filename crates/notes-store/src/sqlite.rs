@@ -908,15 +908,34 @@ impl NoteStore for SqliteStore {
         for import in &bundle.notes {
             match load_note(&tx, &import.id, self.peer_id)? {
                 Some(existing) => {
-                    existing.replace_text(&import.text)?;
+                    if let Some(snapshot) = &import.snapshot {
+                        let status = existing.document().import(snapshot)?;
+                        if status.pending.is_some() {
+                            return Err(StoreError::Corrupt(format!(
+                                "note {} arrived with incomplete history",
+                                import.id
+                            )));
+                        }
+                    }
+                    if existing.text() != import.text {
+                        existing.replace_text(&import.text)?;
+                    }
                     existing.set_meta(&import.meta)?;
                     existing.commit_at(stamp);
                     save_note_with(&tx, &existing, stamp)?;
                     report.notes_updated += 1;
                 }
                 None => {
-                    let note = Note::from_text(import.id, &import.text, &import.meta)?;
+                    let note = match &import.snapshot {
+                        Some(snapshot) => Note::from_snapshot(import.id, snapshot)?,
+                        None => Note::from_text(import.id, &import.text, &import.meta)?,
+                    };
                     note.set_peer_id(self.peer_id)?;
+                    if note.text() != import.text {
+                        note.replace_text(&import.text)?;
+                    }
+                    note.set_meta(&import.meta)?;
+                    note.commit_at(stamp);
                     save_note_with(&tx, &note, stamp)?;
                     report.notes_created += 1;
                 }
@@ -1555,6 +1574,7 @@ fn export_bundle_with(
             id,
             meta: note.meta(),
             text: note.text(),
+            snapshot: Some(note.document().snapshot()?),
         });
     }
 

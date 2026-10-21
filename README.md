@@ -8,22 +8,26 @@ The full specification and phase plan is [PLAN.md](PLAN.md). Agent rules are in
 
 ## Status
 
-Phase 7: app sync wiring and installable web app. The note document, store,
-search, history, export, the browser SQLite spike and the Worker sync server
-are implemented, and `notes-sync` logs in with an Argon2id-derived key, pushes
-and pulls with a durable cursor and retries with backoff. The Dioxus app has a
-responsive shell (one, two and three panes), a Markdown editor with rendered
-preview, find, tags, card and list views, command palette, shortcuts, login and
-settings, with light and dark themes. Note history shows a version timeline, a
-diff and a read-only preview, and restore writes the old text as a new edit;
-the trash view restores notes and confirms before emptying; image attachments
-are compressed to WebP and transferred by content hash. The running app can
-sign in, run the sync loop on start, focus, after an edit and every minute,
-show status, list and revoke devices, and keep both bodies when an edit
-collides with a remote change. Native uses the SQLite file; the web build keeps
-SQLite in memory and saves a versioned database image to OPFS, so local notes,
-history and image bytes survive a reload without an account. A second tab is
-held at an "already open" screen rather than writing over the first.
+Phase 8: polish and performance. P1–P7 are complete except the owner-only
+release execution. The note document, store, search, history, export, the
+browser SQLite spike and the Worker sync server are implemented, and
+`notes-sync` logs in with an Argon2id-derived key, pushes and pulls with a
+durable cursor and retries with backoff. The Dioxus app has a responsive shell
+(one, two and three panes), a Markdown editor with rendered preview, find, tags,
+card and list views, command palette, shortcuts, login and settings, with light
+and dark themes. Note history shows a version timeline, a diff and a read-only
+preview, and restore writes the old text as a new edit; the trash view restores
+notes and confirms before emptying; image attachments are compressed to WebP
+and transferred by content hash. Export writes a zip of readable Markdown,
+metadata and attachments; restore imports it from Settings, and the v2 archive
+also carries each note's Loro history, so a fresh device gets the version
+timeline back. The running app can sign in, run the sync loop on start, focus,
+after an edit and every minute, show status, list and revoke devices, and keep
+both bodies when an edit collides with a remote change. Native uses the SQLite
+file; the web build keeps SQLite in memory and saves a versioned database image
+to OPFS, so local notes, history and image bytes survive a reload without an
+account. A second tab is held at an "already open" screen rather than writing
+over the first.
 
 The web build is also an installable PWA. A manifest, icons and a service worker
 precache the hashed app shell, so it opens offline after the first visit. New
@@ -76,12 +80,20 @@ PLAYWRIGHT_MODULES=/path/to/node_modules \
   node scripts/web-persist.mjs
 PLAYWRIGHT_MODULES=/path/to/node_modules \
   node scripts/pwa-check.mjs
+PLAYWRIGHT_MODULES=/path/to/node_modules \
+  node scripts/web-restore.mjs
+PLAYWRIGHT_MODULES=/path/to/node_modules \
+  node scripts/web-wipe-login.mjs
 ```
 
 `web-persist.mjs` restarts Chromium and checks local notes, images and history.
-`pwa-check.mjs` checks installability, an offline reload, an offline edit, and
-a simulated second build that waits for the update banner. Add
-`NBX_PWA_SCREENSHOTS=1` to refresh `docs/screenshots/p7-pwa-*`.
+`web-restore.mjs` exports a backup in one profile and restores it in a fresh
+one, including its version history. `web-wipe-login.mjs` starts
+`wrangler dev --local` (install the matching `worker-build` first), wipes a
+profile's OPFS database and session, signs in, and checks that the note and its
+history come back. `pwa-check.mjs` checks installability, an offline reload, an
+offline edit, and a simulated second build that waits for the update banner.
+Add `NBX_PWA_SCREENSHOTS=1` to refresh `docs/screenshots/p7-pwa-*`.
 
 ## Web app and offline use
 

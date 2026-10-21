@@ -174,6 +174,10 @@ pub fn Icon(name: &'static str) -> Element {
                     path { d: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" }
                     path { d: "M7 10l5 5 5-5M12 15V3" }
                 },
+                "upload" => rsx! {
+                    path { d: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" }
+                    path { d: "M7 8l5-5 5 5M12 3v12" }
+                },
                 "refresh" => rsx! {
                     path { d: "M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" }
                     path { d: "M3 3v5h5" }

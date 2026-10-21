@@ -2,7 +2,7 @@
 
 use std::time::Instant;
 
-use notes_core::{encode_version_vector, Note};
+use notes_core::{encode_version_vector, Note, NoteMeta};
 use notes_proto::{NoteId, NotebookId};
 use notes_store::{
     ImportReport, NewNote, NoteQuery, NoteStore, NoteView, SearchQuery, SqliteStore, SyncState,
@@ -659,6 +659,138 @@ fn importing_the_same_archive_twice_does_not_duplicate_or_lose_notes() {
     assert_eq!(
         target.open_note(&note.id()).expect("open").text(),
         "stable text"
+    );
+}
+
+#[test]
+fn a_version_one_archive_without_history_still_imports() {
+    use std::io::{Cursor, Write};
+
+    let id = NoteId::new();
+    let file = format!("notes/{id}.md");
+    let meta = NoteMeta {
+        created_at: 1_000,
+        ..NoteMeta::default()
+    };
+    let manifest = serde_json::json!({
+        "format": "notebox-export",
+        "version": 1,
+        "exported_at": 5_000,
+        "notebooks": [],
+        "notes": [{
+            "id": id,
+            "file": file,
+            "meta": meta,
+        }],
+        "attachments": [],
+    });
+    let mut bytes = Vec::new();
+    {
+        let mut zip = zip::ZipWriter::new(Cursor::new(&mut bytes));
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file(&file, options).expect("start note");
+        zip.write_all(b"legacy archive").expect("write note");
+        zip.start_file("manifest.json", options)
+            .expect("start manifest");
+        zip.write_all(serde_json::to_string(&manifest).expect("json").as_bytes())
+            .expect("write manifest");
+        zip.finish().expect("finish");
+    }
+
+    let store = store();
+    let report = store.import_zip(&bytes).expect("import v1");
+    assert_eq!(report.notes_created, 1);
+    let note = store.open_note(&id).expect("open");
+    assert_eq!(note.text(), "legacy archive");
+    assert_eq!(note.meta().created_at, 1_000);
+    assert!(
+        !note.history().expect("history").is_empty(),
+        "a v1 import creates its own local history"
+    );
+}
+
+#[test]
+fn export_and_import_keep_the_version_timeline() {
+    let source = store();
+    let note = create(&source, "first", 1_000);
+    let first = source.open_note(&note.id()).expect("open");
+    first.set_next_commit_timestamp(1_100);
+    first.replace_text("first edit").expect("edit");
+    source.save_note(&first, 1_100).expect("save");
+    let second = source.open_note(&note.id()).expect("reopen");
+    second.set_next_commit_timestamp(1_601);
+    second.replace_text("second edit").expect("edit");
+    source.save_note(&second, 1_601).expect("save");
+    let source_versions = second.history().expect("history");
+    assert_eq!(source_versions.len(), 2);
+
+    let bytes = source.export_zip(5_000).expect("export");
+    let target = store();
+    let report = target.import_zip(&bytes).expect("import");
+    assert_eq!(report.notes_created, 1);
+
+    let imported = target.open_note(&note.id()).expect("open");
+    let versions = imported.history().expect("history");
+    assert_eq!(
+        versions.len(),
+        source_versions.len(),
+        "the archive should carry the whole timeline"
+    );
+    assert_eq!(imported.text(), "second edit");
+    assert_eq!(
+        imported.text_at(&versions[0]).expect("old text"),
+        "first edit"
+    );
+    assert_eq!(
+        imported.text_at(&versions[1]).expect("new text"),
+        "second edit"
+    );
+
+    target.import_zip(&bytes).expect("second import");
+    let after = target.open_note(&note.id()).expect("reopen");
+    assert_eq!(after.history().expect("history").len(), versions.len());
+    assert_eq!(after.text(), "second edit");
+}
+
+#[test]
+fn restoring_a_backup_over_newer_local_edits_keeps_both_histories() {
+    let source = store();
+    let note = create(&source, "source v1", 1_000);
+    let first_archive = source.export_zip(2_000).expect("first export");
+
+    let target = store();
+    target.import_zip(&first_archive).expect("first import");
+    let local = target.open_note(&note.id()).expect("open on target");
+    local.set_next_commit_timestamp(3_000);
+    local.replace_text("target edit").expect("local edit");
+    target.save_note(&local, 3_000).expect("local save");
+
+    // The first device moves on after the first archive was written.
+    let origin = source.open_note(&note.id()).expect("open on source");
+    origin.set_next_commit_timestamp(4_000);
+    origin.replace_text("source v2").expect("source edit");
+    source.save_note(&origin, 4_000).expect("source save");
+    let second_archive = source.export_zip(5_000).expect("second export");
+
+    target.import_zip(&second_archive).expect("restore");
+    let restored = target.open_note(&note.id()).expect("reopen");
+    assert_eq!(restored.text(), "source v2");
+    let versions = restored.history().expect("history");
+    let texts: Vec<String> = versions
+        .iter()
+        .map(|version| restored.text_at(version).expect("version text"))
+        .collect();
+    assert!(
+        texts.iter().any(|text| text == "target edit"),
+        "the local edit must stay in history: {texts:?}"
+    );
+    assert!(
+        texts.iter().any(|text| text == "source v2"),
+        "the restored edit must be in history: {texts:?}"
+    );
+    assert!(
+        versions.len() >= 3,
+        "both timelines should remain: {texts:?}"
     );
 }
 

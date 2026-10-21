@@ -24,3 +24,4 @@ wasm-bindgen-futures = "0.4"
 [dev-dependencies]
 serde_json.workspace = true
 tempfile.workspace = true
+zip.workspace = true

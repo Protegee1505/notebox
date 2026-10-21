@@ -148,7 +148,7 @@ async fn open_platform() -> Result<OpenedStore, OpenFailure> {
                         "SQLite in this browser's OPFS. Notes, history and images survive a reload. Export a zip for backup."
                             .to_string()
                     } else {
-                        "SQLite in this browser's OPFS. The browser may clear it when storage runs low; export a zip for backup."
+                        "SQLite in this browser's OPFS. The browser may clear it when storage runs low; export a zip for backup and restore it in Settings."
                             .to_string()
                     };
                     Ok(OpenedStore {

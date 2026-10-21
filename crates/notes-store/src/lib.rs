@@ -392,6 +392,7 @@ pub fn export_bundle(store: &dyn NoteStore, exported_at: i64) -> Result<ExportBu
             id: summary.id,
             meta: note.meta(),
             text: note.text(),
+            snapshot: Some(note.document().snapshot()?),
         });
     }
     Ok(ExportBundle {

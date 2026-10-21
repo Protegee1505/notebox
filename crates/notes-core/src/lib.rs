@@ -28,8 +28,8 @@ pub use attachments::{
 pub use document::{NoteDocument, HISTORY_MERGE_INTERVAL_SECS, TEXT_CONTAINER};
 pub use error::{ExportError, NoteError};
 pub use export::{
-    note_file_name, read_export_zip, write_export_zip, ExportAttachment, ExportBundle, ExportNote,
-    EXPORT_FORMAT, EXPORT_VERSION, MANIFEST_PATH, NOTES_DIR,
+    history_file_name, note_file_name, read_export_zip, write_export_zip, ExportAttachment,
+    ExportBundle, ExportNote, EXPORT_FORMAT, EXPORT_VERSION, HISTORY_DIR, MANIFEST_PATH, NOTES_DIR,
 };
 pub use history::NoteVersion;
 pub use markdown::{render_markdown, render_markdown_with_images};

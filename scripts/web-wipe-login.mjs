@@ -1,0 +1,410 @@
+#!/usr/bin/env node
+// P8: wipe a browser device, sign in to a local Worker, and get the notes and
+// their history back.
+//
+// It boots `wrangler dev --local` with both D1 databases on a throwaway
+// persistence directory, serves the release web build, and drives Chromium:
+//
+// 1. Create a tagged, pinned note.
+// 2. Sign in. Capture the login key from the app's first request, create the
+//    one account with the setup token, then sign in for real and wait for the
+//    first sync.
+// 3. Close the browser, delete the OPFS database, localStorage, cookies and
+//    service-worker caches. The next launch is a wiped device.
+// 4. Confirm the note is gone, sign in again with the same passphrase, and
+//    find the note, its tag, its pin and a history version produced on the
+//    other device.
+//
+//   PLAYWRIGHT_MODULES=/path/to/node_modules \
+//   node scripts/web-wipe-login.mjs
+//
+// The web release must already be built at
+// target/dx/notebox/release/web/public (./scripts/web-build.sh).
+
+import { execFile, spawn } from "node:child_process";
+import { createRequire } from "node:module";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { promisify } from "node:util";
+
+const run = promisify(execFile);
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const dist = path.join(root, "target/dx/notebox/release/web/public");
+const WRANGLER = ["--yes", "wrangler@4.151.2"];
+const PORT = Number(process.env.PORT || 8797);
+const SETUP_TOKEN = "wipe-e2e-setup-token";
+const BASE = `http://127.0.0.1:${PORT}`;
+const USERNAME = "wipe-e2e@notebox";
+const PASSPHRASE = "correct horse battery staple";
+const marker = `Wipe-${Date.now()}`;
+const title = `${marker} note`;
+const body = `${title}\n\nThis note and its history must survive a wipe.`;
+const tag = "wipe-tag";
+const failureShot = path.join(tmpdir(), "notebox-web-wipe-failure.png");
+
+const env = {
+  ...process.env,
+  PATH: `${path.join(homedir(), ".cargo", "bin")}${path.delimiter}${process.env.PATH ?? ""}`,
+};
+
+let worker;
+let serverOutput = "";
+let browser;
+let profile;
+let context;
+let persist;
+// The first sign-in is deliberately attempted before the account exists so the
+// test can capture the app's derived login key. Chrome logs that expected 401.
+let allowAuthFailure = false;
+
+function check(name, ok, detail = "") {
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ` — ${detail}` : ""}`);
+  return { name, ok: Boolean(ok), detail };
+}
+
+async function waitForWorker() {
+  for (let attempt = 0; attempt < 240; attempt += 1) {
+    if (worker && worker.exitCode !== null) {
+      throw new Error(`wrangler exited with ${worker.exitCode}`);
+    }
+    try {
+      const response = await fetch(`${BASE}/`);
+      if (response.ok) return;
+    } catch {
+      // Not listening yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  throw new Error("wrangler dev did not start within 240 seconds");
+}
+
+async function migrate(name) {
+  const { stderr } = await run(
+    "npx",
+    [
+      ...WRANGLER,
+      "d1",
+      "migrations",
+      "apply",
+      name,
+      "--local",
+      "--persist-to",
+      persist,
+    ],
+    { env, maxBuffer: 20 * 1024 * 1024 },
+  );
+  if (stderr.includes("ERROR")) {
+    throw new Error(`migrations for ${name} failed:\n${stderr}`);
+  }
+}
+
+async function startWorker() {
+  persist = await mkdtemp(path.join(tmpdir(), "notebox-wipe-e2e-"));
+  await migrate("notebox-sync");
+  await migrate("notebox-blobs");
+  worker = spawn(
+    "npx",
+    [
+      ...WRANGLER,
+      "dev",
+      "--local",
+      "--port",
+      String(PORT),
+      "--persist-to",
+      persist,
+      "--var",
+      `SETUP_TOKEN:${SETUP_TOKEN}`,
+    ],
+    {
+      cwd: root,
+      env,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  worker.stdout.on("data", (chunk) => {
+    serverOutput += chunk;
+  });
+  worker.stderr.on("data", (chunk) => {
+    serverOutput += chunk;
+  });
+  await waitForWorker();
+}
+
+async function stopWorker() {
+  if (!worker || worker.exitCode !== null) return;
+  try {
+    process.kill(-worker.pid, "SIGTERM");
+  } catch {
+    worker.kill("SIGTERM");
+  }
+  await new Promise((resolve) => {
+    const timer = setTimeout(resolve, 5_000);
+    worker.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+async function loadPlaywright() {
+  const require = createRequire(import.meta.url);
+  const searchPaths = [
+    process.env.PLAYWRIGHT_MODULES,
+    path.join(root, "node_modules"),
+    process.cwd(),
+  ].filter(Boolean);
+  const entry = require.resolve("playwright", { paths: searchPaths });
+  const loaded = await import(pathToFileURL(entry).href);
+  return loaded.default ?? loaded;
+}
+
+function watch(page, errors) {
+  page.on("pageerror", (error) => errors.push(String(error)));
+  page.on("console", (message) => {
+    if (message.type() !== "error" || message.text().includes("_dioxus")) {
+      return;
+    }
+    if (allowAuthFailure && message.text().includes("401 (Unauthorized)")) {
+      allowAuthFailure = false;
+      return;
+    }
+    errors.push(`console: ${message.text()}`);
+  });
+}
+
+async function openApp(errors) {
+  context = await browser.launchPersistentContext(profile, {
+    headless: true,
+    viewport: { width: 1400, height: 900 },
+  });
+  const page = context.pages()[0] ?? (await context.newPage());
+  watch(page, errors);
+  await page.goto(BASE, { waitUntil: "networkidle" });
+  await page
+    .locator("#note-editor")
+    .waitFor({ state: "visible", timeout: 60_000 });
+  return page;
+}
+
+async function openLogin(page) {
+  await page.locator(".nav-row", { hasText: "Settings" }).click();
+  await page.getByRole("heading", { name: "Local data" }).waitFor();
+  await page.getByRole("button", { name: "Sign in to sync" }).click();
+  await page.getByRole("heading", { name: "Sign in" }).waitFor();
+}
+
+async function fillLogin(page, passphrase) {
+  await page.getByLabel("Username").fill(USERNAME);
+  await page.getByLabel("Passphrase").fill(passphrase);
+}
+
+async function createAccount(loginKey) {
+  const response = await fetch(`${BASE}/v1/auth/setup`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-setup-token": SETUP_TOKEN,
+    },
+    body: JSON.stringify({
+      version: 1,
+      payload: {
+        username: USERNAME,
+        login_key: loginKey,
+        device_name: "Setup helper",
+      },
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`setup failed with ${response.status}: ${await response.text()}`);
+  }
+}
+
+async function waitForSynced(page) {
+  await page.waitForFunction(
+    () => document.querySelector(".status-pill")?.textContent?.trim() === "Synced",
+    null,
+    { timeout: 120_000 },
+  );
+}
+
+async function waitForMarker(page) {
+  await page.locator(".note-card", { hasText: title }).first().waitFor({
+    timeout: 120_000,
+  });
+}
+
+async function wipeDevice(page) {
+  // version.json is same-origin and is not handled by the service worker, so
+  // it gives a page that can clear storage without booting the app.
+  await page.goto(`${BASE}/version.json`, { waitUntil: "networkidle" });
+  await page.evaluate(async () => {
+    localStorage.clear();
+    sessionStorage.clear();
+    const root = await navigator.storage.getDirectory();
+    for await (const [name] of root.entries()) {
+      await root.removeEntry(name, { recursive: true });
+    }
+    for (const key of await caches.keys()) {
+      await caches.delete(key);
+    }
+  });
+  await context.clearCookies();
+}
+
+const results = [];
+const errors = [];
+try {
+  await readFile(path.join(dist, "index.html"));
+  await readFile(path.join(dist, "version.json"));
+  const playwright = await loadPlaywright();
+  browser = playwright.chromium;
+  profile = await mkdtemp(path.join(tmpdir(), "notebox-wipe-profile-"));
+  await startWorker();
+
+  // ---- Device 1: make a note, create the account, and sync it. ----
+  let page = await openApp(errors);
+  await page.locator(".new-note-button").click();
+  await page.waitForTimeout(400);
+  await page.locator("#note-editor").fill(body);
+  await page.waitForTimeout(500);
+  await page.locator(".tag-input").fill(tag);
+  await page.keyboard.press("Enter");
+  await page.locator(".editor-tag", { hasText: tag }).waitFor();
+  await page.getByRole("button", { name: "Pin note" }).click();
+  await page.getByRole("button", { name: "Unpin note" }).waitFor();
+  await page.waitForFunction(
+    () => !document.querySelector(".save-state")?.textContent?.includes("Unsaved"),
+    null,
+    { timeout: 30_000 },
+  );
+  await page.waitForTimeout(800);
+
+  await openLogin(page);
+  await fillLogin(page, PASSPHRASE);
+  const firstLogin = page.waitForRequest(
+    (request) =>
+      request.method() === "POST" && request.url().endsWith("/v1/auth/login"),
+  );
+  allowAuthFailure = true;
+  await page.getByRole("button", { name: "Connect" }).click();
+  const loginBody = (await firstLogin).postDataJSON();
+  const loginKey = loginBody?.payload?.login_key;
+  results.push(
+    check(
+      "the app sends a derived login key, not the passphrase",
+      typeof loginKey === "string" && loginKey.length > 20,
+      String(loginKey).slice(0, 12),
+    ),
+  );
+  await page.locator(".form-error").waitFor({ timeout: 30_000 });
+  await createAccount(loginKey);
+  await fillLogin(page, PASSPHRASE);
+  await page.getByRole("button", { name: "Connect" }).click();
+  await waitForSynced(page);
+  results.push(check("first device reached the Worker", true));
+
+  // ---- Wipe the local database and the saved session. ----
+  await context.close();
+  context = undefined;
+  context = await browser.launchPersistentContext(profile, {
+    headless: true,
+    viewport: { width: 1400, height: 900 },
+  });
+  const wiped = context.pages()[0] ?? (await context.newPage());
+  watch(wiped, errors);
+  await wipeDevice(wiped);
+  await context.close();
+  context = undefined;
+
+  // ---- Device 2: the same profile, now empty. Sign in and pull. ----
+  page = await openApp(errors);
+  await page.locator(".note-card").first().waitFor({ timeout: 30_000 });
+  const before = await page.locator(".note-card", { hasText: title }).count();
+  results.push(
+    check("the wipe removed the local note", before === 0, `${before} found`),
+  );
+
+  await openLogin(page);
+  await fillLogin(page, PASSPHRASE);
+  await page.getByRole("button", { name: "Connect" }).click();
+  await waitForMarker(page);
+  await waitForSynced(page);
+  results.push(check("signing in pulled the note back", true));
+  results.push(
+    check(
+      "the note is not duplicated",
+      (await page.locator(".note-card", { hasText: title }).count()) === 1,
+    ),
+  );
+
+  await page.locator(".note-card", { hasText: title }).first().click();
+  await page.waitForTimeout(600);
+  const text = await page.locator("#note-editor").inputValue();
+  results.push(
+    check(
+      "the note body came back",
+      text.includes(title) && text.includes("survive a wipe"),
+      text.slice(0, 160),
+    ),
+  );
+  results.push(
+    check(
+      "the tag came back",
+      (await page.locator(".editor-tag", { hasText: tag }).count()) === 1,
+    ),
+  );
+  results.push(
+    check(
+      "the pin came back",
+      (await page.getByRole("button", { name: "Unpin note" }).count()) === 1,
+    ),
+  );
+
+  await page.getByRole("button", { name: "Note history" }).click();
+  await page.locator(".history-panel").waitFor({ timeout: 10_000 });
+  const versions = await page.locator(".history-version").count();
+  const historyText = await page.locator(".history-panel").innerText();
+  results.push(
+    check(
+      "the history came back from the other device",
+      versions >= 1 && /Device [0-9a-f]{4}/.test(historyText),
+      `${versions} version row(s): ${historyText.slice(0, 160)}`,
+    ),
+  );
+  results.push(
+    check(
+      "the history is not relabelled as this device",
+      !historyText.includes("This device"),
+      historyText.slice(0, 160),
+    ),
+  );
+  await page.getByRole("button", { name: "Close history" }).click();
+
+  await page.screenshot({ path: path.join(tmpdir(), "notebox-web-wipe.png") });
+  await context.close();
+  context = undefined;
+} catch (error) {
+  results.push(check("flow completed", false, String(error)));
+  if (context) {
+    const page = context.pages()[0];
+    if (page) {
+      await page.screenshot({ path: failureShot }).catch(() => {});
+    }
+  }
+  if (serverOutput) {
+    console.error(serverOutput.split("\n").slice(-40).join("\n"));
+  }
+} finally {
+  results.push(
+    check("no console errors", errors.length === 0, errors.slice(0, 5).join(" | ")),
+  );
+  if (context) await context.close().catch(() => {});
+  await stopWorker().catch(() => {});
+  if (profile) await rm(profile, { recursive: true, force: true });
+  if (persist) await rm(persist, { recursive: true, force: true });
+  console.log(JSON.stringify({ results, errors }, null, 2));
+  process.exit(results.every((result) => result.ok) ? 0 : 1);
+}

@@ -143,6 +143,19 @@ jobs:
           curl -sSL https://dioxus.dev/install.sh | bash -s v0.7.10
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
+      - name: Cache worker-build
+        id: worker-build-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/worker-build
+            ~/.cargo/bin/worker-codegen
+          key: worker-build-0.8.7-${{ runner.os }}
+
+      - name: Install worker-build
+        if: steps.worker-build-cache.outputs.cache-hit != 'true'
+        run: cargo install worker-build --version 0.8.7 --locked
+
       - name: Build web release with PWA files
         run: ./scripts/web-build.sh
 
@@ -162,10 +175,20 @@ jobs:
           PLAYWRIGHT_MODULES: /tmp/notebox-web/node_modules
         run: node scripts/web-persist.mjs
 
+      - name: Backup export and restore round trip
+        env:
+          PLAYWRIGHT_MODULES: /tmp/notebox-web/node_modules
+        run: node scripts/web-restore.mjs
+
       - name: Installable, offline and deliberate updates
         env:
           PLAYWRIGHT_MODULES: /tmp/notebox-web/node_modules
         run: node scripts/pwa-check.mjs
+
+      - name: Wipe a browser, sign in, and get notes and history back
+        env:
+          PLAYWRIGHT_MODULES: /tmp/notebox-web/node_modules
+        run: node scripts/web-wipe-login.mjs
 
       - uses: actions/upload-artifact@v4
         with:

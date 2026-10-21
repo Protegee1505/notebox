@@ -70,3 +70,9 @@ dependency added for P1 after the spike ADRs; `tempfile` is test-only.
 - P1 stores attachment metadata only, so its archive entries are empty until
   P6 stores the bytes. The path scheme and manifest already carry the fields
   P6 needs.
+
+## Amendment
+
+ADR-0014 bumps the format to version 2 and adds optional full Loro snapshots
+under `history/<note-id>.loro`, so a restore keeps the version timeline. The
+Markdown files and the v1 reader path remain as described here.

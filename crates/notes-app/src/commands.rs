@@ -40,13 +40,15 @@ pub enum Command {
     Shortcuts,
     /// Download a zip of every note.
     Export,
+    /// Pick a zip written by Export and import it.
+    Restore,
     /// Open the trash and its empty action.
     EmptyTrash,
 }
 
 impl Command {
     /// Every command, in palette order.
-    pub const ALL: [Command; 17] = [
+    pub const ALL: [Command; 18] = [
         Command::NewNote,
         Command::Save,
         Command::Find,
@@ -59,6 +61,7 @@ impl Command {
         Command::Settings,
         Command::SignIn,
         Command::Export,
+        Command::Restore,
         Command::Shortcuts,
         Command::ThemeSystem,
         Command::ThemeLight,
@@ -85,6 +88,7 @@ impl Command {
             Command::SignIn => "Sign in to sync",
             Command::Shortcuts => "Keyboard shortcuts",
             Command::Export => "Export all notes",
+            Command::Restore => "Restore from backup",
             Command::EmptyTrash => "Empty trash",
         }
     }
@@ -108,6 +112,7 @@ impl Command {
             Command::SignIn => "",
             Command::Shortcuts => "?",
             Command::Export => "",
+            Command::Restore => "",
             Command::EmptyTrash => "",
         }
     }
@@ -131,6 +136,7 @@ impl Command {
             Command::SignIn => "user",
             Command::Shortcuts => "command",
             Command::Export => "download",
+            Command::Restore => "upload",
             Command::EmptyTrash => "trash",
         }
     }
@@ -154,6 +160,7 @@ impl Command {
             Command::SignIn => "login account sync",
             Command::Shortcuts => "keys help",
             Command::Export => "backup zip download",
+            Command::Restore => "backup zip import undo recovery",
             Command::EmptyTrash => "delete forever",
         }
     }
@@ -185,6 +192,12 @@ impl Command {
             Command::SignIn => context.go(Screen::Login),
             Command::Shortcuts => context.show_shortcuts(),
             Command::Export => context.export_notes(),
+            Command::Restore => {
+                context.open_settings();
+                let _ = document::eval(
+                    "setTimeout(() => document.getElementById('restore-backup-input')?.click(), 80);",
+                );
+            }
             Command::EmptyTrash => {
                 context.set_view(NoteView::Trash);
                 if context.state.peek().notes.is_empty() {
@@ -225,7 +238,10 @@ mod tests {
     #[test]
     fn keywords_find_a_command_by_what_it_does() {
         let found = filtered("backup");
-        assert_eq!(found, vec![Command::Export]);
+        assert!(found.contains(&Command::Export));
+        assert!(found.contains(&Command::Restore));
+        let found = filtered("restore");
+        assert!(found.contains(&Command::Restore));
         let found = filtered("dark");
         assert_eq!(found, vec![Command::ThemeDark]);
     }

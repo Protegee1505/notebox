@@ -2729,6 +2729,49 @@ kbd {
   font-size: var(--text-sm);
 }
 
+.restore-confirm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+}
+
+.restore-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.restore-copy strong {
+  color: var(--text);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.restore-copy span {
+  color: var(--text-soft);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
+.restore-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.restore-actions .primary-button,
+.restore-actions .text-button {
+  height: 1.9rem;
+  padding: 0 0.7rem;
+}
+
 .danger-card .card-heading h2 {
   color: var(--danger);
 }

@@ -19,6 +19,7 @@ pub fn SettingsPane() -> Element {
     let tag_count = state.tags.len();
     let storage = state.storage.clone();
     let confirm_empty = state.confirm_empty_trash;
+    let pending_restore = state.pending_restore.clone();
     let username = state.profile.username.clone();
     let sync_connected = state.profile.sync_connected;
     let sync = state.sync.clone();
@@ -332,12 +333,80 @@ pub fn SettingsPane() -> Element {
                         button {
                             class: "secondary-button",
                             r#type: "button",
+                            aria_label: "Restore from backup",
+                            onclick: move |_| {
+                                let _ = document::eval(
+                                    "document.getElementById('restore-backup-input')?.click();",
+                                );
+                            },
+                            Icon { name: "upload" }
+                            span { "Restore from backup" }
+                        }
+                        button {
+                            class: "secondary-button",
+                            r#type: "button",
                             onclick: {
                                 let context = context.clone();
                                 move |_| context.show_shortcuts()
                             },
                             Icon { name: "command" }
                             span { "Shortcuts" }
+                        }
+                    }
+                    input {
+                        id: "restore-backup-input",
+                        class: "visually-hidden",
+                        r#type: "file",
+                        accept: ".zip,application/zip",
+                        tabindex: "-1",
+                        onchange: {
+                            let context = context.clone();
+                            move |event| {
+                                let files = event.files();
+                                context.choose_restore(files);
+                                let _ = document::eval(
+                                    "const el = document.getElementById('restore-backup-input');\
+                                     if (el) el.value = '';",
+                                );
+                            }
+                        },
+                    }
+                    if let Some(pending) = pending_restore {
+                        div { class: "restore-confirm", role: "alert",
+                            div { class: "restore-copy",
+                                strong { "Restore {pending.name}?" }
+                                span { "{pending.summary()}" }
+                                span {
+                                    if pending.has_history {
+                                        "This archive includes version history."
+                                    } else {
+                                        "This archive has no version history; the current notes are restored."
+                                    }
+                                }
+                                span {
+                                    "Notes with the same id are updated. Their previous text stays in history, and nothing is deleted."
+                                }
+                            }
+                            div { class: "restore-actions",
+                                button {
+                                    class: "primary-button",
+                                    r#type: "button",
+                                    onclick: {
+                                        let context = context.clone();
+                                        move |_| context.confirm_restore()
+                                    },
+                                    "Restore backup"
+                                }
+                                button {
+                                    class: "text-button",
+                                    r#type: "button",
+                                    onclick: {
+                                        let context = context.clone();
+                                        move |_| context.cancel_restore()
+                                    },
+                                    "Cancel"
+                                }
+                            }
                         }
                     }
                 }

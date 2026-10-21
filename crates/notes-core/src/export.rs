@@ -3,8 +3,9 @@
 //! The export is meant to be readable without this app: every note is a `.md`
 //! file a person can open, and the manifest carries the metadata the Markdown
 //! cannot. Attachments are written next to the notes under their own name.
-//! Import accepts archives this build wrote; history is not part of the
-//! format, because the sync log and the local snapshots already hold it.
+//! Version 2 adds an optional Loro snapshot per note under `history/`, so a
+//! restore can keep the version timeline as well as the current text. Version 1
+//! archives still import; they simply carry no history.
 
 use std::collections::HashSet;
 use std::io::{Read, Seek, Write};
@@ -22,10 +23,16 @@ use crate::NoteMeta;
 pub const EXPORT_FORMAT: &str = "notebox-export";
 
 /// Export format version written by this build.
-pub const EXPORT_VERSION: u16 = 1;
+pub const EXPORT_VERSION: u16 = 2;
+
+/// Oldest archive version this build can read.
+const MIN_EXPORT_VERSION: u16 = 1;
 
 /// Directory inside the archive that holds the Markdown files.
 pub const NOTES_DIR: &str = "notes";
+
+/// Directory inside the archive that holds Loro snapshots with history.
+pub const HISTORY_DIR: &str = "history";
 
 /// Manifest path inside the archive.
 pub const MANIFEST_PATH: &str = "manifest.json";
@@ -46,6 +53,12 @@ pub struct ExportNote {
     pub meta: NoteMeta,
     /// Markdown body. The first line is the title.
     pub text: String,
+    /// Loro snapshot with the note's full history, when the archive has one.
+    ///
+    /// Not part of the manifest JSON; the bytes are written as their own zip
+    /// entry. Version 1 archives and hand-built bundles leave this empty.
+    #[serde(skip)]
+    pub snapshot: Option<Vec<u8>>,
 }
 
 /// One attachment inside a bundle.
@@ -92,6 +105,9 @@ struct ManifestNote {
     id: NoteId,
     file: String,
     meta: NoteMeta,
+    /// Path to the note's Loro snapshot, when the archive has history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    snapshot: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -121,10 +137,20 @@ pub fn write_export_zip<W: Write + Seek>(
         let file = note_file_name(note.id);
         zip.start_file(&file, options)?;
         zip.write_all(note.text.as_bytes())?;
+        let snapshot = match &note.snapshot {
+            Some(bytes) => {
+                let path = history_file_name(note.id);
+                zip.start_file(&path, options)?;
+                zip.write_all(bytes)?;
+                Some(path)
+            }
+            None => None,
+        };
         manifest_notes.push(ManifestNote {
             id: note.id,
             file,
             meta: note.meta.clone(),
+            snapshot,
         });
     }
 
@@ -181,7 +207,7 @@ pub fn read_export_zip<R: Read + Seek>(reader: R) -> Result<ExportBundle, Export
     if manifest.format != EXPORT_FORMAT {
         return Err(ExportError::Format(manifest.format));
     }
-    if manifest.version != EXPORT_VERSION {
+    if !(MIN_EXPORT_VERSION..=EXPORT_VERSION).contains(&manifest.version) {
         return Err(ExportError::Version(manifest.version));
     }
 
@@ -196,10 +222,26 @@ pub fn read_export_zip<R: Read + Seek>(reader: R) -> Result<ExportBundle, Export
             .by_name(&entry.file)
             .map_err(|_| ExportError::MissingEntry(entry.file.clone()))?
             .read_to_string(&mut text)?;
+        let snapshot = match &entry.snapshot {
+            Some(path) => {
+                validate_entry_name(path)?;
+                if *path != history_file_name(entry.id) {
+                    return Err(ExportError::UnsafePath(path.clone()));
+                }
+                let mut bytes = Vec::new();
+                archive
+                    .by_name(path)
+                    .map_err(|_| ExportError::MissingEntry(path.clone()))?
+                    .read_to_end(&mut bytes)?;
+                Some(bytes)
+            }
+            None => None,
+        };
         notes.push(ExportNote {
             id: entry.id,
             meta: entry.meta.clone(),
             text,
+            snapshot,
         });
     }
 
@@ -242,6 +284,11 @@ pub fn read_export_zip<R: Read + Seek>(reader: R) -> Result<ExportBundle, Export
 /// File name a note gets inside the archive.
 pub fn note_file_name(id: NoteId) -> String {
     format!("{NOTES_DIR}/{id}.md")
+}
+
+/// File name a note's history snapshot gets inside the archive.
+pub fn history_file_name(id: NoteId) -> String {
+    format!("{HISTORY_DIR}/{id}.loro")
 }
 
 /// File name an attachment gets inside the archive.
@@ -326,6 +373,7 @@ mod tests {
                     ..NoteMeta::default()
                 },
                 text: "# Title\n\nbody 😀".to_string(),
+                snapshot: None,
             }],
             attachments: vec![ExportAttachment {
                 note_id: None,
@@ -343,6 +391,146 @@ mod tests {
         write_export_zip(&bundle, Cursor::new(&mut bytes)).expect("write");
         let restored = read_export_zip(Cursor::new(&bytes)).expect("read");
         assert_eq!(restored, bundle);
+    }
+
+    #[test]
+    fn history_snapshots_round_trip_with_the_note() {
+        let id = NoteId::new();
+        let note = crate::Note::new(id, 1_000).expect("note");
+        note.insert(0, "first body").expect("insert");
+        note.commit_at(1_100);
+        let snapshot = note.document().snapshot().expect("snapshot");
+        let bundle = ExportBundle {
+            notes: vec![ExportNote {
+                id,
+                meta: NoteMeta::default(),
+                text: "first body".to_string(),
+                snapshot: Some(snapshot.clone()),
+            }],
+            ..ExportBundle::default()
+        };
+
+        let mut bytes = Vec::new();
+        write_export_zip(&bundle, Cursor::new(&mut bytes)).expect("write");
+        let restored = read_export_zip(Cursor::new(&bytes)).expect("read");
+        assert_eq!(
+            restored.notes[0].snapshot.as_deref(),
+            Some(snapshot.as_slice())
+        );
+
+        let mut archive = zip::ZipArchive::new(Cursor::new(&bytes)).expect("zip");
+        assert!(
+            archive
+                .by_name(&super::history_file_name(id))
+                .expect("history entry")
+                .size()
+                > 0
+        );
+    }
+
+    #[test]
+    fn a_version_one_archive_without_history_still_imports() {
+        use std::io::Write;
+
+        let id = NoteId::new();
+        let file = super::note_file_name(id);
+        let manifest = super::Manifest {
+            format: super::EXPORT_FORMAT.to_string(),
+            version: 1,
+            exported_at: 42,
+            notebooks: Vec::new(),
+            notes: vec![super::ManifestNote {
+                id,
+                file: file.clone(),
+                meta: NoteMeta::default(),
+                snapshot: None,
+            }],
+            attachments: Vec::new(),
+        };
+        let mut bytes = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(Cursor::new(&mut bytes));
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file(&file, options).expect("start note");
+            zip.write_all(b"old archive").expect("write note");
+            zip.start_file(super::MANIFEST_PATH, options)
+                .expect("start manifest");
+            zip.write_all(serde_json::to_string(&manifest).expect("json").as_bytes())
+                .expect("write manifest");
+            zip.finish().expect("finish");
+        }
+
+        let restored = read_export_zip(Cursor::new(&bytes)).expect("read v1");
+        assert_eq!(restored.notes[0].text, "old archive");
+        assert!(restored.notes[0].snapshot.is_none());
+    }
+
+    #[test]
+    fn a_newer_archive_version_is_rejected_instead_of_misread() {
+        use std::io::Write;
+
+        let manifest = super::Manifest {
+            format: super::EXPORT_FORMAT.to_string(),
+            version: super::EXPORT_VERSION + 1,
+            exported_at: 42,
+            notebooks: Vec::new(),
+            notes: Vec::new(),
+            attachments: Vec::new(),
+        };
+        let mut bytes = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(Cursor::new(&mut bytes));
+            zip.start_file(
+                super::MANIFEST_PATH,
+                zip::write::SimpleFileOptions::default(),
+            )
+            .expect("start manifest");
+            zip.write_all(serde_json::to_string(&manifest).expect("json").as_bytes())
+                .expect("write manifest");
+            zip.finish().expect("finish");
+        }
+
+        let error = read_export_zip(Cursor::new(&bytes)).expect_err("must fail");
+        assert!(error.to_string().contains("version"));
+    }
+
+    #[test]
+    fn a_snapshot_must_sit_under_its_notes_history_path() {
+        use std::io::Write;
+
+        let id = NoteId::new();
+        let file = super::note_file_name(id);
+        let manifest = super::Manifest {
+            format: super::EXPORT_FORMAT.to_string(),
+            version: super::EXPORT_VERSION,
+            exported_at: 42,
+            notebooks: Vec::new(),
+            notes: vec![super::ManifestNote {
+                id,
+                file: file.clone(),
+                meta: NoteMeta::default(),
+                snapshot: Some(super::history_file_name(NoteId::new())),
+            }],
+            attachments: Vec::new(),
+        };
+        let mut bytes = Vec::new();
+        {
+            let mut zip = zip::ZipWriter::new(Cursor::new(&mut bytes));
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file(&file, options).expect("start note");
+            zip.write_all(b"text").expect("write note");
+            zip.start_file(super::MANIFEST_PATH, options)
+                .expect("start manifest");
+            zip.write_all(serde_json::to_string(&manifest).expect("json").as_bytes())
+                .expect("write manifest");
+            zip.finish().expect("finish");
+        }
+
+        let error = read_export_zip(Cursor::new(&bytes)).expect_err("must fail");
+        assert!(
+            error.to_string().contains("unsafe path"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

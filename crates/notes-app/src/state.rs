@@ -7,6 +7,7 @@
 
 use std::cell::{OnceCell, RefCell};
 use std::collections::HashMap;
+use std::io::Cursor;
 use std::rc::Rc;
 
 #[cfg(target_arch = "wasm32")]
@@ -15,7 +16,8 @@ use dioxus::prelude::*;
 use notes_core::{Note, NoteVersion};
 use notes_proto::{NoteId, Notebook, NotebookId};
 use notes_store::{
-    Attachment, NewNote, NoteQuery, NoteStore, NoteSummary, NoteView, SearchQuery, TagCount,
+    Attachment, ImportReport, NewNote, NoteQuery, NoteStore, NoteSummary, NoteView, SearchQuery,
+    TagCount,
 };
 use notes_sync::BoxedTransport;
 #[cfg(target_arch = "wasm32")]
@@ -140,6 +142,35 @@ pub struct Toast {
     pub kind: ToastKind,
     /// When it was raised, for expiry.
     pub at: Instant,
+}
+
+/// A backup archive chosen for restore, waiting for confirmation.
+#[derive(Debug, Clone)]
+pub struct PendingRestore {
+    /// File name the user picked.
+    pub name: String,
+    /// Raw zip bytes, shared so a render does not copy the archive.
+    pub bytes: Rc<Vec<u8>>,
+    /// Notes in the archive.
+    pub notes: usize,
+    /// Notebooks in the archive.
+    pub notebooks: usize,
+    /// Attachments with bytes in the archive.
+    pub attachments: usize,
+    /// Whether the archive carries Loro snapshots for the version timeline.
+    pub has_history: bool,
+}
+
+impl PendingRestore {
+    /// The counts line in the confirmation.
+    pub fn summary(&self) -> String {
+        format!(
+            "{}, {}, {}",
+            count_label(self.notes, "note", "notes"),
+            count_label(self.notebooks, "notebook", "notebooks"),
+            count_label(self.attachments, "attachment", "attachments")
+        )
+    }
 }
 
 /// The local profile badge. Sync details live in [`SyncUi`].
@@ -268,6 +299,8 @@ pub struct AppState {
     pub new_notebook: Option<String>,
     /// "Empty trash" requires a second click.
     pub confirm_empty_trash: bool,
+    /// Backup chosen from Settings and waiting for confirmation.
+    pub pending_restore: Option<PendingRestore>,
     /// Latest toast.
     pub toast: Option<Toast>,
     /// Local undo snapshots.
@@ -357,6 +390,7 @@ impl AppState {
             history_error: None,
             new_notebook: None,
             confirm_empty_trash: false,
+            pending_restore: None,
             toast: None,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -504,12 +538,14 @@ impl AppContext {
             state.storage = StorageInfo {
                 label: "Browser memory".to_string(),
                 detail: format!(
-                    "Could not save to browser storage ({error}). Notes stay in this tab only; export a zip to keep them."
+                    "Could not save to browser storage ({error}). Notes stay in this tab only; export a zip to keep them and restore it later in Settings."
                 ),
                 temporary: true,
             };
         }
-        self.toast_danger("Could not save to browser storage. Export a zip to keep your notes.");
+        self.toast_danger(
+            "Could not save to browser storage. Export a zip to keep your notes and restore it later in Settings.",
+        );
     }
 
     fn bootstrap(&self) {
@@ -2868,6 +2904,102 @@ impl AppContext {
         self.toast_info("Signed out. Your notes stay on this device.");
     }
 
+    /// Read a picked backup and show what restoring it will do.
+    pub fn choose_restore(&self, files: Vec<dioxus::html::FileData>) {
+        let Some(file) = files.into_iter().next() else {
+            return;
+        };
+        let name = file.name();
+        let context = self.clone();
+        spawn(async move {
+            match read_file_bytes(&file).await {
+                Ok(bytes) => context.inspect_restore(name, bytes),
+                Err(error) => context.toast_danger(format!("Could not read {name}: {error}")),
+            }
+        });
+    }
+
+    fn inspect_restore(&self, name: String, bytes: Vec<u8>) {
+        if bytes.is_empty() {
+            self.toast_danger(format!("{name} is empty"));
+            return;
+        }
+        if self.runtime.borrow().busy {
+            self.toast_info("Wait for the current sync to finish, then restore the backup.");
+            return;
+        }
+        match notes_core::read_export_zip(Cursor::new(&bytes)) {
+            Ok(bundle) => {
+                let has_history = bundle.notes.iter().any(|note| note.snapshot.is_some());
+                let mut state = self.state.write_unchecked();
+                state.pending_restore = Some(PendingRestore {
+                    name,
+                    bytes: Rc::new(bytes),
+                    notes: bundle.notes.len(),
+                    notebooks: bundle.notebooks.len(),
+                    attachments: bundle.attachments.len(),
+                    has_history,
+                });
+            }
+            Err(error) => self.toast_danger(format!(
+                "Could not read {name} as a Notebox backup: {error}"
+            )),
+        }
+    }
+
+    /// Dismiss the restore confirmation without changing anything.
+    pub fn cancel_restore(&self) {
+        self.state.write_unchecked().pending_restore = None;
+    }
+
+    /// Import the chosen backup. The store applies it in one transaction, so a
+    /// failure leaves the database as it was.
+    pub fn confirm_restore(&self) {
+        let Some(pending) = self.state.peek().pending_restore.clone() else {
+            return;
+        };
+        if self.runtime.borrow().busy {
+            self.toast_info("Wait for the current sync to finish, then restore the backup.");
+            return;
+        }
+        self.save_now();
+        if self.state.peek().dirty {
+            self.toast_danger(
+                "The open note still has unsaved changes. Try restoring again in a moment.",
+            );
+            return;
+        }
+        let Some(store) = self.store() else {
+            return;
+        };
+        match store.import_zip(pending.bytes.as_slice()) {
+            Ok(report) => {
+                {
+                    let mut state = self.state.write_unchecked();
+                    state.pending_restore = None;
+                    hide_history(&mut state);
+                }
+                self.reload();
+                let reopen = {
+                    let state = self.state.peek();
+                    state
+                        .selected
+                        .or_else(|| state.notes.first().map(|note| note.id))
+                };
+                if let Some(id) = reopen {
+                    self.select_note(id);
+                }
+                self.toast_success(restore_summary(&report));
+                // A failure here replaces the success toast with a storage
+                // warning, which is the more important message.
+                self.persist_if_needed();
+            }
+            Err(error) => {
+                self.toast_danger(format!("Restore failed: {error}. Nothing was changed."))
+            }
+        }
+    }
+
     /// Write a zip of all notes and show where it went.
     pub fn export_notes(&self) {
         let Some(store) = self.store() else {
@@ -3013,6 +3145,33 @@ async fn selected_range(fallback: usize) -> (usize, usize) {
     }
 }
 
+/// One line for the toast after a restore.
+fn restore_summary(report: &ImportReport) -> String {
+    let notes = report.notes_created + report.notes_updated;
+    let mut text = format!("Restored {}", count_label(notes, "note", "notes"));
+    if report.notes_updated > 0 {
+        text.push_str(&format!(" ({} updated)", report.notes_updated));
+    }
+    if report.notebooks > 0 {
+        text.push_str(&format!(
+            ", {}",
+            count_label(report.notebooks, "notebook", "notebooks")
+        ));
+    }
+    if report.attachments > 0 {
+        text.push_str(&format!(
+            ", {}",
+            count_label(report.attachments, "attachment", "attachments")
+        ));
+    }
+    text
+}
+
+/// `1 note` or `2 notes`, for counts shown to a person.
+fn count_label(value: usize, singular: &str, plural: &str) -> String {
+    format!("{value} {}", if value == 1 { singular } else { plural })
+}
+
 /// Display name for an attachment's image tag: no suffix, no brackets.
 fn attachment_label(name: &str) -> String {
     let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
@@ -3144,9 +3303,11 @@ pub fn edited_label(updated_at: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        attachment_label, attachment_set_changed, find_match_count, tone_class, word_count,
+        attachment_label, attachment_set_changed, find_match_count, restore_summary, tone_class,
+        word_count, PendingRestore,
     };
-    use notes_store::Attachment;
+    use notes_store::{Attachment, ImportReport};
+    use std::rc::Rc;
 
     fn attachment(hash: &str) -> Attachment {
         Attachment {
@@ -3158,6 +3319,39 @@ mod tests {
             uploaded: false,
             created_at: 1_000,
         }
+    }
+
+    #[test]
+    fn restore_summary_counts_notes_notebooks_and_attachments() {
+        assert_eq!(
+            restore_summary(&ImportReport {
+                notes_created: 2,
+                notes_updated: 1,
+                notebooks: 1,
+                attachments: 4,
+            }),
+            "Restored 3 notes (1 updated), 1 notebook, 4 attachments"
+        );
+        assert_eq!(
+            restore_summary(&ImportReport {
+                notes_created: 1,
+                ..ImportReport::default()
+            }),
+            "Restored 1 note"
+        );
+    }
+
+    #[test]
+    fn restore_confirmation_uses_singular_counts() {
+        let pending = PendingRestore {
+            name: "backup.zip".to_string(),
+            bytes: Rc::new(Vec::new()),
+            notes: 1,
+            notebooks: 1,
+            attachments: 1,
+            has_history: true,
+        };
+        assert_eq!(pending.summary(), "1 note, 1 notebook, 1 attachment");
     }
 
     #[test]

@@ -1,19 +1,57 @@
 # Status
 
 Updated: 2026-10-21
-Phase: 7 (installable web app and tagged release workflow; first tagged
-release remains); P1–P6 complete. The running app can sign in, restore a
-session, sync notes and attachments, show status, list and revoke devices, and
-keep a conflict copy. The web build is served by the Worker and syncs
-same-origin; local notes, history and images persist in OPFS, with no account
-needed. The web build is now installable and works offline after one visit,
-and a waiting deployment updates only when the user chooses Reload. The
+Phase: 8 (polish and performance, in progress); P1–P7 complete except the
+owner-only release execution. The app can now restore a backup in Settings or
+from the command palette, and export format v2 carries each note's Loro history,
+so a fresh device gets the version timeline back. P1 archives still import. A
+wiped browser profile also signs in to a local Worker and pulls its note, tag,
+pin and history back. The rest of P8 — the same drill against a deployed
+Worker, accessibility, large-note and cold-start measurements — remains. The
+running app can sign in,
+restore a session, sync notes and attachments, show status, list and revoke
+devices, and keep a conflict copy. The web build is served by the Worker and
+syncs same-origin; local notes, history and images persist in OPFS, with no
+account needed. The web build is now installable and works offline after one
+visit, and a waiting deployment updates only when the user chooses Reload. The
 release workflow builds Linux, Windows, Android and web artifacts when a
 version tag is pushed; it has not run yet because the Android signing key is an
 owner action.
 
 ## Shipped
 
+- `notes-app`: restore from backup. Settings and the command palette open a zip
+  picker, validate the archive before changing anything, and show note,
+  notebook and attachment counts plus whether the archive carries history.
+  Restore runs the store's single transaction, then refreshes the note list,
+  notebooks, tags, the open note and browser persistence. A sync run in progress
+  or a still-dirty editor blocks the restore; a failed read or import leaves the
+  database untouched.
+- `notes-core`: export format v2. Each note gains an optional full Loro snapshot
+  at `history/<note-id>.loro`; the Markdown file still holds the current text.
+  The reader accepts v1 and v2, rejects newer versions, and validates snapshot
+  paths against traversal and missing entries. ADR-0014 records the decision.
+- `notes-store`: history-preserving import. A new note is rebuilt from its
+  snapshot with its original peer ids and timestamps; an existing note merges
+  the snapshot and re-applies the archived text as a normal edit when it
+  differs, so newer local edits stay in the timeline. Two store tests cover
+  timeline retention and a restore over newer local edits.
+- `scripts/web-restore.mjs`: 18-check release-build Playwright flow. Profile A
+  makes a notebook, a pinned tagged note with a PNG and a trashed note, then
+  exports. A fresh profile B imports through the Settings file picker and finds
+  the text, tag, notebook assignment, pin, trash state, attachment row, decoded
+  WebP bytes and a history version labelled as another device. Importing the
+  same zip again does not duplicate the note or its history. The CI web job now
+  runs it after the restart check.
+- `scripts/web-wipe-login.mjs`: 11-check P8 account drill. It boots
+  `wrangler dev --local` with both D1 databases, serves the release build and
+  captures the app's derived login key from a first sign-in attempt. It creates
+  the one account with the setup token, signs in, and waits for the first sync.
+  It then closes the browser, deletes the OPFS database, `localStorage`,
+  cookies and service-worker caches, confirms the note is gone, signs in again
+  with the same passphrase and pulls the note body, tag, pin and a history
+  version labelled as the other device. The pull does not duplicate it. The CI
+  web job installs `worker-build` and runs it after the backup round trip.
 - `notes-app`: installable web app. `index.html` registers a root-scoped
   service worker and publishes an update bridge; `manifest.webmanifest`,
   desktop and maskable icons, and `_headers` are part of the release build.
@@ -319,9 +357,9 @@ owner action.
 - ADR-0001, ADR-0002, ADR-0004, ADR-0005, ADR-0006 and ADR-0007 record the
   spike, dependency and encoding decisions; ADR-0008 covers attachments,
   ADR-0009 sync wiring, ADR-0010 browser persistence, ADR-0011 the installable
-  web app, ADR-0012 tagged release artifacts and ADR-0013 the rustls-webpki
-  security patch. `docs/API.md` documents the v1 endpoints the P3 engine
-  implements.
+  web app, ADR-0012 tagged release artifacts, ADR-0013 the rustls-webpki
+  security patch and ADR-0014 backup history. `docs/API.md` documents the v1
+  endpoints the P3 engine implements.
 - Development disk: Cargo target, Rust/Cargo/npm/yarn/dx caches and Playwright
   browsers now live under `/tmp/opencode`; `scripts/relocate-caches.sh` repairs
   the layout and `scripts/budget-check` fails below 512 MiB free on `/home`.
@@ -331,7 +369,10 @@ owner action.
 
 | Check | Result |
 | --- | --- |
-| Native tests | 206 passed, 1 skipped (the ignored Worker client e2e) |
+| Native tests | 215 passed, 1 skipped (the ignored Worker client e2e) |
+| P8 backup restore (Playwright) | 18/18 checks: fresh-profile export/import of a notebook, pinned tagged note and trashed note; text, tag, pin, trash, attachment row, decoded WebP, history peer label and idempotent second import; no console errors |
+| P8 wipe and sign-in (Playwright + local Worker) | 11/11 checks: derived login key, account setup, first sync, OPFS/localStorage/cookie/cache wipe, note gone, sign in, note body/tag/pin, history labelled as the other device, no duplicate, no console errors |
+| P8 backup archive | v2 manifest plus one full Loro snapshot per note; v1 archives still read; restore over newer local edits keeps both timelines |
 | Search, 10,000 notes | seeded in 14,534 ms; search 4 ms (budget 100 ms), 1 hit |
 | 3-store convergence | random updates, metadata changes and sync order; identical text, metadata and history |
 | 3-replica core convergence | random edits, drops and random sync order |
@@ -342,10 +383,10 @@ owner action.
 | P7 browser flow (Playwright) | 22/22 checks: login, first sync, last sync, devices, current marker, two-click revoke, manual sync, sign-out, cookie/account clearing, reload, login reopen; no console errors |
 | P7 installable web app (Playwright) | 12/12 functional checks: manifest and icons, empty installability errors, service-worker control, offline note and edit across reloads, second build waits for the banner, Reload replaces the cache, note survives, no `/v1/*` requests, no console errors; 6 layout captures with `NBX_PWA_SCREENSHOTS=1` |
 | P7 PWA install/update layout | 360/900/1400 px, light and dark; banner wraps without horizontal overflow; screenshots `docs/screenshots/p7-pwa-*` |
-| PWA bundle | 10 precached files; 32,610 bytes of manifest, icons, HTML and worker; pre-cache assets from the Dioxus manifest only |
+| PWA bundle | 10 precached files; 32,624 bytes of manifest, icons, HTML and worker; pre-cache assets from the Dioxus manifest only |
 | P7 browser persistence (Playwright) | 13/13 checks: Browser storage label, local-only note and PNG, WebP attachment, second-tab lock, browser restart, text/image/history, page-hide save, no console errors |
 | P7 conflict flow (Playwright) | 13/13 checks with two device contexts plus a third puller: delayed sync, edit during the run, conflict toast, merged original, `conflict`-tagged copy holding the typed text, follow-up sync before the minute timer, copy pulled by another device |
-| Web bundle (release, brotli) | P7 release build 1,818,284 B (1.73 MiB), raw 7,529,584 B, limit 3.00 MiB; P7 Dioxus build 1,792,565 B (1.71 MiB), raw 7,489,034 B; P6 manual build 1,955,393 B (1.86 MiB), raw 9,353,273 B; P5 CI was 1,545,831 B |
+| Web bundle (release, brotli) | P8 backup restore 1,786,045 B (1.70 MiB), raw 7,495,164 B, limit 3.00 MiB; P7 release build 1,818,284 B (1.73 MiB), raw 7,529,584 B; P7 Dioxus build 1,792,565 B (1.71 MiB), raw 7,489,034 B; P6 manual build 1,955,393 B (1.86 MiB), raw 9,353,273 B; P5 CI was 1,545,831 B |
 | Linux bundles | `notebox_0.1.0_amd64.deb` 9,867,218 B; `notebox_0.1.0_x86_64.AppImage` 89,597,120 B. The `.deb` installed and stayed up for 20 s under Xvfb; the extracted AppImage did the same. Both from `dx bundle` 0.7.10 with the patched lockfile |
 | P5 browser flow (Playwright) | 26/26 checks: autosave, timeline, diff, preview, restore, version retention, trash, confirm, cancel, restore and empty |
 | P5 layout review | 360/900/1400 px, light and dark; no horizontal overflow, no console errors |
@@ -391,9 +432,18 @@ owner action.
   `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD`. The first `v*` tag will also
   exercise the clean-runner Linux and Windows install smoke jobs. The desktop
   update-available notice is not implemented; only the web build has one.
+- **P8 account drill**: the wipe, sign-in and history pull now passes against
+  `wrangler dev --local`, including an OPFS and session wipe. The same drill
+  against a deployed Worker still waits on a Cloudflare login and deploy. A
+  wiped device seeds the sample notes before sign-in, so the account's original
+  sample notes come back alongside the new local ones; user notes are not lost
+  or duplicated. Decide whether to defer seeding or give sample content stable
+  ids.
 - **Cold starts**: Linux desktop boot is verified under Xvfb, but the 600 ms
   cold-start number is not measured. Windows is build-only; Android has no
-  boot or cold-start number.
+  boot or cold-start number. The 100 KB note typing budget and the installer
+  size target (20 MB versus the 89.6 MB AppImage and 9.9 MB `.deb`) are also
+  open P8 items.
 - **Human cross-device acceptance**: the app-side account, sync loop and
   browser transport are wired, and a two-device browser run passes the P7
   login, device, conflict and sign-out checks. The human P5/P6/P7 check across
@@ -403,17 +453,28 @@ owner action.
   against a live Worker.
 ## Next
 
-1. P7 release execution: create and back up the Android keystore, set the four
+1. P8 continuation. The local-Worker wipe/sign-in/history drill now passes.
+   Next are the accessibility pass, a 100 KB note typing measurement and a
+   cold-start measurement. Reconcile the 20 MB installer target with ADR-0015:
+   decide whether the target means the `.deb` (9.9 MB) or whether the AppImage
+   should stop bundling WebKitGTK (89.6 MB). Close P8 with the same drill
+   against a deployed Worker once one exists.
+2. P8 sample-content polish. A wiped device seeds welcome notes before sign-in,
+   so the account's original welcome notes also arrive. Either defer seeding
+   until sign-in is declined, or give the sample notes and notebooks stable ids
+   so the pull updates them instead of adding copies. Do not delete sample
+   notes that a person has edited.
+3. P7 release execution: create and back up the Android keystore, set the four
    repository secrets, push a `v0.1.0` tag and fix any clean-runner smoke
    failure. Then add the desktop update-available notice (the web banner is
    done) and a fresh-machine README check. Do not publish an unsigned APK.
-2. S3 after `wrangler login`: deploy the Worker with the P7 assets, create the
+4. S3 after `wrangler login`: deploy the Worker with the P7 assets, create the
    account, measure request CPU with `wrangler tail` and write
    `docs/adr/0003-worker-free-tier.md`. Then run the human P5/P6/P7 acceptance
    on a desktop and a phone, including a photo, a version restore and an
    installed PWA update.
-3. Run S2/S5/P6/P7 on an Android emulator with `/dev/kvm` (CI or a physical
+5. Run S2/S5/P6/P7 on an Android emulator with `/dev/kvm` (CI or a physical
    device) to close the runtime gap, including Gboard composition, the camera
    picker and the in-app login/sync loop.
-4. Measure an OPFS image write on 1,000 notes and 50 images; if it exceeds
+6. Measure an OPFS image write on 1,000 notes and 50 images; if it exceeds
    roughly 100 ms, schedule the worker-backed `SqliteStore` from ADR-0004.
