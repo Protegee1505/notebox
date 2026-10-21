@@ -56,13 +56,13 @@ owner action.
   with the same passphrase and pulls the note body, tag, pin and a history
   version labelled as the other device. The pull does not duplicate it. The CI
   web job installs `worker-build` and runs it after the backup round trip.
-- `scripts/web-a11y.mjs`: 22-check P8 accessibility flow. It runs axe-core's
+- `scripts/web-a11y.mjs`: 27-check P8 accessibility flow. It runs axe-core's
   WCAG 2.0, 2.1 and 2.2 A/AA rules on notes, history, the command palette,
-  shortcuts, trash, Settings, Login and the mobile layout in light and dark
-  themes. The same run checks note-list Arrow/Home/Enter handling, focus return
-  after closing history, the palette or the shortcut sheet, Settings' back
-  button and Login's first field. The CI web job installs `axe-core` and runs
-  it after the backup round trip.
+  shortcuts, trash, Settings, Login and the mobile layout, each in light and
+  dark themes. The same run checks note-list Arrow/Home/Enter handling, focus
+  return after closing history, the palette or the shortcut sheet, Settings'
+  back button and Login's first field. The CI web job installs `axe-core` and
+  runs it after the backup round trip.
 - `notes-app`: accessibility pass. Muted text now meets 4.5:1 on every surface,
   the note list is a labelled listbox with arrow-key focus, the editor is a
   `main` landmark, icon-only file inputs have labels, tag remove and restore
@@ -406,7 +406,7 @@ owner action.
 | Native tests | 215 passed, 1 skipped (the ignored Worker client e2e) |
 | P8 backup restore (Playwright) | 18/18 checks: fresh-profile export/import of a notebook, pinned tagged note and trashed note; text, tag, pin, trash, attachment row, decoded WebP, history peer label and idempotent second import; no console errors |
 | P8 wipe and sign-in (Playwright + local Worker) | 11/11 checks: derived login key, account setup, first sync, OPFS/localStorage/cookie/cache wipe, note gone, sign in, note body/tag/pin, history labelled as the other device, no duplicate, no console errors |
-| P8 accessibility (Playwright + axe-core) | 22/22 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history and the palette in both themes, plus shortcuts, trash, Settings, Login and mobile; note-list Arrow/Home/Enter, focus return after overlays, Settings and Login autofocus; no console errors |
+| P8 accessibility (Playwright + axe-core) | 27/27 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; note-list Arrow/Home/Enter, focus return after overlays, Settings and Login autofocus; no console errors |
 | P8 large note (web UI) | 102,415 B note: open median 11.5–42.9 ms across three runs (one 53 ms sample); 120 typed characters, input-to-frame p95 8.4–9.0 ms, max 10.9–22.0 ms, none over 34 ms; text survives a reload; web cold start 786–1010 ms |
 | P8 desktop cold start (Linux release) | warm median 555 ms over 5 runs (547–587 ms), budget 600 ms; first run 628 ms with sample seeding, 2,170 ms when WebKit's cache is cold; Xvfb with isolated XDG directories |
 | P8 backup archive | v2 manifest plus one full Loro snapshot per note; v1 archives still read; restore over newer local edits keeps both timelines |

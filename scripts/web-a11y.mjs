@@ -281,13 +281,32 @@ try {
   );
   results.push(check("closing the shortcut sheet returns focus to the app", true));
 
-  // ---- Trash view with its restore action. ----
+  await setTheme(page, "dark");
+  await page.keyboard.press("Control+k");
+  await page.locator("#palette-input").fill("keyboard shortcuts");
+  await page.keyboard.press("Enter");
+  await page.locator(".shortcuts-sheet").waitFor({ timeout: 10_000 });
+  await settle(page);
+  await audit("keyboard shortcuts, dark");
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(
+    () => document.activeElement?.id === "app-root",
+    null,
+    { timeout: 10_000 },
+  );
+
+  // ---- Trash view, both themes. ----
+  await setTheme(page, "light");
   await page.getByRole("button", { name: "Move note to trash" }).click();
   await page.locator(".toast", { hasText: "Moved to trash" }).waitFor();
   await page.locator(".sidebar-nav .nav-row", { hasText: "Trash" }).click();
   await page.locator(".note-card").first().waitFor();
   await settle(page);
   await audit("trash, light");
+
+  await setTheme(page, "dark");
+  await audit("trash, dark");
+  await setTheme(page, "light");
 
   // ---- Settings, both themes, and autofocus. ----
   await page.locator(".sidebar-nav .nav-row", { hasText: "Notes" }).click();
@@ -316,16 +335,38 @@ try {
   await page.getByRole("button", { name: "Back to notes" }).click();
   await page.locator("#note-editor").waitFor();
 
-  // ---- Mobile layout. ----
+  await page.locator(".nav-row", { hasText: "Settings" }).click();
+  await page.getByRole("heading", { name: "Local data" }).waitFor();
+  await setTheme(page, "dark");
+  await page.getByRole("button", { name: "Sign in to sync" }).click();
+  await page.getByRole("heading", { name: "Sign in" }).waitFor();
+  await settle(page);
+  await audit("login, dark");
+  await page.getByRole("button", { name: "Back to notes" }).click();
+  await page.locator("#note-editor").waitFor();
+  await setTheme(page, "light");
+
+  // ---- Mobile layout, both themes. ----
   await page.setViewportSize({ width: 390, height: 844 });
   await settle(page, 500);
-  await audit("notes, mobile");
+  await audit("notes, mobile light");
   await page.getByRole("button", { name: "Open navigation" }).click();
   await page.locator(".sidebar.is-open").waitFor();
   await page.locator(".nav-row", { hasText: "Settings" }).click();
   await page.getByRole("heading", { name: "Local data" }).waitFor();
   await settle(page);
-  await audit("settings, mobile");
+  await audit("settings, mobile light");
+
+  await page.getByRole("button", { name: "Back to notes" }).click();
+  await page.locator("#note-editor").waitFor();
+  await setTheme(page, "dark");
+  await audit("notes, mobile dark");
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.locator(".sidebar.is-open").waitFor();
+  await page.locator(".nav-row", { hasText: "Settings" }).click();
+  await page.getByRole("heading", { name: "Local data" }).waitFor();
+  await settle(page);
+  await audit("settings, mobile dark");
 
   await page.screenshot({ path: path.join(tmpdir(), "notebox-a11y.png") });
 } catch (error) {
