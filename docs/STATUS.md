@@ -439,6 +439,7 @@ the login screen still offers offline use and a different server.
 | Check | Result |
 | --- | --- |
 | Native tests | 217 passed, 1 skipped (the ignored Worker client e2e) |
+| CI | Run 39556401276 on 373d9a8: all eight jobs green (gates, wasm, server, Windows, Android, desktop, OPFS, web) |
 | P8 backup restore (Playwright) | 18/18 checks: fresh-profile export/import of a notebook, pinned tagged note and trashed note; text, tag, pin, trash, attachment row, decoded WebP, history peer label and idempotent second import; no console errors |
 | P8 wipe and sign-in (Playwright + local Worker) | 11/11 checks: derived login key, account setup, first sync, OPFS/localStorage/cookie/cache wipe, note gone, sign in, note body/tag/pin, history labelled as the other device, no duplicate, no console errors |
 | P8 accessibility (Playwright + axe-core) | 30/30 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; note-list Arrow/Home/Enter, Tab and Shift+Tab stay inside the three dialogs, focus return after overlays, Settings/Login/dialog autofocus; no console errors |
