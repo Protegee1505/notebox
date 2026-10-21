@@ -1,0 +1,34 @@
+{
+  "generated_at": "2026-10-21T09:20:43.227Z",
+  "script": "notebox",
+  "window": {
+    "since": "2026-10-14T09:20:38.000Z",
+    "until": "2026-10-21T09:20:38.000Z",
+    "days": 7
+  },
+  "requests": 532,
+  "errors": 0,
+  "subrequests": 0,
+  "buckets": 338,
+  "statuses": [
+    {
+      "status": "success",
+      "requests": 532,
+      "errors": 0
+    }
+  ],
+  "cpu_us": {
+    "bucket_p50_min": 468,
+    "bucket_p50_median": 2051,
+    "bucket_p50_p95": 17052,
+    "bucket_p50_max": 41825,
+    "bucket_p99_max": 41825
+  },
+  "wall_us": {
+    "bucket_p99_min": 634,
+    "bucket_p99_median": 105106,
+    "bucket_p99_max": 2156252
+  },
+  "buckets_over_10ms": 34,
+  "requests_in_buckets_over_10ms": 38
+}

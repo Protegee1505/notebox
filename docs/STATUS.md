@@ -12,10 +12,12 @@ return after closing a panel.
 A 100 KB note opens in a median under 50 ms in the web UI and typing drops no
 frames; Linux desktop cold start is 555 ms warm. The installer budget now
 measures the `.deb` (9.9 MB), not the self-contained AppImage. The free Worker
-is deployed and a fresh browser signed in and synced; the full wipe/pull/history
-drill against the deployed Worker, plus the Windows and Android runtime checks,
-remain. The
-running app can sign in,
+is deployed and a fresh browser signed in and synced. S3 now has production
+analytics and a 100-request tail probe: 156 production invocations, zero
+errors, and no error 1102, with the CPU-budget nuance recorded in ADR-0003.
+The full wipe/pull/history drill against the deployed Worker, the Windows and
+Android runtime checks, and the v0.1.0 release remain; the release is deferred
+until the owner's remaining bugs are fixed. The running app can sign in,
 restore a session, sync notes and attachments, show status, list and revoke
 devices, and keep a conflict copy. The web build is served by the Worker and
 syncs same-origin; local notes, history and images persist in OPFS, with no
@@ -28,6 +30,24 @@ the login screen still offers offline use and a different server.
 
 ## Shipped
 
+- `docs/adr/0003-worker-free-tier.md`, `scripts/s3-probe.mjs`,
+  `scripts/s3-analytics.mjs` and `docs/measurements/`: **S3 evidence**. The
+  seven-day production window before the probe held 156 invocations, all
+  error-free; CPU per minute bucket was a 4.6 ms median, 26.3 ms p95 and
+  41.8 ms maximum, with 31 of 156 requests in buckets above 10 ms. The peaks
+  are consistent with isolate startup or heavier authenticated work; the
+  controlled warm probe is 1-2 ms. None produced error 1102 or an
+  `exceededCpu` outcome. A controlled 100-request probe at one request per
+  second captured 100/100 tail events, zero failures, a 1 ms median and 2 ms
+  maximum CPU, and only the expected 401 codes. The ADR records the decision to
+  keep the free Worker and to monitor for 1102. Desktop Argon2id is 38.2 ms
+  median over 20 release runs (`crates/notes-sync/examples/argon2_bench.rs`);
+  the release web build measured 119 ms median over three rejected logins,
+  including the local Worker round trip. The phone number remains open.
+- `scripts/web-wipe-login.mjs`: the P8 wipe drill now times three rejected
+  sign-in attempts before creating the account, checks the browser Argon2id
+  path stays under three seconds and keeps the expected 401 console messages
+  out of the error count. The flow passes 16/16 checks against a local Worker.
 - `notes-app` and `notes-server`: **Settings → Change username or password**.
   The form asks for the current password, allows a username change, and treats
   a blank new password as "keep the current one". `POST
@@ -472,14 +492,18 @@ the login screen still offers offline use and a different server.
 
 | Check | Result |
 | --- | --- |
-| Native tests | 217 passed, 1 skipped (the ignored Worker client e2e) |
-| CI | Run 39557002822 on c91fe0c: all eight jobs green (gates, wasm, server, Windows, Android, desktop, OPFS, web) |
+| S3 Worker CPU (production, Cloudflare analytics) | 156 invocations before the probe, 0 errors, all `success`; CPU bucket p50 median 4.618 ms, p95 26.291 ms, max 41.825 ms; 31 of 156 requests in 29 buckets above 10 ms; wall p99 median 127.2 ms, max 720.8 ms |
+| S3 tail probe | 100 requests at 1/s: 100/100 tail events, 0 failures, CPU min 0 / p50 1 / p95 2 / max 2 ms; login 401 `invalid_credentials`, devices and sync 401 `unauthorized`; no 1102 or 5xx |
+| S3 Argon2id | desktop release 38.2 ms median (20 runs, max 92.1 ms); Chromium release build 119 ms median (178/119/116 ms, includes local Worker round trip); phone not measured |
+| S3 free limits | re-read 2026-10-21: 100,000 requests/day, 10 ms CPU, 50 subrequests, 50 D1 queries, 2 MB rows, 10 D1 databases; 2 databases in use |
+| Native tests | 225 passed, 1 skipped (the ignored Worker client e2e) |
+| CI | Run 39570584938 on e9c8e82: all eight jobs green (gates, wasm, server, Windows, Android, desktop, OPFS, web) |
 | P8 backup restore (Playwright) | 18/18 checks: fresh-profile export/import of a notebook, pinned tagged note and trashed note; text, tag, pin, trash, attachment row, decoded WebP, history peer label and idempotent second import; no console errors |
-| P8 wipe and sign-in (Playwright + local Worker) | 11/11 checks: derived login key, account setup, first sync, OPFS/localStorage/cookie/cache wipe, note gone, sign in, note body/tag/pin, history labelled as the other device, no duplicate, no console errors |
+| P8 wipe and sign-in (Playwright + local Worker) | 16/16 checks: three timed rejected logins (browser Argon2id median 119 ms), derived login key, account setup, first sync, OPFS/localStorage/cookie/cache wipe, note gone, sign in, note body/tag/pin, history labelled as the other device, no duplicate, no console errors |
 | P8 accessibility (Playwright + axe-core) | 30/30 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; note-list Arrow/Home/Enter, Tab and Shift+Tab stay inside the three dialogs, focus return after overlays, Settings/Login/dialog autofocus; no console errors |
 | Web login preview | Rebuilt release at 2026-10-21: the Worker origin is read-only with no URL input, the offline action is visible, and the screen has no horizontal overflow or console errors at 1400 px and 390 px |
-| Live Worker deployment | `https://notebox.nbx-7207a015.workers.dev` serves the release build; `/version.json` reports 0.1.0 / c91fe0c. A fresh Chromium context signed in, reached "Synced", wrote welcome-note updates to D1 and showed no console errors; both verification devices were revoked |
-| Deploy guard | `./scripts/deploy-web.sh --check` reports live 0.1.0 / c91fe0c, a green CI run for `main`, no pending migrations on either D1 database, and blocks on a dirty tree before any build |
+| Live Worker deployment | `https://notebox.nbx-7207a015.workers.dev` serves the release build; `/version.json` reports 0.1.0 / e9c8e82. A fresh Chromium context signed in, reached "Synced", wrote welcome-note updates to D1 and showed no console errors; both verification devices were revoked |
+| Deploy guard | `./scripts/deploy-web.sh --check` reports live 0.1.0 / e9c8e82, a green CI run for `main`, no pending migrations on either D1 database, and blocks on a dirty tree before any build |
 | Remote D1 migrations | `notebox-sync` and `notebox-blobs` each applied `0001_init.sql`; `wrangler d1 migrations list --remote` reports no pending migrations |
 | P8 large note (web UI) | 102,415 B note: open median 11.5–42.9 ms across four runs (individual opens up to 57.7 ms); 120 typed characters, input-to-frame p95 8.4–9.0 ms, max 10.9–22.0 ms, none over 34 ms; text survives a reload; web cold start 786–1010 ms |
 | P8 desktop cold start (Linux release) | warm median 555 ms over 5 runs (547–587 ms), budget 600 ms; first run 628 ms with sample seeding, 2,170 ms when WebKit's cache is cold; Xvfb with isolated XDG directories |
@@ -513,7 +537,7 @@ the login screen still offers offline use and a different server.
 | Server end-to-end | 51 checks green against `wrangler dev --local` and local D1, including logout and cookie expiry |
 | Client sync, in-process | 14 two-client tests on the real handler stack; lost response, dropped request, `429` and corrupt chunks all converge |
 | Client sync, real Worker | 1 test / 24 assertions green through `wrangler dev --local` and D1 in 3.23 s |
-| Argon2id login key | 0.05 s per derivation (release build, this machine); debug build 0.61–0.66 s |
+| Argon2id login key | 38.2 ms median over 20 release runs (max 92.1 ms); see the S3 Argon2id row. Debug build 0.61–0.66 s |
 | Offline queue | 30 new notes: 25 pushed in one run, 5 in the next; queue empty after the server accepts |
 | Attachment round trip | client-to-client 2.5 MiB / 3 chunks in-process; 150 KB through real D1 with bytes and metadata identical |
 | Free-tier heavy day | 2,158 requests (2.16% of 100k), 5,443 rows read (0.11%), 1,314 rows written (1.31%) |
@@ -571,27 +595,27 @@ the login screen still offers offline use and a different server.
   drive its login/sync threads through the UI against a live Worker.
 ## Next
 
-1. P8 finish. Accessibility, the 100 KB note, the Linux cold-start budget and
-   the installer decision (ADR-0015) pass, and so does the local-Worker
-   wipe/sign-in/history drill. The deployed Worker has passed a fresh sign-in
-   and first sync; close P8 with the full wipe/pull/history drill against it.
-   Run `./scripts/deploy-web.sh --if-needed` after the next web merge so the
-   drill runs against the recorded commit. Repeat the open-note and cold-start
-   measurements on Windows and Android when those runtimes are available.
+1. P8 finish. Accessibility, the 100 KB note, the Linux cold-start budget, the
+   installer decision (ADR-0015) and S3 (ADR-0003) pass, and so does the
+   local-Worker wipe/sign-in/history drill. The deployed Worker has passed a
+   fresh sign-in and first sync; close P8 with the full wipe/pull/history drill
+   against it. Repeat the open-note and cold-start measurements on Windows and
+   Android when those runtimes are available.
 2. Personal release execution: the Worker is deployed, the account is created,
-   `SETUP_TOKEN` is deleted and `NBX_SERVER_URL` is set. Push a `v0.1.0` tag and
+   `SETUP_TOKEN` is deleted and `NBX_SERVER_URL` is set. **The v0.1.0 tag is
+   deliberately not pushed yet**: the owner has remaining bugs to fix first.
+   When they are fixed and CI is green, bump/confirm the version, push the tag,
    watch the first release workflow, then verify login and sync on a Windows
-   install, a Linux install and the deployed web app. The welcome-note merge and
-   the unknown-username backoff change need this live check.
+   install, a Linux install and the deployed web app.
 3. P7 release execution for Android when wanted: create and back up the
    keystore, set the four repository secrets, set `RELEASE_ANDROID=true`, and
-   publish a tagged release. Then add the desktop update-available notice (the
-   web banner is done) and a fresh-machine README check. Do not publish an
-   unsigned APK.
-4. S3: measure request CPU on the deployed Worker with `wrangler tail` and write
-   `docs/adr/0003-worker-free-tier.md`. Then run the human P5/P6/P7 acceptance
-   on a desktop and a phone, including a photo, a version restore and an
-   installed PWA update.
+   publish a tagged release. Do not publish an unsigned APK. Add the desktop
+   update-available notice in a later v0.1.1, after the first release; the web
+   banner is already done.
+4. Run the human P5/P6/P7 acceptance on a desktop and a phone, including a
+   photo, a version restore and an installed PWA update. S3's desktop and
+   browser CPU and Argon2 evidence is closed; the phone Argon2 number comes with
+   the Android runtime work below.
 5. Run S2/S5/P6/P7 on an Android emulator with `/dev/kvm` (CI or a physical
    device) to close the runtime gap, including Gboard composition, the camera
    picker and the in-app login/sync loop.

@@ -35,9 +35,12 @@ deployments wait until the user chooses Reload from the update banner; the old
 worker never swaps under an open editor. Phase 8's accessibility, 100 KB note
 and Linux cold-start budgets pass, and a local-Worker wipe/sign-in drill returns
 every note and its history; the same drill against a deployed Worker is the
-last P8 step. A remote deploy and the S3 CPU
-measurement wait for `wrangler login`, and Android runtime testing still needs
-an emulator. The tag-triggered release workflow builds Linux, Windows and web
+last P8 step. The Worker is deployed and the S3 evidence is in
+[ADR-0003](docs/adr/0003-worker-free-tier.md): 156 production invocations and a
+100-request tail probe, zero errors and no error 1102; desktop and browser
+Argon2id are under target, while phone testing still needs an emulator. The
+`v0.1.0` tag is deferred until the owner's remaining bugs are fixed. The
+tag-triggered release workflow builds Linux, Windows and web
 artifacts; the Android job stays off until you enable it with
 `RELEASE_ANDROID=true` and its signing secrets exist. See
 [docs/STATUS.md](docs/STATUS.md), [docs/API.md](docs/API.md) and
@@ -335,8 +338,19 @@ gh variable set NBX_SERVER_URL \
   --body "https://notebox.<your-subdomain>.workers.dev"
 ```
 
-Then measure CPU time for the S3 spike with `npx wrangler tail` and write
-`docs/adr/0003-*.md`. See [docs/API.md](docs/API.md) for the request shapes.
+Then check the free-tier budget. The probe sends only unauthenticated requests,
+so it writes no D1 rows; the scripts keep the path, status, outcome, CPU and
+wall time, never headers or bodies:
+
+```bash
+node scripts/s3-probe.mjs --count 100
+node scripts/s3-analytics.mjs --days 7
+cargo run -p notes-sync --example argon2_bench --release
+```
+
+The 2026-10-21 results, the cold-start nuance and the fallback decision are in
+[ADR-0003](docs/adr/0003-worker-free-tier.md). See [docs/API.md](docs/API.md)
+for the request shapes.
 
 ## Releases
 

@@ -6,9 +6,9 @@
 // persistence directory, serves the release web build, and drives Chromium:
 //
 // 1. Create a tagged, pinned note.
-// 2. Sign in. Capture the login key from the app's first request, create the
-//    one account with the setup token, then sign in for real and wait for the
-//    first sync.
+// 2. Sign in. Time three rejected attempts to record the browser's Argon2id
+//    login key, capture the key from the first request, create the one account
+//    with the setup token, then sign in for real and wait for the first sync.
 // 3. Close the browser, delete the OPFS database, localStorage, cookies and
 //    service-worker caches. The next launch is a wiped device.
 // 4. Confirm the note is gone, sign in again with the same password, and
@@ -57,9 +57,9 @@ let browser;
 let profile;
 let context;
 let persist;
-// The first sign-in is deliberately attempted before the account exists so the
-// test can capture the app's derived login key. Chrome logs that expected 401.
-let allowAuthFailure = false;
+// The first three sign-ins are attempted before the account exists so the test
+// can time the derived login key. Chrome logs each expected 401.
+let allowedAuthFailures = 0;
 
 function check(name, ok, detail = "") {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? ` — ${detail}` : ""}`);
@@ -169,8 +169,8 @@ function watch(page, errors) {
     if (message.type() !== "error" || message.text().includes("_dioxus")) {
       return;
     }
-    if (allowAuthFailure && message.text().includes("401 (Unauthorized)")) {
-      allowAuthFailure = false;
+    if (allowedAuthFailures > 0 && message.text().includes("401 (Unauthorized)")) {
+      allowedAuthFailures -= 1;
       return;
     }
     errors.push(`console: ${message.text()}`);
@@ -289,15 +289,30 @@ try {
   await page.waitForTimeout(800);
 
   await openLogin(page);
-  await fillLogin(page, USERNAME, PASSWORD);
-  const firstLogin = page.waitForRequest(
-    (request) =>
-      request.method() === "POST" && request.url().endsWith("/v1/auth/login"),
-  );
-  allowAuthFailure = true;
-  await page.getByRole("button", { name: "Connect" }).click();
-  const loginBody = (await firstLogin).postDataJSON();
-  const loginKey = loginBody?.payload?.login_key;
+  allowedAuthFailures = 3;
+  // Three wrong-account attempts: the account does not exist yet, so the
+  // server rejects each one without a backoff. Timing click-to-response
+  // measures the WASM Argon2id derivation plus the local Worker round trip.
+  const loginTimes = [];
+  let loginKey;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    // submit_login clears the password after each attempt; fill it again.
+    await fillLogin(page, USERNAME, PASSWORD);
+    const started = performance.now();
+    const responsePromise = page.waitForResponse(
+      (response) =>
+        response.request().method() === "POST" &&
+        response.url().endsWith("/v1/auth/login"),
+    );
+    await page.getByRole("button", { name: "Connect" }).click();
+    const response = await responsePromise;
+    loginTimes.push(performance.now() - started);
+    const loginBody = response.request().postDataJSON();
+    loginKey ??= loginBody?.payload?.login_key;
+    await page.locator(".form-error").waitFor({ timeout: 30_000 });
+    await page.waitForTimeout(150);
+  }
+  const loginMedian = [...loginTimes].sort((a, b) => a - b)[1];
   results.push(
     check(
       "the app sends a derived login key, not the password",
@@ -305,7 +320,13 @@ try {
       String(loginKey).slice(0, 12),
     ),
   );
-  await page.locator(".form-error").waitFor({ timeout: 30_000 });
+  results.push(
+    check(
+      "browser login key derivation stays under 3 s",
+      loginMedian < 3000,
+      `${loginTimes.map((ms) => ms.toFixed(0)).join("/")} ms, median ${loginMedian.toFixed(0)} ms`,
+    ),
+  );
   await createAccount(loginKey);
   await fillLogin(page, USERNAME, PASSWORD);
   await page.getByRole("button", { name: "Connect" }).click();

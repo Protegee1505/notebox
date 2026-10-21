@@ -1,0 +1,50 @@
+{
+  "generated_at": "2026-10-21T09:20:31.409Z",
+  "worker": "notebox",
+  "url": "https://notebox.nbx-7207a015.workers.dev",
+  "requests": 100,
+  "warmup_ms": 5159,
+  "missing_tail_events": 0,
+  "failures": 0,
+  "outcomes": {
+    "ok": 100
+  },
+  "cpu_ms": {
+    "min": 0,
+    "p50": 1,
+    "p95": 2,
+    "max": 2
+  },
+  "wall_ms": {
+    "max": 170
+  },
+  "by_kind": {
+    "/v1/auth/login": {
+      "requests": 34,
+      "statuses": [
+        401
+      ],
+      "codes": [
+        "invalid_credentials"
+      ]
+    },
+    "/v1/devices": {
+      "requests": 33,
+      "statuses": [
+        401
+      ],
+      "codes": [
+        "unauthorized"
+      ]
+    },
+    "/v1/sync": {
+      "requests": 33,
+      "statuses": [
+        401
+      ],
+      "codes": [
+        "unauthorized"
+      ]
+    }
+  }
+}
