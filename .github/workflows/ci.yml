@@ -126,6 +126,9 @@ jobs:
 
   web:
     runs-on: ubuntu-latest
+    env:
+      NBX_BUILD_ID: ${{ github.run_number }}
+      NBX_GIT_SHA: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -140,8 +143,8 @@ jobs:
           curl -sSL https://dioxus.dev/install.sh | bash -s v0.7.10
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
-      - name: Build web release
-        run: dx build -p notes-app --platform web --release --features web
+      - name: Build web release with PWA files
+        run: ./scripts/web-build.sh
 
       - name: Brotli first-load budget
         run: node scripts/web-budget.mjs target/dx/notebox/release/web/public
@@ -158,6 +161,11 @@ jobs:
         env:
           PLAYWRIGHT_MODULES: /tmp/notebox-web/node_modules
         run: node scripts/web-persist.mjs
+
+      - name: Installable, offline and deliberate updates
+        env:
+          PLAYWRIGHT_MODULES: /tmp/notebox-web/node_modules
+        run: node scripts/pwa-check.mjs
 
       - uses: actions/upload-artifact@v4
         with:
