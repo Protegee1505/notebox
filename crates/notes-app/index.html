@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <title>{app_title}</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Local-first notes with history and offline sync." />
+    <meta name="application-name" content="Notebox" />
+    <meta name="theme-color" content="#f3f0e7" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#151815" media="(prefers-color-scheme: dark)" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Notebox" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icon-192.png" type="image/png" sizes="192x192" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <script>
+      // The web build is a PWA: index.html owns registration and the update
+      // lifecycle, while Rust mirrors `noteboxPwa.ready` into the app banner.
+      (() => {
+        const bridge = {
+          ready: false,
+          registration: null,
+          applyUpdate: async () => {
+            const registration =
+              bridge.registration ||
+              (await navigator.serviceWorker.getRegistration());
+            if (!registration || !registration.waiting) {
+              location.reload();
+              return;
+            }
+            navigator.serviceWorker.addEventListener(
+              "controllerchange",
+              () => setTimeout(() => location.reload(), 250),
+              { once: true },
+            );
+            registration.waiting.postMessage({ type: "SKIP_WAITING" });
+            // If activation is blocked, do not leave the banner spinning.
+            setTimeout(() => location.reload(), 8000);
+          },
+        };
+        window.noteboxPwa = bridge;
+        if (!("serviceWorker" in navigator)) return;
+
+        const announce = () => {
+          if (!navigator.serviceWorker.controller || bridge.ready) return;
+          if (!bridge.registration?.waiting) return;
+          bridge.ready = true;
+          window.dispatchEvent(new CustomEvent("notebox-update-ready"));
+        };
+
+        window.addEventListener("load", async () => {
+          try {
+            const registration = await navigator.serviceWorker.register(
+              "/sw.js",
+              { scope: "/", updateViaCache: "none" },
+            );
+            bridge.registration = registration;
+            announce();
+            registration.addEventListener("updatefound", () => {
+              const worker = registration.installing;
+              if (!worker) return;
+              worker.addEventListener("statechange", () => {
+                if (worker.state === "installed") announce();
+              });
+            });
+            if (navigator.serviceWorker.controller) {
+              registration.update().catch(() => {});
+            }
+            document.addEventListener("visibilitychange", () => {
+              if (document.visibilityState === "visible") {
+                registration.update().catch(() => {});
+              }
+            });
+          } catch {
+            // Dev serve and file:// pages have no worker; the app still runs.
+          }
+        });
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="main"></div>
+    <noscript>Notebox needs JavaScript and WebAssembly to open your notes.</noscript>
+  </body>
+</html>

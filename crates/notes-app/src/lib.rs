@@ -15,10 +15,13 @@
 mod app;
 #[cfg(target_arch = "wasm32")]
 mod browser_storage;
+mod build_info;
 mod commands;
 mod images;
 mod markdown_ops;
 mod media;
+#[cfg(target_arch = "wasm32")]
+mod pwa;
 mod state;
 mod storage;
 mod sync;

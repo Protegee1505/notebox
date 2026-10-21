@@ -261,6 +261,56 @@ kbd {
   --tone-edge: var(--border-strong);
 }
 
+/* ---------- update banner ---------- */
+
+.update-banner {
+  position: relative;
+  z-index: 21;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  background: var(--primary-soft);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+.update-badge {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: var(--space-6);
+  height: var(--space-6);
+  border-radius: var(--radius-pill);
+  background: var(--primary);
+  color: var(--primary-contrast);
+}
+
+.update-copy {
+  display: flex;
+  flex: 1 1 var(--space-8);
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.update-copy strong {
+  font-size: var(--text-sm);
+}
+
+.update-copy span {
+  color: var(--text-soft);
+  font-size: var(--text-sm);
+}
+
+.update-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
 /* ---------- top bar ---------- */
 
 .topbar {
@@ -3283,6 +3333,16 @@ kbd {
   .workspace.settings-mode .list-pane,
   .workspace.settings-mode .editor-pane {
     display: none;
+  }
+
+  .update-banner {
+    align-items: flex-start;
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .update-actions {
+    justify-content: flex-end;
+    width: 100%;
   }
 
   .back-button {

@@ -10,7 +10,7 @@ use crate::commands::filtered;
 use crate::state::{AppContext, Screen};
 use crate::ui::{
     CommandPalette, EditorPane, LoginScreen, NoteList, SettingsPane, ShortcutSheet, Sidebar,
-    ToastView, TopBar,
+    ToastView, TopBar, UpdateBanner,
 };
 
 const STYLE: Asset = asset!("/assets/main.css");
@@ -19,6 +19,12 @@ const STYLE: Asset = asset!("/assets/main.css");
 pub fn App() -> Element {
     let context = use_hook(AppContext::new);
     use_context_provider(|| context.clone());
+
+    #[cfg(target_arch = "wasm32")]
+    use_hook({
+        let context = context.clone();
+        move || crate::pwa::listen(context)
+    });
 
     let tick_context = context.clone();
     use_future(move || {
@@ -50,6 +56,7 @@ pub fn App() -> Element {
     let storage_error = state.storage_error.clone();
     let starting = state.starting;
     let storage_blocked = state.storage_blocked.clone();
+    let update_ready = state.update_ready && !state.update_dismissed;
     drop(state);
 
     let mut workspace_class = String::from("workspace");
@@ -109,6 +116,9 @@ pub fn App() -> Element {
             } else if screen == Screen::Login {
                 LoginScreen {}
             } else {
+                if update_ready {
+                    UpdateBanner {}
+                }
                 TopBar {}
                 if let Some(error) = storage_error {
                     main { class: "fatal-screen",

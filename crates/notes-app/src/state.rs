@@ -284,6 +284,12 @@ pub struct AppState {
     pub starting: bool,
     /// Another tab owns browser storage, shown instead of the note list.
     pub storage_blocked: Option<String>,
+    /// A new web build is waiting to take over.
+    pub update_ready: bool,
+    /// The user chose to update later in this session.
+    pub update_dismissed: bool,
+    /// The page is waiting for the new worker to activate.
+    pub update_applying: bool,
     /// Local profile.
     pub profile: Profile,
     /// Login form.
@@ -359,6 +365,9 @@ impl AppState {
             storage_error,
             starting: true,
             storage_blocked: None,
+            update_ready: false,
+            update_dismissed: false,
+            update_applying: false,
             profile: Profile::default(),
             login: LoginForm {
                 server,
@@ -2898,6 +2907,47 @@ impl AppContext {
              setTimeout(() => URL.revokeObjectURL(link.href), 1000);"
         ));
         self.toast_success("Export downloaded");
+    }
+
+    /// A waiting service worker announced a new web build.
+    #[cfg(target_arch = "wasm32")]
+    pub fn mark_update_ready(&self) {
+        let mut state = self.state.write_unchecked();
+        if !state.update_ready {
+            state.update_ready = true;
+            state.update_applying = false;
+        }
+    }
+
+    /// Keep the current build until the next launch.
+    pub fn dismiss_update(&self) {
+        self.state.write_unchecked().update_dismissed = true;
+    }
+
+    /// Ask a waiting worker to activate. The page reloads from the controller
+    /// change, so notes must already be saved.
+    pub fn apply_update(&self) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.save_now();
+            let still_dirty = { self.state.read().dirty };
+            if still_dirty {
+                self.state.write_unchecked().update_applying = false;
+                self.toast_info("Notebox is still saving this note. Try Reload again in a moment.");
+                return;
+            }
+            if let Some(handle) = self.store.get() {
+                if let Some(persistence) = &handle.persistence {
+                    let _ = persistence.flush_now();
+                }
+            }
+            self.state.write_unchecked().update_applying = true;
+            crate::pwa::apply_update();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.dismiss_update();
+        }
     }
 
     /// Show an informational message.

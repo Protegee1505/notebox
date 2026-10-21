@@ -11,6 +11,7 @@ pub mod shortcuts;
 pub mod sidebar;
 pub mod toast;
 pub mod topbar;
+pub mod update;
 
 pub use editor::EditorPane;
 pub use history::HistoryPanel;
@@ -22,3 +23,4 @@ pub use shortcuts::ShortcutSheet;
 pub use sidebar::Sidebar;
 pub use toast::ToastView;
 pub use topbar::TopBar;
+pub use update::UpdateBanner;

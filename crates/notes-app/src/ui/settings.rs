@@ -2,6 +2,7 @@
 
 use dioxus::prelude::*;
 
+use crate::build_info;
 use crate::state::{AppContext, Layout, Screen, Theme};
 use crate::time::relative_time;
 use crate::ui::icons::Icon;
@@ -391,9 +392,9 @@ pub fn SettingsPane() -> Element {
                         h2 { "About" }
                     }
                     p { class: "card-note",
-                        "Notebox 0.1.0 \u{00b7} local-first notes in Rust. One codebase for web, desktop and Android; Loro history; SQLite storage; a Cloudflare Worker for sync."
+                        "{build_info::label()}. Local-first notes in Rust. One codebase for web, desktop and Android; Loro history; SQLite storage; a Cloudflare Worker for sync."
                     }
-                    div { class: "phase-pill", "Phase 7 \u{00b7} sync wiring" }
+                    div { class: "phase-pill", "Phase 7 \u{00b7} packaging" }
                 }
             }
         }
