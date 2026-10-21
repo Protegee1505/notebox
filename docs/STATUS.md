@@ -9,9 +9,9 @@ wiped browser profile also signs in to a local Worker and pulls its note, tag,
 pin and history back. An accessibility audit of every main screen and theme
 passes, including note-list arrow keys, Tab trapped inside dialogs and focus
 return after closing a panel. The phone note list now keeps a pasted image title
-inside the viewport, the editor header fits and the toolbar scrolls at 320 px,
-and the colour menu no longer puts a full-screen blocker over Back and
-Settings.
+inside the viewport and keeps full title lines when the list scrolls, the
+editor header fits and the toolbar scrolls at 320 px, and the colour menu no
+longer puts a full-screen blocker over Back and Settings.
 A 100 KB note opens in a median under 50 ms in the web UI and typing drops no
 frames; Linux desktop cold start is 555 ms warm. The installer budget now
 measures the `.deb` (9.9 MB), not the self-contained AppImage. The free Worker
@@ -33,6 +33,22 @@ the login screen still offers offline use and a different server.
 
 ## Shipped
 
+- `notes-app`: **note cards keep their full titles once the list scrolls**.
+  The note list is both the scroll container and the grid. When its content was
+  taller than the viewport, the implicit grid rows resolved to each card's
+  `min-height` (`7.5rem` on phones, `10rem` on desktop), the cards' column flex
+  children shrank to fit, and `.note-title`'s line clamp plus `overflow: hidden`
+  sliced the glyphs. The six-note account showed it; the earlier four-note phone
+  probe fit without scrolling and stayed green. `grid-auto-rows: max-content`
+  sizes each row to its cards, and `flex: none` keeps compact list rows from
+  shrinking. In Chromium 156 with the release CSS at 360×780 and six notes,
+  cards were all 120 px with 10.7 px title boxes before and 120–165 px with
+  21.6/43.2 px title boxes after; at 1024×700 with 14 notes, 160 px cards grew
+  to 160–182 px. Compact rows went from 40.8 px with 0 px titles to 84.1 px
+  with 19 px titles. `scripts/web-a11y.mjs` now forces a 360×420 overflow and
+  checks every card title keeps a full line, then checks the compact rows at
+  1024×420. The 42-check flow passes on the fixed build and fails on the old
+  CSS.
 - `notes-app`: **fix the sync crash that froze the phone**. The first sync that
   downloaded an image attachment panicked in `load_attachments` with
   `AlreadyBorrowed`: `if let Some(id) = self.state.peek().selected` kept the
@@ -171,7 +187,7 @@ the login screen still offers offline use and a different server.
   opens the credential form, changes both username and password, signs out,
   signs in with the new pair and confirms the note is still there. The CI web
   job installs `worker-build` and runs it after the backup round trip.
-- `scripts/web-a11y.mjs`: 40-check P8 accessibility and phone-layout flow. It
+- `scripts/web-a11y.mjs`: 42-check P8 accessibility and phone-layout flow. It
   runs axe-core's WCAG 2.0, 2.1 and 2.2 A/AA rules on notes, history, the
   command palette, shortcuts, trash, Settings, Login and the mobile layout,
   each in light and dark themes. The same run checks note-list Arrow/Home/Enter
@@ -182,8 +198,10 @@ the login screen still offers offline use and a different server.
   the 320 px editor header fits with a reachable Quote button and a scrollable
   toolbar, that the colour sheet stays in the viewport, that one tap on Back
   leaves the editor with the colour menu open, and that Settings and the
-  navigation drawer still open. The CI web job installs `axe-core` and runs it
-  after the backup round trip.
+  navigation drawer still open. It then shortens the viewport to 360×420 so the
+  list scrolls, asserts every card title keeps at least one full line, switches
+  to the compact rows at 1024×420 and asserts the same there. The CI web job
+  installs `axe-core` and runs it after the backup round trip.
 - `notes-app`: accessibility pass. Muted text now meets 4.5:1 on every surface,
   the note list is a labelled listbox with arrow-key focus, the editor is a
   `main` landmark, icon-only file inputs have labels, tag remove and restore
@@ -534,7 +552,7 @@ the login screen still offers offline use and a different server.
 | CI | Run 39592592855 on bd6d1e6: all eight jobs green (gates, wasm, server, Windows, Android, desktop, OPFS, web) |
 | P8 backup restore (Playwright) | 18/18 checks: fresh-profile export/import of a notebook, pinned tagged note and trashed note; text, tag, pin, trash, attachment row, decoded WebP, history peer label and idempotent second import; no console errors |
 | P8 wipe and sign-in (Playwright + local Worker) | 19/19 checks: three timed rejected logins (browser Argon2id median 162 ms), derived login key, account setup, first sync, image attachment, OPFS/localStorage/cookie/cache wipe, note gone, sign in, attachment download without a crash, note body/tag/pin/image, history labelled as the other device, no duplicate, no console errors |
-| P8 accessibility and phone layout (Playwright + axe-core) | 40/40 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; note-list Arrow/Home/Enter, Tab and Shift+Tab stay inside the three dialogs, focus return after overlays, Settings/Login/dialog autofocus; image title and no list overflow at 390/360/320; 320 px header, scrollable toolbar and reachable Quote; colour sheet inside the viewport; one-tap Back and phone Settings/navigation; no console errors |
+| P8 accessibility and phone layout (Playwright + axe-core) | 42/42 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; note-list Arrow/Home/Enter, Tab and Shift+Tab stay inside the three dialogs, focus return after overlays, Settings/Login/dialog autofocus; image title and no list overflow at 390/360/320; card titles keep a full line at 360×420 and compact rows at 1024×420; 320 px header, scrollable toolbar and reachable Quote; colour sheet inside the viewport; one-tap Back and phone Settings/navigation; no console errors |
 | P8 phone sign-in (one-off Playwright, 360 px touch + local Worker) | New note saved, derived login key, account setup, status `Synced`, synced note in the list, no list overflow, Settings round trip, navigation drawer, one-tap Back with the colour menu open; no console errors |
 | Web login preview | Rebuilt release at 2026-10-21: the Worker origin is read-only with no URL input, the offline action is visible, and the screen has no horizontal overflow or console errors at 1400 px and 390 px |
 | Live Worker deployment | `https://notebox.nbx-7207a015.workers.dev` serves release 0.1.0 / bd6d1e6; `/version.json` reports the same build. A fresh 360 px smoke boot loaded the new wasm, kept the crash panel hidden, had the `notebox-bd6d1e6` service-worker cache active and logged no console errors. The earlier e9c8e82 deploy passed a fresh sign-in and first sync; the 759971a phone probe at 360 px created a local image note, displayed the title `image`, kept the list at 359 px with no horizontal scroll, opened the colour sheet, left the editor with one Back tap and logged no console errors |

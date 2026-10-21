@@ -474,6 +474,79 @@ try {
     );
   }
 
+  // The note list is also its scroll container. A short viewport makes it
+  // overflow; the grid rows must still size to their cards, or flex children
+  // shrink and the title clamp slices glyphs.
+  await page.setViewportSize({ width: 360, height: 420 });
+  await settle(page, 350);
+  const overflowingCards = await page.evaluate(() => {
+    const list = document.querySelector(".note-list");
+    const cards = [...document.querySelectorAll(".note-card")];
+    return {
+      scrolls: Boolean(list && list.scrollHeight > list.clientHeight + 1),
+      titles: cards.map((card) => {
+        const title = card.querySelector(".note-title");
+        return {
+          text: title?.textContent?.trim().slice(0, 30) ?? "",
+          height: title?.getBoundingClientRect().height ?? 0,
+          line: title
+            ? Number.parseFloat(getComputedStyle(title).lineHeight)
+            : 0,
+        };
+      }),
+    };
+  });
+  results.push(
+    check(
+      "cards keep full title lines when the phone list scrolls",
+      overflowingCards.scrolls &&
+        overflowingCards.titles.length > 0 &&
+        overflowingCards.titles.every(
+          (title) => title.line > 0 && title.height >= title.line - 0.5,
+        ),
+      JSON.stringify(overflowingCards),
+    ),
+  );
+
+  // The compact list is a flex scroll container; rows must not shrink when
+  // their content is taller than the viewport.
+  await page.setViewportSize({ width: 1024, height: 420 });
+  await settle(page, 300);
+  await page.getByRole("button", { name: "List view" }).click();
+  await settle(page, 300);
+  const overflowingRows = await page.evaluate(() => {
+    const list = document.querySelector(".note-list");
+    return {
+      scrolls: Boolean(list && list.scrollHeight > list.clientHeight + 1),
+      rows: [...document.querySelectorAll(".note-card")].map((card) => {
+        const title = card.querySelector(".note-title");
+        return {
+          height: card.getBoundingClientRect().height,
+          titleHeight: title?.getBoundingClientRect().height ?? 0,
+          line: title
+            ? Number.parseFloat(getComputedStyle(title).lineHeight)
+            : 0,
+        };
+      }),
+    };
+  });
+  results.push(
+    check(
+      "note rows keep their title line when the list scrolls",
+      overflowingRows.scrolls &&
+        overflowingRows.rows.length > 0 &&
+        overflowingRows.rows.every(
+          (row) =>
+            row.height > 0 && row.line > 0 && row.titleHeight >= row.line - 0.5,
+        ),
+      JSON.stringify(overflowingRows),
+    ),
+  );
+  await page.getByRole("button", { name: "Card grid" }).click();
+  await settle(page, 250);
+  await page.setViewportSize({ width: 320, height: 780 });
+  await settle(page, 300);
+
   const imageCard = page
     .locator(".note-card")
     .filter({ has: page.locator(".note-title", { hasText: /^image$/ }) })

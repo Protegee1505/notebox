@@ -951,6 +951,11 @@ kbd {
 .note-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(13rem, 100%), 1fr));
+  /* The list is the scroll container, so an overflowing list gives this grid
+     a definite height. Size each row to its cards; with auto rows the browser
+     falls back to the card min-height and the flex children shrink, clipping
+     titles. */
+  grid-auto-rows: max-content;
   gap: var(--space-3);
   align-content: start;
 }
@@ -1103,6 +1108,9 @@ kbd {
 }
 
 .note-rows .note-card {
+  /* The list is the scroll container. Keep each row at its content height, or
+     a long list makes flex shrink every row and hide its title. */
+  flex: none;
   min-height: 0;
   gap: 0.2rem;
   padding: 0.7rem 0.8rem;
