@@ -1,0 +1,547 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  gates:
+    name: Verify the tagged commit
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag matches the notes-app version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "notes-app") | .version')"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match notes-app ${version}."
+            echo "Bump the workspace version or retag the release."
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Releasing notes-app ${version} from ${GITHUB_REF_NAME}"
+
+      - name: System libraries for the desktop renderer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf clang
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@cargo-deny
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo nextest run --workspace
+
+      - name: Desktop app check
+        run: cargo clippy -p notes-app --no-default-features --features desktop -- -D warnings
+
+      - name: Web compile
+        run: cargo check -p notes-app --no-default-features --features web --target wasm32-unknown-unknown
+
+      - name: Headless crate compile for wasm
+        run: cargo check -p notes-proto -p notes-core -p notes-store -p notes-sync --target wasm32-unknown-unknown
+
+      - name: Licences and advisories
+        run: cargo deny check
+
+      - name: Free-tier simulator
+        run: python3 scripts/free-tier-sim.py
+
+      - name: Budget ceilings
+        run: ./scripts/budget-check
+
+  linux-bundle:
+    name: Linux .deb and AppImage
+    needs: gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System libraries for the desktop renderer
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev patchelf libxdo-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install dx 0.7.10
+        run: |
+          curl -sSL https://dioxus.dev/install.sh | bash -s v0.7.10
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Bundle
+        env:
+          NBX_BUILD_ID: ${{ github.ref_name }}
+          NBX_GIT_SHA: ${{ github.sha }}
+        run: |
+          dx bundle -p notes-app --platform desktop --release --features desktop \
+            --package-types deb --package-types appimage
+
+      - name: Collect and inspect the packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/linux
+          find target/dx/notebox/bundle -type f \( -name '*.deb' -o -name '*.AppImage' \) \
+            -exec cp -v {} dist/linux/ \;
+          deb="$(find dist/linux -name '*.deb' -print -quit)"
+          appimage="$(find dist/linux -name '*.AppImage' -print -quit)"
+          test -n "$deb"
+          test -n "$appimage"
+          dpkg-deb -I "$deb" | grep -q 'Package: notebox'
+          dpkg-deb -c "$deb" | grep -q '/usr/bin/notebox'
+          file "$appimage" | grep -qi 'ELF'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notebox-linux
+          path: dist/linux
+          retention-days: 7
+
+  linux-smoke:
+    name: Clean Linux install smoke
+    needs: linux-bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System libraries and a virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            libxdo-dev xvfb dbus-x11 file
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: notebox-linux
+          path: dist/linux
+
+      - name: Install the .deb and boot it
+        shell: bash
+        env:
+          GDK_BACKEND: x11
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          WEBKIT_DISABLE_COMPOSITING_MODE: "1"
+        run: |
+          set -euo pipefail
+          deb="$(find "$PWD/dist/linux" -name '*.deb' -print -quit)"
+          test -n "$deb"
+          sudo apt-get install -y "$deb"
+          set +e
+          dbus-run-session -- xvfb-run -a timeout 20s notebox
+          code=$?
+          set -e
+          if [ "$code" -ne 124 ]; then
+            echo "::error::Installed desktop app exited before the timeout with code ${code}."
+            exit 1
+          fi
+          echo "Installed .deb stayed up for 20 s."
+          sudo apt-get remove -y notebox || true
+
+      - name: Extract the AppImage and boot it
+        shell: bash
+        env:
+          GDK_BACKEND: x11
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          WEBKIT_DISABLE_COMPOSITING_MODE: "1"
+        run: |
+          set -euo pipefail
+          appimage="$(find "$PWD/dist/linux" -name '*.AppImage' -print -quit)"
+          test -n "$appimage"
+          chmod +x "$appimage"
+          work="$RUNNER_TEMP/notebox-appimage"
+          mkdir -p "$work"
+          cd "$work"
+          "$appimage" --appimage-extract >/dev/null
+          set +e
+          dbus-run-session -- xvfb-run -a timeout 20s ./squashfs-root/AppRun
+          code=$?
+          set -e
+          if [ "$code" -ne 124 ]; then
+            echo "::error::AppImage exited before the timeout with code ${code}."
+            exit 1
+          fi
+          echo "AppImage stayed up for 20 s."
+
+  windows-bundle:
+    name: Windows .msi and setup .exe
+    needs: gates
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install dx 0.7.10
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP "dx.zip"
+          Invoke-WebRequest -Uri "https://github.com/DioxusLabs/dioxus/releases/download/v0.7.10/dx-x86_64-pc-windows-msvc.zip" -OutFile $zip
+          $dxDir = Join-Path $env:RUNNER_TEMP "dx"
+          Expand-Archive -Path $zip -DestinationPath $dxDir -Force
+          $dx = Get-ChildItem -Path $dxDir -Filter dx.exe -Recurse | Select-Object -First 1
+          if (-not $dx) { throw "dx.exe was not found in the downloaded archive" }
+          $dx.Directory.FullName | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Bundle
+        shell: pwsh
+        env:
+          NBX_BUILD_ID: ${{ github.ref_name }}
+          NBX_GIT_SHA: ${{ github.sha }}
+        run: |
+          dx bundle -p notes-app --platform desktop --release --features desktop `
+            --package-types msi --package-types nsis
+
+      - name: Collect and inspect the installers
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path "target/dx/notebox/bundle" -Recurse -File |
+            Where-Object { $_.Extension -in ".msi", ".exe" }
+          $msi = $files | Where-Object { $_.Extension -eq ".msi" } | Select-Object -First 1
+          $setup = $files | Where-Object { $_.Name -like "*-setup.exe" } | Select-Object -First 1
+          if (-not $msi) { throw "No .msi installer was produced" }
+          if (-not $setup) { throw "No NSIS setup .exe was produced" }
+          New-Item -ItemType Directory -Force dist/windows | Out-Null
+          $files | Copy-Item -Destination dist/windows
+          Get-ChildItem dist/windows | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notebox-windows
+          path: dist/windows
+          retention-days: 7
+
+  windows-smoke:
+    name: Clean Windows install smoke
+    needs: windows-bundle
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: notebox-windows
+          path: dist/windows
+
+      - name: Install the MSI and boot it
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem dist/windows -Filter *.msi | Select-Object -First 1
+          if (-not $msi) { throw "No .msi file to install" }
+          $install = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
+            "/i", "`"$($msi.FullName)`"", "/qn", "/norestart"
+          )
+          if ($install.ExitCode -notin 0, 3010) {
+            throw "msiexec failed with exit code $($install.ExitCode)"
+          }
+
+          $candidates = @(
+            (Join-Path $env:ProgramFiles "Notebox\notebox.exe"),
+            (Join-Path ${env:ProgramFiles(x86)} "Notebox\notebox.exe"),
+            (Join-Path $env:LOCALAPPDATA "Programs\Notebox\notebox.exe")
+          )
+          $app = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $app) {
+            $app = Get-ChildItem -Path $env:ProgramFiles -Filter notebox.exe -Recurse -ErrorAction SilentlyContinue |
+              Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not $app) { throw "Installed notebox.exe was not found" }
+
+          $process = Start-Process -FilePath $app -PassThru
+          Start-Sleep -Seconds 20
+          if ($process.HasExited) {
+            throw "Installed app exited before the timeout with code $($process.ExitCode)"
+          }
+          Stop-Process -Id $process.Id -Force
+          Write-Host "Installed app stayed up for 20 s."
+
+      - name: Verify the NSIS installer exists
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist/windows -Filter "*-setup.exe" | Select-Object -First 1
+          if (-not $setup) { throw "No NSIS setup .exe artifact was published" }
+          Get-Item $setup.FullName | Format-List Name, Length
+
+  android-bundle:
+    name: Signed Android APK
+    needs: gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install the Android 34 platform and build tools
+        shell: bash
+        run: |
+          sdkmanager="$(command -v sdkmanager || true)"
+          if [ -z "$sdkmanager" ]; then
+            sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          fi
+          test -x "$sdkmanager"
+          yes | "$sdkmanager" --licenses >/dev/null || true
+          "$sdkmanager" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27c
+          add-to-path: true
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install dx 0.7.10
+        run: |
+          curl -sSL https://dioxus.dev/install.sh | bash -s v0.7.10
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Require Android signing secrets
+        shell: bash
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in KEYSTORE STORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Android signing secret ${name} is not set."
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::The release refuses to publish an unsigned APK."
+            echo "Create the keystore and add ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD as repository secrets."
+            exit 1
+          fi
+
+      - name: Decode the signing key and configure dx
+        shell: bash
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keystore="$RUNNER_TEMP/notebox-release.jks"
+          printf '%s' "$KEYSTORE" | base64 --decode > "$keystore"
+          chmod 600 "$keystore"
+          export KEYSTORE_PATH="$keystore"
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+
+          path = pathlib.Path("Dioxus.toml")
+          if "[bundle.android]" in path.read_text():
+              raise SystemExit("Dioxus.toml already contains [bundle.android]")
+
+          def q(value: str) -> str:
+              return json.dumps(value)
+
+          with path.open("a", encoding="utf-8") as file:
+              file.write("\n[bundle.android]\n")
+              file.write(f"jks_file = {q(os.environ['KEYSTORE_PATH'])}\n")
+              file.write(f"jks_password = {q(os.environ['STORE_PASSWORD'])}\n")
+              file.write(f"key_alias = {q(os.environ['KEY_ALIAS'])}\n")
+              file.write(f"key_password = {q(os.environ['KEY_PASSWORD'])}\n")
+          PY
+
+      - name: Bundle and verify the release APK
+        shell: bash
+        env:
+          NBX_BUILD_ID: ${{ github.ref_name }}
+          NBX_GIT_SHA: ${{ github.sha }}
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+          dx bundle -p notes-app --platform android --release --features mobile \
+            --package-types apk
+          apk="$(find target/dx/notebox/bundle/android -type f -name 'app-release.apk' -print -quit)"
+          if [ -z "$apk" ]; then
+            echo "::error::dx did not produce app-release.apk. Refusing to publish a debug build."
+            find target/dx/notebox/bundle/android -type f -name '*.apk' -print || true
+            exit 1
+          fi
+
+          build_tools="$(find "$ANDROID_HOME/build-tools" -maxdepth 1 -mindepth 1 -type d | sort -V | tail -1)"
+          apksigner="$build_tools/apksigner"
+          aapt="$build_tools/aapt"
+          test -x "$apksigner"
+          test -x "$aapt"
+          "$apksigner" verify --verbose --print-certs "$apk"
+          "$aapt" dump badging "$apk" | grep -q "package: name='app.notebox'"
+          if "$aapt" dump badging "$apk" | grep -q 'application-debuggable'; then
+            echo "::error::The APK is debuggable; a release APK is required."
+            exit 1
+          fi
+
+          mkdir -p dist/android
+          cp "$apk" "dist/android/Notebox_${{ needs.gates.outputs.version }}_arm64-v8a.apk"
+
+      - name: Remove the local signing configuration
+        if: always()
+        shell: bash
+        run: git checkout -- Dioxus.toml
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notebox-android
+          path: dist/android
+          retention-days: 7
+
+  web-bundle:
+    name: Installable web build
+    needs: gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install dx 0.7.10 and clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+          curl -sSL https://dioxus.dev/install.sh | bash -s v0.7.10
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Build the web release
+        env:
+          NBX_BUILD_ID: ${{ needs.gates.outputs.version }}
+          NBX_GIT_SHA: ${{ github.sha }}
+        run: ./scripts/web-build.sh
+
+      - name: Brotli first-load budget
+        run: node scripts/web-budget.mjs target/dx/notebox/release/web/public
+
+      - name: Install Playwright Chromium
+        run: |
+          mkdir -p /tmp/notebox-release-web
+          cd /tmp/notebox-release-web
+          npm init -y >/dev/null
+          npm install playwright@1.64.1
+          npx playwright install --with-deps chromium
+
+      - name: Installable, offline and deliberate updates
+        env:
+          PLAYWRIGHT_MODULES: /tmp/notebox-release-web/node_modules
+        run: node scripts/pwa-check.mjs
+
+      - name: Package the web bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/web
+          cd target/dx/notebox/release/web/public
+          zip -q -r "$GITHUB_WORKSPACE/dist/web/Notebox_${{ needs.gates.outputs.version }}_web.zip" .
+          cd "$GITHUB_WORKSPACE"
+          unzip -l "dist/web/Notebox_${{ needs.gates.outputs.version }}_web.zip" | grep -q 'sw.js'
+          unzip -l "dist/web/Notebox_${{ needs.gates.outputs.version }}_web.zip" | grep -q 'manifest.webmanifest'
+          unzip -l "dist/web/Notebox_${{ needs.gates.outputs.version }}_web.zip" | grep -q '_headers'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notebox-web
+          path: dist/web
+          retention-days: 7
+
+  publish:
+    name: Publish the GitHub release
+    needs:
+      - gates
+      - linux-bundle
+      - linux-smoke
+      - windows-bundle
+      - windows-smoke
+      - android-bundle
+      - web-bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+
+      - name: Checksums and release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.gates.outputs.version }}
+        run: |
+          set -euo pipefail
+          find release -type f -printf '%P\n' | sort
+          duplicates="$(find release -type f -printf '%f\n' | sort | uniq -d)"
+          if [ -n "$duplicates" ]; then
+            echo "::error::Artifact names collide when flattened:"
+            echo "$duplicates"
+            exit 1
+          fi
+          mkdir -p release-assets
+          find release -type f -exec cp -v {} release-assets/ \;
+          (cd release-assets && find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' \
+            | sort | xargs sha256sum > SHA256SUMS)
+          mapfile -t assets < <(find release-assets -type f -print | sort)
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+            --verify-tag \
+            --title "Notebox $VERSION" \
+            --notes "Notebox $VERSION.
+
+          * Linux x86_64: .deb and .AppImage
+          * Windows x64: .msi installer, NSIS setup .exe and portable .exe
+          * Android arm64: signed release APK
+          * Web: installable PWA bundle for the Worker
+
+          Verify downloads against SHA256SUMS. Windows installers are not code-signed. The Android APK is signed by the release key and is not a debug build."
