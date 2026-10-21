@@ -195,10 +195,6 @@ fn handle_shortcut(context: &AppContext, event: &KeyboardEvent) {
         Key::Character(value) => match value.to_lowercase().as_str() {
             "k" => {
                 event.prevent_default();
-                context.focus_search();
-            }
-            "p" => {
-                event.prevent_default();
                 if context.state.peek().palette_open {
                     context.close_palette();
                 } else {

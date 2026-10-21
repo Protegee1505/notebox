@@ -102,8 +102,7 @@ pub fn EditorPane() -> Element {
                         span { "New note" }
                     }
                     div { class: "shortcut-strip",
-                        span { kbd { class: "key-hint", "Ctrl K" } " Search" }
-                        span { kbd { class: "key-hint", "Ctrl P" } " Palette" }
+                        span { kbd { class: "key-hint", "Ctrl K" } " Palette" }
                         span { kbd { class: "key-hint", "Ctrl F" } " Find" }
                         span { kbd { class: "key-hint", "Ctrl E" } " Preview" }
                     }

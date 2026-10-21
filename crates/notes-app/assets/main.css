@@ -1055,14 +1055,6 @@ kbd {
   font-size: var(--text-xs);
 }
 
-.search-mark {
-  padding: 0 0.08em;
-  border-radius: 0.2em;
-  background: var(--primary-soft);
-  color: inherit;
-  font: inherit;
-}
-
 .note-title {
   margin: 0;
   overflow: hidden;
@@ -1203,13 +1195,6 @@ kbd {
   color: var(--muted);
   font-size: var(--text-sm);
   line-height: 1.55;
-}
-
-.empty-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: var(--space-2);
 }
 
 /* ---------- editor ---------- */
