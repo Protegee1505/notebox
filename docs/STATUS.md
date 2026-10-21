@@ -29,10 +29,30 @@ visit, and a waiting deployment updates only when the user chooses Reload. The
 release workflow builds Linux, Windows and web artifacts when a version tag is
 pushed, with Android opt-in through `RELEASE_ANDROID=true`; it has not run yet.
 A native build can bake in the owner's Worker URL with `NBX_SERVER_URL`, while
-the login screen still offers offline use and a different server.
+the login screen still offers offline use and a different server. The phone
+editor now keeps its add-tag field, and no light row is left below the app when
+the keyboard opens.
 
 ## Shipped
 
+- `notes-app`: **no light row under the phone keyboard, and a way to add tags
+  on a phone**. Theme tokens now resolve at `:root` as well as on `.app`, and
+  the app mirrors its theme onto `<html>` (a `use_memo` on the theme runs one
+  `document::eval` per change), so `html`, `body` and the static crash panel
+  paint with the app's palette; `html`/`body` lost `height: 100%` and the shell
+  heights follow a `--app-height` variable kept in step with `visualViewport`
+  by a small script in `index.html` (fallback `100dvh`, skipped while zoomed),
+  with the viewport meta asking the keyboard to resize the layout
+  (`interactive-widget=resizes-content`). The add-tag field was hidden below
+  699 px while the chips row only renders when a note already has tags, so the
+  footer keeps the field on phones and gained a tap "Add tag" button beside it.
+  `scripts/web-a11y.mjs` grew five checks: the viewport meta, `html`/`body`
+  matching the app's dark background (`rgb(21, 24, 21)`), a keyboard-sized
+  viewport (320 px) keeping the app, its footer and the tag field on screen
+  with nothing in-flow below it, and the phone editor adding then removing a
+  tag. The flow is 48 checks; all pass on the fixed build, while the old
+  CSS/HTML fails 4 of them (app height 780 px, body scroll height 780 px, a
+  transparent `html` background and no tag field).
 - `notes-app`: **note cards keep their full titles once the list scrolls**.
   The note list is both the scroll container and the grid. When its content was
   taller than the viewport, the implicit grid rows resolved to each card's
