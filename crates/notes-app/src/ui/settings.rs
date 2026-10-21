@@ -26,6 +26,7 @@ pub fn SettingsPane() -> Element {
     let username = state.profile.username.clone();
     let sync_connected = state.profile.sync_connected;
     let sync = state.sync.clone();
+    let credentials = state.credentials.clone();
     drop(state);
     let now = crate::time::now();
 
@@ -103,7 +104,7 @@ pub fn SettingsPane() -> Element {
                             button {
                                 class: "primary-button",
                                 r#type: "button",
-                                disabled: status.busy(),
+                                disabled: status.busy() || credentials.busy,
                                 onclick: {
                                     let context = context.clone();
                                     move |_| context.sync_now()
@@ -114,13 +115,127 @@ pub fn SettingsPane() -> Element {
                             button {
                                 class: "secondary-button",
                                 r#type: "button",
-                                disabled: status.busy(),
+                                disabled: status.busy() || credentials.busy,
                                 onclick: {
                                     let context = context.clone();
                                     move |_| context.sign_out()
                                 },
                                 Icon { name: "logout" }
                                 span { "Sign out" }
+                            }
+                        }
+                        if credentials.open {
+                            form {
+                                class: "credentials-form",
+                                aria_busy: credentials.busy,
+                                onsubmit: {
+                                    let context = context.clone();
+                                    move |event| {
+                                        event.prevent_default();
+                                        if !credentials.busy {
+                                            context.submit_credentials();
+                                        }
+                                    }
+                                },
+                                div { class: "credentials-heading",
+                                    strong { "Change sign-in details" }
+                                    span { "Your current device stays signed in. Other devices are signed out." }
+                                }
+                                if let Some(message) = credentials.error.clone() {
+                                    div { class: "form-error", role: "alert", span { "{message}" } }
+                                }
+                                div { class: "credentials-grid",
+                                    label { class: "field",
+                                        span { "Current password" }
+                                        input {
+                                            class: "input",
+                                            r#type: "password",
+                                            autocomplete: "current-password",
+                                            value: "{credentials.current_password}",
+                                            disabled: credentials.busy,
+                                            oninput: {
+                                                let context = context.clone();
+                                                move |event| context.set_credentials_current_password(event.value())
+                                            },
+                                        }
+                                    }
+                                    label { class: "field",
+                                        span { "Username" }
+                                        input {
+                                            class: "input",
+                                            r#type: "text",
+                                            autocomplete: "username",
+                                            value: "{credentials.username}",
+                                            disabled: credentials.busy,
+                                            oninput: {
+                                                let context = context.clone();
+                                                move |event| context.set_credentials_username(event.value())
+                                            },
+                                        }
+                                    }
+                                    label { class: "field",
+                                        span { "New password (optional)" }
+                                        input {
+                                            class: "input",
+                                            r#type: "password",
+                                            autocomplete: "new-password",
+                                            placeholder: "Leave blank to keep it",
+                                            value: "{credentials.new_password}",
+                                            disabled: credentials.busy,
+                                            oninput: {
+                                                let context = context.clone();
+                                                move |event| context.set_credentials_new_password(event.value())
+                                            },
+                                        }
+                                    }
+                                    label { class: "field",
+                                        span { "Confirm new password" }
+                                        input {
+                                            class: "input",
+                                            r#type: "password",
+                                            autocomplete: "new-password",
+                                            value: "{credentials.confirm}",
+                                            disabled: credentials.busy,
+                                            oninput: {
+                                                let context = context.clone();
+                                                move |event| context.set_credentials_confirm(event.value())
+                                            },
+                                        }
+                                    }
+                                }
+                                p { class: "card-note",
+                                    "Changing either detail signs out every other device. Use at least 12 characters for a new password."
+                                }
+                                div { class: "button-row",
+                                    button {
+                                        class: "primary-button",
+                                        r#type: "submit",
+                                        disabled: credentials.busy,
+                                        if credentials.busy { "Updating…" } else { "Update sign-in details" }
+                                    }
+                                    button {
+                                        class: "text-button",
+                                        r#type: "button",
+                                        disabled: credentials.busy,
+                                        onclick: {
+                                            let context = context.clone();
+                                            move |_| context.close_credentials()
+                                        },
+                                        "Cancel"
+                                    }
+                                }
+                            }
+                        } else {
+                            button {
+                                class: "secondary-button",
+                                r#type: "button",
+                                disabled: status.busy(),
+                                onclick: {
+                                    let context = context.clone();
+                                    move |_| context.open_credentials()
+                                },
+                                Icon { name: "user" }
+                                span { "Change username or password" }
                             }
                         }
                     } else {

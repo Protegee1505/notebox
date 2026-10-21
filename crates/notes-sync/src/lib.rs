@@ -4,7 +4,7 @@
 //! The engine is UI-agnostic and platform-agnostic. It talks to a server
 //! through [`SyncTransport`], reads and writes notes through
 //! [`notes_store::NoteStore`], and derives the login key with Argon2id on the
-//! device. The Worker never sees the passphrase and never merges a note.
+//! device. The Worker never sees the password and never merges a note.
 //!
 //! ```no_run
 //! use notes_sync::{HttpTransport, MemoryTokenStore, SyncClient, SyncConfig};
@@ -13,7 +13,7 @@
 //! let client = SyncClient::new(transport, SyncConfig::new("alice", "laptop"));
 //! let sessions = MemoryTokenStore::new();
 //! // First run on a fresh server:
-//! // client.setup(setup_token, passphrase, &sessions).await?;
+//! // client.setup(setup_token, password, &sessions).await?;
 //! # Ok::<(), notes_sync::SyncError>(())
 //! ```
 //!
@@ -55,7 +55,7 @@ pub use engine::{
 pub use error::SyncError;
 pub use key::{
     derive_login_key, login_salt, normalize_username, ARGON2_ITERATIONS, ARGON2_MEMORY_KIB,
-    ARGON2_PARALLELISM, SALT_BYTES, SALT_LABEL,
+    ARGON2_PARALLELISM, MIN_PASSWORD_CHARS, SALT_BYTES, SALT_LABEL,
 };
 pub use retry::{
     backoff_seconds, NoSleep, Sleeper, MAX_ATTEMPTS, RETRY_BASE_SECS, RETRY_MAX_SECS,

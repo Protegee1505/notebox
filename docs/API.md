@@ -19,7 +19,7 @@ afterwards. `SETUP_TOKEN` is a Worker secret; when it is absent, setup answers
 `503 not_configured`.
 
 `POST /v1/auth/login` takes the same body as setup. The device has already run
-Argon2id over the passphrase and sends the 32-byte result (`login_key`, base64).
+Argon2id over the password and sends the 32-byte result (`login_key`, base64).
 The server stores `SHA-256(login_key)` and compares it in constant time. A
 successful login creates a new device and returns a token; it never reuses an
 existing token.
@@ -34,6 +34,33 @@ with `Secure` when the request arrived over HTTPS. Local `wrangler dev` runs
 on plain HTTP, where a `Secure` cookie would be dropped. The token remains in
 the JSON body for native clients.
 
+`POST /v1/auth/credentials` changes the account's username and/or password.
+The request is authenticated by the current device token and authorized by the
+current password's derived key:
+
+```json
+{
+  "current_login_key": "<32 bytes, base64>",
+  "new_username": "new name",
+  "new_login_key": "<32 bytes, base64>"
+}
+```
+
+The client derives the new key with the new username and the new password. If
+only the username changes, it still derives a new key because the username is
+part of the Argon2id salt. The server validates both keys, verifies the current
+key in constant time, updates `account.username` and `account.auth_hash` in one
+D1 batch, resets the failed-login backoff, and deletes every device row except
+the caller's. The current device stays signed in; other devices must sign in
+again. A wrong current key returns `403 wrong_password`, not a session-expired
+`401`. The response is `CredentialUpdateResponse { username }` with the trimmed
+username now stored.
+
+There is no password-reset endpoint and no server-side Argon2id. If the
+password is lost while no device is signed in, the app cannot recover the
+account; recovery would need direct D1 access or a deliberate disaster-recovery
+procedure, not an email reset.
+
 `POST /v1/auth/logout` clears that cookie with `Max-Age=0` and answers `204`.
 It does not revoke the device token; use the device list for that. Without the
 endpoint, a browser reload would sign itself back in from the cookie.
@@ -45,6 +72,7 @@ endpoint, a browser reload would sign itself back in from the cookie.
 | `GET` | `/` | — | The web app, or `notebox` when no asset matches |
 | `POST` | `/v1/auth/setup` | `AuthRequest` | `AuthResponse` |
 | `POST` | `/v1/auth/login` | `AuthRequest` | `AuthResponse` |
+| `POST` | `/v1/auth/credentials` | `CredentialUpdateRequest` | `CredentialUpdateResponse` |
 | `POST` | `/v1/auth/logout` | — | `204` and an expired cookie |
 | `POST` | `/v1/sync` | `SyncRequest` | `SyncResponse` |
 | `PUT` | `/v1/blob/{hash}` | `BlobChunk` | `BlobStored` |
@@ -116,7 +144,7 @@ Non-success responses carry `Envelope<ErrorBody>`:
 ```
 
 Codes: `not_configured`, `setup_closed`, `bad_setup_token`,
-`invalid_credentials`, `rate_limited`, `unauthorized`, `invalid_request`,
-`too_large`, `not_found`, `conflict`, `storage_failed`.
+`invalid_credentials`, `wrong_password`, `rate_limited`, `unauthorized`,
+`invalid_request`, `too_large`, `not_found`, `conflict`, `storage_failed`.
 
 All API responses set `Cache-Control: no-store`.

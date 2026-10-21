@@ -22,7 +22,7 @@ use notes_sync::{
 };
 
 const USERNAME: &str = "sync-e2e@notebox";
-const PASSPHRASE: &str = "correct horse battery staple";
+const PASSWORD: &str = "correct horse battery staple";
 
 /// Seconds since the Unix epoch, used for note and cursor timestamps.
 fn now() -> i64 {
@@ -59,7 +59,7 @@ impl Device {
     fn setup(&self) {
         pollster::block_on(self.client.setup(
             &required("NOTEBOX_SYNC_E2E_SETUP_TOKEN"),
-            PASSPHRASE,
+            PASSWORD,
             &self.sessions,
         ))
         .expect("setup");
@@ -67,7 +67,7 @@ impl Device {
 
     /// Log in against the account the laptop created.
     fn login(&self) {
-        pollster::block_on(self.client.login(PASSPHRASE, &self.sessions)).expect("login");
+        pollster::block_on(self.client.login(PASSWORD, &self.sessions)).expect("login");
     }
 
     fn sync(&self) -> SyncOutcome {

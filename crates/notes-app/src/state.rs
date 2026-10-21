@@ -198,12 +198,31 @@ pub struct LoginForm {
     /// Account name.
     pub username: String,
     /// Cleared as soon as an attempt starts; never stored.
-    pub passphrase: String,
+    pub password: String,
     /// Worker base URL.
     pub server: String,
     /// Device name shown in the account's device list.
     pub device: String,
     /// Validation message.
+    pub error: Option<String>,
+}
+
+/// Fields on the “Sign-in details” form in Settings.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CredentialsForm {
+    /// Whether the form is expanded.
+    pub open: bool,
+    /// New account name, prefilled with the current one.
+    pub username: String,
+    /// Cleared as soon as an attempt starts; never stored.
+    pub current_password: String,
+    /// Blank keeps the current password.
+    pub new_password: String,
+    /// Must match [`Self::new_password`] when that field is filled.
+    pub confirm: String,
+    /// A request is in flight.
+    pub busy: bool,
+    /// Validation or server message.
     pub error: Option<String>,
 }
 
@@ -328,6 +347,8 @@ pub struct AppState {
     pub profile: Profile,
     /// Login form.
     pub login: LoginForm,
+    /// Sign-in details form in Settings.
+    pub credentials: CredentialsForm,
     /// Connection state, last run, and devices.
     pub sync: SyncUi,
     /// Minute of the last clock tick, so relative times refresh.
@@ -410,6 +431,7 @@ impl AppState {
                 device,
                 ..LoginForm::default()
             },
+            credentials: CredentialsForm::default(),
             sync: SyncUi::default(),
             clock_minute: now() / 60,
         }
@@ -1951,29 +1973,296 @@ impl AppContext {
         state.palette_open = false;
     }
 
+    /// Expand the sign-in details form with the current username.
+    pub fn open_credentials(&self) {
+        if !self.state.peek().profile.sync_connected {
+            return;
+        }
+        let username = self.state.peek().profile.username.clone();
+        let mut state = self.state.write_unchecked();
+        state.credentials = CredentialsForm {
+            open: true,
+            username,
+            ..CredentialsForm::default()
+        };
+    }
+
+    /// Collapse the form and drop every password field.
+    pub fn close_credentials(&self) {
+        self.state.write_unchecked().credentials = CredentialsForm::default();
+    }
+
+    /// Update the username field without touching the live account.
+    pub fn set_credentials_username(&self, value: String) {
+        self.state.write_unchecked().credentials.username = value;
+    }
+
+    /// Update the current-password field.
+    pub fn set_credentials_current_password(&self, value: String) {
+        self.state.write_unchecked().credentials.current_password = value;
+    }
+
+    /// Update the optional new-password field.
+    pub fn set_credentials_new_password(&self, value: String) {
+        self.state.write_unchecked().credentials.new_password = value;
+    }
+
+    /// Update the new-password confirmation.
+    pub fn set_credentials_confirm(&self, value: String) {
+        self.state.write_unchecked().credentials.confirm = value;
+    }
+
+    /// Validate and submit a username and/or password change.
+    pub fn submit_credentials(&self) {
+        if self.runtime.borrow().busy {
+            self.toast_info("Wait for the current sync to finish.");
+            return;
+        }
+        let (current_username, username, current_password, new_password, confirm) = {
+            let state = self.state.read();
+            (
+                state.profile.username.trim().to_string(),
+                state.credentials.username.trim().to_string(),
+                state.credentials.current_password.clone(),
+                state.credentials.new_password.clone(),
+                state.credentials.confirm.clone(),
+            )
+        };
+        let changed_username = !username.is_empty() && username != current_username;
+        let changed_password = !new_password.is_empty();
+        let message = if !self.state.peek().profile.sync_connected {
+            Some("Sign in before changing the account details.".to_string())
+        } else if username.is_empty() {
+            Some("Enter a username.".to_string())
+        } else if username.chars().count() > notes_proto::MAX_USERNAME_CHARS
+            || username.chars().any(char::is_control)
+        {
+            Some(format!(
+                "Use a username of 1 to {} visible characters.",
+                notes_proto::MAX_USERNAME_CHARS
+            ))
+        } else if current_password.is_empty() {
+            Some("Enter the current password.".to_string())
+        } else if !changed_username && !changed_password {
+            Some("Change the username or enter a new password.".to_string())
+        } else if !changed_password && !confirm.is_empty() {
+            Some("Enter a new password or leave both new fields blank.".to_string())
+        } else if changed_password && new_password.chars().count() < notes_sync::MIN_PASSWORD_CHARS
+        {
+            Some(format!(
+                "Use a new password of at least {} characters.",
+                notes_sync::MIN_PASSWORD_CHARS
+            ))
+        } else if changed_password && new_password != confirm {
+            Some("The new passwords do not match.".to_string())
+        } else {
+            None
+        };
+        if let Some(message) = message {
+            self.state.write_unchecked().credentials.error = Some(message);
+            return;
+        }
+        {
+            let mut state = self.state.write_unchecked();
+            state.credentials.busy = true;
+            state.credentials.error = None;
+            // Do not keep passwords in the rendered state while the request
+            // is in flight; the worker owns its own copy.
+            state.credentials.current_password.clear();
+            state.credentials.new_password.clear();
+            state.credentials.confirm.clear();
+        }
+        self.runtime.borrow_mut().busy = true;
+        self.start_credentials_change(username, current_password, new_password);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn start_credentials_change(
+        &self,
+        new_username: String,
+        current_password: String,
+        new_password: String,
+    ) {
+        let (account, session) = {
+            let runtime = self.runtime.borrow();
+            (
+                runtime.account.clone(),
+                runtime.client.as_ref().and_then(|client| client.session()),
+            )
+        };
+        let (Some(account), Some(session)) = (account, session) else {
+            self.finish_credentials(Err(
+                "This device is no longer signed in. Sign in again.".to_string()
+            ));
+            return;
+        };
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("notebox-credentials".to_string())
+            .spawn(move || {
+                let result = sync::change_credentials_blocking(
+                    &account,
+                    &session,
+                    &current_password,
+                    &new_username,
+                    &new_password,
+                )
+                .map_err(|error| sync::friendly_credentials_error(&error));
+                let _ = sender.send(result);
+            });
+        match spawned {
+            Ok(_) => self.runtime.borrow_mut().change_rx = Some(receiver),
+            Err(error) => self.finish_credentials(Err(format!(
+                "Could not start the credential thread: {error}"
+            ))),
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn start_credentials_change(
+        &self,
+        new_username: String,
+        current_password: String,
+        new_password: String,
+    ) {
+        let client = self.runtime.borrow().client.clone();
+        let Some(client) = client else {
+            self.finish_credentials(Err(
+                "This device is no longer signed in. Sign in again.".to_string()
+            ));
+            return;
+        };
+        let context = self.clone();
+        spawn_forever(async move {
+            let result = client
+                .change_credentials(&current_password, &new_username, &new_password)
+                .await
+                .map_err(|error| sync::friendly_credentials_error(&error));
+            context.finish_credentials(result);
+        });
+    }
+
+    /// Apply the server's answer to the runtime, saved account and UI.
+    fn finish_credentials(&self, result: Result<notes_proto::CredentialUpdateResponse, String>) {
+        {
+            let mut runtime = self.runtime.borrow_mut();
+            runtime.busy = false;
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                runtime.change_rx = None;
+            }
+        }
+        let response = match result {
+            Ok(response) => response,
+            Err(message) => {
+                let mut state = self.state.write_unchecked();
+                state.credentials.busy = false;
+                state.credentials.current_password.clear();
+                state.credentials.new_password.clear();
+                state.credentials.confirm.clear();
+                state.credentials.error = Some(message);
+                return;
+            }
+        };
+
+        let new_username = response.username;
+        let (account, old_session) = {
+            let runtime = self.runtime.borrow();
+            (
+                runtime.account.clone(),
+                runtime.client.as_ref().and_then(|client| client.session()),
+            )
+        };
+        let Some(account) = account else {
+            let mut state = self.state.write_unchecked();
+            state.credentials.busy = false;
+            state.credentials.error =
+                Some("The account details changed, but this device has no saved account.".into());
+            return;
+        };
+        let new_account = sync::SavedAccount {
+            username: new_username.clone(),
+            ..account
+        };
+        let mut warning = None;
+        let mut updated_session = None;
+        if let Some(session) = old_session {
+            match sync::remember_session_username(&session, &new_username) {
+                Ok(updated) => updated_session = Some(updated),
+                Err(error) => {
+                    warning = Some(format!(
+                        "The account changed, but this device could not remember the new username: {error}"
+                    ));
+                    updated_session = Some(notes_sync::SyncSession {
+                        username: new_username.clone(),
+                        ..session
+                    });
+                }
+            }
+        }
+        if let Err(error) = sync::save_account(&new_account) {
+            warning = Some(format!(
+                "The account changed, but this device could not remember it: {error}"
+            ));
+        }
+        if let Some(session) = updated_session {
+            match sync::client(
+                &new_account.server,
+                &new_account.username,
+                &new_account.device,
+                Some(session),
+            ) {
+                Ok(client) => self.runtime.borrow_mut().client = Some(client),
+                Err(error) => {
+                    warning = Some(format!(
+                        "The account changed, but this device could not rebuild its session: {error}"
+                    ));
+                }
+            }
+        }
+        self.runtime.borrow_mut().account = Some(new_account);
+        {
+            let mut state = self.state.write_unchecked();
+            state.profile.username = new_username.clone();
+            state.profile.sync_connected = true;
+            state.login.username = new_username.clone();
+            state.credentials = CredentialsForm::default();
+            state.sync.status = SyncStatus::Idle;
+            state.sync.error = None;
+            state.sync.devices.clear();
+            state.sync.devices_error = None;
+            state.sync.confirm_revoke = None;
+        }
+        match warning {
+            Some(message) => self.toast_danger(message),
+            None => self.toast_success("Sign-in details updated. Other devices were signed out."),
+        }
+        self.refresh_devices();
+    }
+
     /// Submit the login form and open a real session.
     pub fn submit_login(&self) {
         if self.runtime.borrow().busy {
             self.toast_info("Wait for the current sync to finish.");
             return;
         }
-        let (username, passphrase, server, device) = {
+        let (username, password, server, device) = {
             let state = self.state.read();
             (
                 state.login.username.trim().to_string(),
-                state.login.passphrase.clone(),
+                state.login.password.clone(),
                 state.login.server.trim().trim_end_matches('/').to_string(),
                 state.login.device.trim().to_string(),
             )
         };
-        if username.is_empty() || passphrase.is_empty() || server.is_empty() || device.is_empty() {
+        if username.is_empty() || password.is_empty() || server.is_empty() || device.is_empty() {
             self.state.write_unchecked().login.error =
-                Some("Enter a username, passphrase, server URL and device name.".to_string());
+                Some("Enter a username, password, server URL and device name.".to_string());
             return;
         }
         {
             let mut state = self.state.write_unchecked();
-            state.login.passphrase.clear();
+            state.login.password.clear();
             state.login.error = None;
             // Keep the form on screen while connecting so the button and the
             // error live in one place.
@@ -1981,16 +2270,16 @@ impl AppContext {
             state.sync.error = None;
         }
         self.runtime.borrow_mut().busy = true;
-        self.start_login(server, username, device, passphrase);
+        self.start_login(server, username, device, password);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn start_login(&self, server: String, username: String, device: String, passphrase: String) {
+    fn start_login(&self, server: String, username: String, device: String, password: String) {
         let (sender, receiver) = std::sync::mpsc::channel();
         let spawned = std::thread::Builder::new()
             .name("notebox-login".to_string())
             .spawn(move || {
-                let result = sync::login_blocking(&server, &username, &device, &passphrase)
+                let result = sync::login_blocking(&server, &username, &device, &password)
                     .map_err(|error| sync::friendly_login_error(&error));
                 let _ = sender.send(result);
             });
@@ -2001,7 +2290,7 @@ impl AppContext {
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn start_login(&self, server: String, username: String, device: String, passphrase: String) {
+    fn start_login(&self, server: String, username: String, device: String, password: String) {
         let client = match sync::client(&server, &username, &device, None) {
             Ok(client) => client,
             Err(error) => {
@@ -2015,7 +2304,7 @@ impl AppContext {
         // Notes, and a scope-bound task would be cancelled mid-login.
         spawn_forever(async move {
             let sessions = notes_sync::NullTokenStore;
-            match task_client.login(&passphrase, &sessions).await {
+            match task_client.login(&password, &sessions).await {
                 Ok(session) => context.finish_login(
                     sync::LoginSuccess {
                         session,
@@ -2075,7 +2364,7 @@ impl AppContext {
             state.login.server = success.account.server.clone();
             state.login.username = success.account.username.clone();
             state.login.device = success.account.device.clone();
-            state.login.passphrase.clear();
+            state.login.password.clear();
             state.login.error = None;
             state.sync.status = SyncStatus::Idle;
             state.sync.error = None;
@@ -2103,7 +2392,7 @@ impl AppContext {
         }
         let mut state = self.state.write_unchecked();
         state.profile.sync_connected = false;
-        state.login.passphrase.clear();
+        state.login.password.clear();
         state.login.error = Some(message.clone());
         state.sync.status = SyncStatus::Local;
         state.sync.error = Some(message);
@@ -2113,7 +2402,7 @@ impl AppContext {
     pub fn continue_local(&self) {
         {
             let mut state = self.state.write_unchecked();
-            state.login.passphrase.clear();
+            state.login.password.clear();
             state.login.error = None;
             state.profile.sync_connected = false;
             state.sync.status = SyncStatus::Local;
@@ -2306,6 +2595,26 @@ impl AppContext {
                 Ok(success) => self.finish_login(success, None),
                 Err(message) => self.login_failed(message),
             }
+        }
+
+        let change = {
+            let mut runtime = self.runtime.borrow_mut();
+            match runtime.change_rx.as_ref().map(|rx| rx.try_recv()) {
+                Some(Ok(value)) => {
+                    runtime.change_rx = None;
+                    Some(value)
+                }
+                Some(Err(TryRecvError::Disconnected)) => {
+                    runtime.change_rx = None;
+                    Some(Err(
+                        "The credential thread stopped without an answer.".to_string()
+                    ))
+                }
+                Some(Err(TryRecvError::Empty)) | None => None,
+            }
+        };
+        if let Some(result) = change {
+            self.finish_credentials(result);
         }
 
         let run = {
@@ -2919,7 +3228,7 @@ impl AppContext {
             state.profile = Profile::default();
             state.sync = SyncUi::default();
             state.login.username.clear();
-            state.login.passphrase.clear();
+            state.login.password.clear();
             state.login.error = None;
             state.login.server = server;
             state.login.device = device;

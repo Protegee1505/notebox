@@ -21,6 +21,13 @@ pub enum ServerError {
     #[error("invalid credentials")]
     InvalidCredentials,
 
+    /// The current password did not match on an authenticated device.
+    ///
+    /// This is deliberately separate from [`Self::Unauthorized`]: a wrong
+    /// password must not make the client discard a valid device session.
+    #[error("current password is incorrect")]
+    WrongPassword,
+
     /// Too many failed logins; the client must wait.
     #[error("too many failed logins; retry in {retry_after} seconds")]
     RateLimited {
@@ -61,6 +68,7 @@ impl ServerError {
             Self::SetupClosed => 409,
             Self::BadSetupToken => 403,
             Self::InvalidCredentials | Self::Unauthorized => 401,
+            Self::WrongPassword => 403,
             Self::RateLimited { .. } => 429,
             Self::Invalid(_) => 400,
             Self::TooLarge(_) => 413,
@@ -77,6 +85,7 @@ impl ServerError {
             Self::SetupClosed => "setup_closed",
             Self::BadSetupToken => "bad_setup_token",
             Self::InvalidCredentials => "invalid_credentials",
+            Self::WrongPassword => "wrong_password",
             Self::RateLimited { .. } => "rate_limited",
             Self::Unauthorized => "unauthorized",
             Self::Invalid(_) => "invalid_request",

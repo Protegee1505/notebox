@@ -15,8 +15,8 @@ use std::rc::Rc;
 use async_trait::async_trait;
 use notes_core::Note;
 use notes_proto::{
-    AuthRequest, AuthResponse, Base64Bytes, BlobChunk, BlobStored, DeviceList, NoteId, SyncRequest,
-    SyncResponse,
+    AuthRequest, AuthResponse, Base64Bytes, BlobChunk, BlobStored, CredentialUpdateRequest,
+    CredentialUpdateResponse, DeviceList, NoteId, SyncRequest, SyncResponse,
 };
 use notes_server::{MemoryStorage, Server, ServerConfig, ServerError};
 use notes_store::{NewNote, NoteQuery, NoteStore, NoteView, SqliteStore, SyncState};
@@ -27,7 +27,7 @@ use notes_sync::{
 
 const SETUP_TOKEN: &str = "setup-secret";
 const USERNAME: &str = "alice";
-const PASSPHRASE: &str = "correct horse battery staple";
+const PASSWORD: &str = "correct horse battery staple";
 
 /// One in-process server shared by every client in a test.
 struct InProcess {
@@ -180,6 +180,21 @@ impl SyncTransport for TestTransport {
         self.finish(call, response)
     }
 
+    async fn change_credentials(
+        &self,
+        token: &str,
+        request: &CredentialUpdateRequest,
+    ) -> Result<CredentialUpdateResponse, SyncError> {
+        let call = self.begin()?;
+        let device = self.device(token).await?;
+        let response = self
+            .server
+            .update_credentials(&device, request)
+            .await
+            .map_err(map_error)?;
+        self.finish(call, response)
+    }
+
     async fn sync(&self, token: &str, request: &SyncRequest) -> Result<SyncResponse, SyncError> {
         let call = self.begin()?;
         let device = self.device(token).await?;
@@ -268,14 +283,14 @@ impl Device {
     /// Create the account and log this device in.
     fn setup(&self) {
         self.advance();
-        pollster::block_on(self.client.setup(SETUP_TOKEN, PASSPHRASE, &self.sessions))
+        pollster::block_on(self.client.setup(SETUP_TOKEN, PASSWORD, &self.sessions))
             .expect("setup");
     }
 
     /// Log in against an account that already exists.
     fn login(&self) {
         self.advance();
-        pollster::block_on(self.client.login(PASSPHRASE, &self.sessions)).expect("login");
+        pollster::block_on(self.client.login(PASSWORD, &self.sessions)).expect("login");
     }
 
     fn advance(&self) {
@@ -822,7 +837,90 @@ fn a_note_photo_reaches_the_other_device() {
 }
 
 #[test]
-fn a_bad_passphrase_and_a_second_setup_are_refused_with_codes() {
+fn changing_the_username_rederives_the_login_key_and_revokes_other_devices() {
+    let server = InProcess::new();
+    let laptop = device(&server, "laptop");
+    laptop.setup();
+    let phone = device(&server, "phone");
+    phone.login();
+    assert_eq!(server.storage().device_count(), 2);
+
+    let response = pollster::block_on(laptop.client.change_credentials(PASSWORD, "bob", ""))
+        .expect("username change");
+    assert_eq!(response.username, "bob");
+    assert_eq!(server.storage().device_count(), 1);
+
+    // The current device keeps its token; the other device is signed out.
+    laptop.sync();
+    let error = phone.try_sync().expect_err("phone token is revoked");
+    assert!(error.is_unauthorized());
+
+    // The username is part of the salt, so the same password now logs in
+    // under the new username only.
+    let old_sessions = MemoryTokenStore::new();
+    let old = SyncClient::new(server.transport(), SyncConfig::new(USERNAME, "tablet"));
+    let old_error = pollster::block_on(old.login(PASSWORD, &old_sessions))
+        .expect_err("the old username is gone");
+    assert!(matches!(
+        old_error,
+        SyncError::Server { status: 401, ref code, .. } if code == "invalid_credentials"
+    ));
+
+    let new_sessions = MemoryTokenStore::new();
+    let new = SyncClient::new(server.transport(), SyncConfig::new("bob", "tablet"));
+    pollster::block_on(new.login(PASSWORD, &new_sessions)).expect("new username and old password");
+}
+
+#[test]
+fn changing_the_password_requires_the_current_one() {
+    let server = InProcess::new();
+    let laptop = device(&server, "laptop");
+    laptop.setup();
+    let phone = device(&server, "phone");
+    phone.login();
+
+    let wrong = pollster::block_on(laptop.client.change_credentials(
+        "the wrong words here",
+        USERNAME,
+        "a new password long enough",
+    ))
+    .expect_err("wrong current password");
+    match wrong {
+        SyncError::Server { status, code, .. } => {
+            assert_eq!(status, 403);
+            assert_eq!(code, "wrong_password");
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+    assert_eq!(server.storage().device_count(), 2, "nothing was revoked");
+    laptop.sync();
+    phone.sync();
+
+    let response = pollster::block_on(laptop.client.change_credentials(
+        PASSWORD,
+        USERNAME,
+        "a new password long enough",
+    ))
+    .expect("password change");
+    assert_eq!(response.username, USERNAME);
+    assert_eq!(server.storage().device_count(), 1);
+    let error = phone.try_sync().expect_err("phone token is revoked");
+    assert!(error.is_unauthorized());
+
+    let old_client = SyncClient::new(server.transport(), SyncConfig::new(USERNAME, "tablet"));
+    let old_sessions = MemoryTokenStore::new();
+    pollster::block_on(old_client.login(PASSWORD, &old_sessions))
+        .expect_err("the old password is gone");
+    // The failed attempt starts the server's login backoff; wait it out.
+    server.clock.set(server.clock.get() + 2);
+    let new_client = SyncClient::new(server.transport(), SyncConfig::new(USERNAME, "tablet"));
+    let new_sessions = MemoryTokenStore::new();
+    pollster::block_on(new_client.login("a new password long enough", &new_sessions))
+        .expect("the new password works");
+}
+
+#[test]
+fn a_bad_password_and_a_second_setup_are_refused_with_codes() {
     let server = InProcess::new();
     let laptop = device(&server, "laptop");
     laptop.setup();
@@ -841,12 +939,8 @@ fn a_bad_passphrase_and_a_second_setup_are_refused_with_codes() {
 
     let second = device(&server, "tablet");
     second.advance();
-    let error = pollster::block_on(
-        second
-            .client
-            .setup(SETUP_TOKEN, PASSPHRASE, &second.sessions),
-    )
-    .expect_err("setup runs once");
+    let error = pollster::block_on(second.client.setup(SETUP_TOKEN, PASSWORD, &second.sessions))
+        .expect_err("setup runs once");
     match error {
         SyncError::Server { status, code, .. } => {
             assert_eq!(status, 409);

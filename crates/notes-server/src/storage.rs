@@ -93,6 +93,18 @@ pub trait Storage {
     /// Replace the failed-login counter and the block deadline.
     async fn set_login_state(&self, failures: u32, blocked_until: i64) -> Result<(), StorageError>;
 
+    /// Replace the account's username and login-key hash, reset its backoff
+    /// counters, and remove every device except `keep_device`.
+    ///
+    /// Implementations must make the account update and device deletion
+    /// atomic. A missing account row is an error.
+    async fn update_credentials(
+        &self,
+        username: &str,
+        auth_hash: &str,
+        keep_device: &str,
+    ) -> Result<(), StorageError>;
+
     /// Insert a device token hash.
     async fn create_device(&self, device: &DeviceRow) -> Result<(), StorageError>;
 

@@ -11,7 +11,8 @@
 
 use async_trait::async_trait;
 use notes_proto::{
-    AuthRequest, AuthResponse, BlobChunk, BlobStored, DeviceList, SyncRequest, SyncResponse,
+    AuthRequest, AuthResponse, BlobChunk, BlobStored, CredentialUpdateRequest,
+    CredentialUpdateResponse, DeviceList, SyncRequest, SyncResponse,
 };
 
 use crate::SyncError;
@@ -28,6 +29,17 @@ pub trait SyncTransport {
 
     /// Exchange a login key for a new device token.
     async fn login(&self, request: &AuthRequest) -> Result<AuthResponse, SyncError>;
+
+    /// Change the account username and/or password-derived login key.
+    ///
+    /// The current device token authenticates the request; the current login
+    /// key proves the caller knows the current password. The server keeps this
+    /// device and revokes the others.
+    async fn change_credentials(
+        &self,
+        token: &str,
+        request: &CredentialUpdateRequest,
+    ) -> Result<CredentialUpdateResponse, SyncError>;
 
     /// Clear a browser cookie session.
     ///
@@ -71,6 +83,14 @@ impl SyncTransport for Box<dyn SyncTransport> {
 
     async fn login(&self, request: &AuthRequest) -> Result<AuthResponse, SyncError> {
         (**self).login(request).await
+    }
+
+    async fn change_credentials(
+        &self,
+        token: &str,
+        request: &CredentialUpdateRequest,
+    ) -> Result<CredentialUpdateResponse, SyncError> {
+        (**self).change_credentials(token, request).await
     }
 
     async fn logout(&self) -> Result<(), SyncError> {

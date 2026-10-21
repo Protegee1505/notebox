@@ -43,8 +43,8 @@ paid service?
    action is "Try it offline — no account". Local notes, history, images and
    export need no Worker. There is no in-app sign-up and no second account.
 3. **Create the one account with a native CLI.** `scripts/create-account` runs
-   the `notes-sync` example. It reads the setup token and passphrase without
-   echo, requires a passphrase of at least 12 characters, removes the temporary
+   the `notes-sync` example. It reads the setup token and password without
+   echo, requires a password of at least 12 characters, removes the temporary
    setup device after creating the account, and tells the owner to delete
    `SETUP_TOKEN`. If the device removal fails, it prints the device id so the
    owner can revoke it in Settings.
@@ -63,7 +63,7 @@ paid service?
    mention Android only when an APK is present.
 7. **Pass the URL through a repository variable.** The release workflow gives
    `NBX_SERVER_URL` to the Linux, Windows and opt-in Android bundles. It is not
-   a secret; it must not contain a passphrase, token or setup secret.
+   a secret; it must not contain a password, token or setup secret.
 
 ## Evidence
 
@@ -78,7 +78,7 @@ paid service?
   `aaaa…`, `bbbb…`; the store creates from the supplied ids.
 - The workflow changes are static: a skipped `android-bundle` job is followed by
   a `publish` job guarded by `always() && !failure() && !cancelled()`.
-- No deployed Worker, real passphrase or GitHub tag was used in this
+- No deployed Worker, real password or GitHub tag was used in this
   workstation session. Cloudflare login and the first release tag are still
   owner actions.
 

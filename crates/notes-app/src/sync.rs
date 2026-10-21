@@ -7,6 +7,8 @@
 
 use std::rc::Rc;
 
+#[cfg(not(target_arch = "wasm32"))]
+use notes_proto::CredentialUpdateResponse;
 use notes_proto::{DeviceInfo, NoteId};
 #[cfg(not(target_arch = "wasm32"))]
 use notes_store::NoteStore;
@@ -222,6 +224,9 @@ pub struct Runtime {
     #[cfg(not(target_arch = "wasm32"))]
     pub devices_rx:
         Option<std::sync::mpsc::Receiver<Result<(notes_proto::DeviceList, bool), String>>>,
+    /// Native credential-change result: the server's trimmed username.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub change_rx: Option<std::sync::mpsc::Receiver<Result<CredentialUpdateResponse, String>>>,
 }
 
 /// Inputs to the scheduling decision.
@@ -329,7 +334,7 @@ pub fn plan_open_note(base: &str, draft: &str, remote: &str) -> OpenNotePlan {
 /// A readable message for the account screen.
 pub fn friendly_login_error(error: &SyncError) -> String {
     match error {
-        SyncError::Unauthorized => "That username and passphrase did not match.".to_string(),
+        SyncError::Unauthorized => "That username and password did not match.".to_string(),
         SyncError::Transport(_) => {
             "Could not reach your Worker. Check the URL and your connection.".to_string()
         }
@@ -346,11 +351,24 @@ pub fn friendly_login_error(error: &SyncError) -> String {
     }
 }
 
+/// A readable message for the credential form.
+pub fn friendly_credentials_error(error: &SyncError) -> String {
+    match error {
+        SyncError::Server {
+            status: 403, code, ..
+        } if code == "wrong_password" => "Current password is incorrect.".to_string(),
+        SyncError::Unauthorized => {
+            "This device is no longer signed in. Sign in again to change these details.".to_string()
+        }
+        other => friendly_sync_error(other),
+    }
+}
+
 /// A readable message for the status card.
 pub fn friendly_sync_error(error: &SyncError) -> String {
     match error {
         SyncError::Unauthorized => {
-            "This device was signed out. Sign in with your passphrase again.".to_string()
+            "This device was signed out. Sign in with your password again.".to_string()
         }
         SyncError::Transport(_) => {
             "Could not reach your Worker. Your notes stay here and will sync when it is back."
@@ -425,7 +443,7 @@ pub fn default_server() -> String {
 ///
 /// The value is an address, not a secret: it is visible in the binary and on
 /// the login screen. A personal build sets it so the owner only has to enter a
-/// username and passphrase; a build without the variable starts empty.
+/// username and password; a build without the variable starts empty.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn baked_server() -> Option<&'static str> {
     option_env!("NBX_SERVER_URL")
@@ -585,7 +603,7 @@ pub fn login_blocking(
     server: &str,
     username: &str,
     device: &str,
-    passphrase: &str,
+    password: &str,
 ) -> Result<LoginSuccess, SyncError> {
     let account = SavedAccount {
         server: server.trim().trim_end_matches('/').to_string(),
@@ -598,9 +616,48 @@ pub fn login_blocking(
         SyncConfig::new(account.username.as_str(), account.device.as_str()),
     );
     let sessions = notes_sync::FileTokenStore::new(crate::storage::session_path());
-    let session = pollster::block_on(client.login(passphrase, &sessions))?;
+    let session = pollster::block_on(client.login(password, &sessions))?;
     save_account(&account).map_err(SyncError::Session)?;
     Ok(LoginSuccess { session, account })
+}
+
+/// Change credentials on a native build. Blocking; use a worker thread.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn change_credentials_blocking(
+    account: &SavedAccount,
+    session: &SyncSession,
+    current_password: &str,
+    new_username: &str,
+    new_password: &str,
+) -> Result<CredentialUpdateResponse, SyncError> {
+    let client = client(
+        &account.server,
+        &account.username,
+        &account.device,
+        Some(session.clone()),
+    )?;
+    pollster::block_on(client.change_credentials(current_password, new_username, new_password))
+}
+
+/// Store the new username in the native session file and return the session.
+///
+/// The token itself does not change when only the account name does.
+pub fn remember_session_username(
+    session: &SyncSession,
+    username: &str,
+) -> Result<SyncSession, String> {
+    let updated = SyncSession {
+        username: username.to_string(),
+        ..session.clone()
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use notes_sync::TokenStore as _;
+        notes_sync::FileTokenStore::new(crate::storage::session_path())
+            .save(&updated)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(updated)
 }
 
 /// One full native run on its own database connection. Blocking; use a thread.

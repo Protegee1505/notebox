@@ -11,8 +11,8 @@
 
 use async_trait::async_trait;
 use notes_proto::{
-    envelope, AuthRequest, AuthResponse, BlobChunk, BlobStored, DeviceList, Envelope, SyncRequest,
-    SyncResponse, PROTOCOL_VERSION,
+    envelope, AuthRequest, AuthResponse, BlobChunk, BlobStored, CredentialUpdateRequest,
+    CredentialUpdateResponse, DeviceList, Envelope, SyncRequest, SyncResponse, PROTOCOL_VERSION,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -215,6 +215,23 @@ impl SyncTransport for WebTransport {
                 "POST",
                 "/v1/auth/login",
                 None,
+                None,
+                Some(Self::encode(request)?),
+            )
+            .await?;
+        Self::decode(reply)
+    }
+
+    async fn change_credentials(
+        &self,
+        token: &str,
+        request: &CredentialUpdateRequest,
+    ) -> Result<CredentialUpdateResponse, SyncError> {
+        let reply = self
+            .send(
+                "POST",
+                "/v1/auth/credentials",
+                Some(token),
                 None,
                 Some(Self::encode(request)?),
             )

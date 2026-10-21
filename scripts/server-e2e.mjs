@@ -86,12 +86,16 @@ function payload(response) {
   return response.body?.payload;
 }
 
-function authRequest(deviceName, key = LOGIN_KEY) {
+function authRequestFor(username, deviceName, key = LOGIN_KEY) {
   return {
-    username: USERNAME,
+    username,
     login_key: key.toString("base64"),
     device_name: deviceName,
   };
+}
+
+function authRequest(deviceName, key = LOGIN_KEY) {
+  return authRequestFor(USERNAME, deviceName, key);
 }
 
 function update(noteId, byte) {
@@ -397,6 +401,44 @@ async function main() {
     body: envelope(authRequest("tablet")),
   });
   same(recovered.status, 200, "login works after the backoff expires");
+
+  console.log("\n-- credentials --");
+  const newUsername = "e2e@notebox-new";
+  const newKey = Buffer.alloc(32, 9);
+  const credentials = (currentKey, username, nextKey) => ({
+    current_login_key: currentKey.toString("base64"),
+    new_username: username,
+    new_login_key: nextKey.toString("base64"),
+  });
+
+  const wrongCurrent = await call("POST", "/v1/auth/credentials", {
+    token: laptop.token,
+    body: envelope(credentials(wrongKey, newUsername, newKey)),
+  });
+  same(wrongCurrent.status, 403, "a wrong current password is refused");
+  same(payload(wrongCurrent).code, "wrong_password", "wrong-password has its own code");
+  const afterWrong = await call("GET", "/v1/devices", { token: laptop.token });
+  same(payload(afterWrong).devices.length, 2, "a wrong password changes no device");
+
+  const changed = await call("POST", "/v1/auth/credentials", {
+    token: laptop.token,
+    body: envelope(credentials(LOGIN_KEY, newUsername, newKey)),
+  });
+  same(changed.status, 200, "the laptop changes the username and password key");
+  same(payload(changed).username, newUsername, "the response carries the trimmed username");
+  const afterChange = await call("GET", "/v1/devices", { token: laptop.token });
+  same(payload(afterChange).devices.length, 1, "only the current device survives");
+  const tabletAfter = await call("GET", "/v1/devices", { token: recovered.token });
+  same(tabletAfter.status, 401, "the other device is signed out");
+
+  const newLogin = await call("POST", "/v1/auth/login", {
+    body: envelope(authRequestFor(newUsername, "new-phone", newKey)),
+  });
+  same(newLogin.status, 200, "the new username and key log in");
+  const oldLogin = await call("POST", "/v1/auth/login", {
+    body: envelope(authRequestFor(USERNAME, "old-phone", LOGIN_KEY)),
+  });
+  same(oldLogin.status, 401, "the old username and key no longer log in");
 
   console.log(`\nPASS: ${passed} checks`);
 }

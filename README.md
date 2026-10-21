@@ -46,7 +46,7 @@ artifacts; the Android job stays off until you enable it with
 ## Personal server and offline use
 
 A native build can carry one Worker URL so the owner only has to type a username
-and passphrase. Set `NBX_SERVER_URL` when building:
+and password. Set `NBX_SERVER_URL` when building:
 
 ```bash
 NBX_SERVER_URL="https://notebox.example.workers.dev" \
@@ -239,12 +239,13 @@ Create the local account once, while the dev setup token is present:
 ```
 
 Enter `local-dev-token` at the setup-token prompt. The script asks for the
-passphrase twice and never prints either secret. It removes its temporary setup
+password twice and never prints either secret. It removes its temporary setup
 device, so the account starts clean. There is no in-app sign-up; this is also
 the command for a deployed self-hosted Worker.
 
-Run the full HTTP test, including setup, login backoff, sync pagination,
-attachment chunks and device revocation, against a throwaway local Worker:
+Run the full HTTP test, including setup, login backoff, credential changes,
+sync pagination, attachment chunks and device revocation, against a throwaway
+local Worker:
 
 ```bash
 node scripts/server-e2e.mjs
@@ -313,13 +314,19 @@ After deploying, create the single account while `SETUP_TOKEN` still exists:
 npx wrangler secret delete SETUP_TOKEN
 ```
 
-The script prompts for the setup token and passphrase without echo, so neither
+The script prompts for the setup token and password without echo, so neither
 secret enters your shell history. The second command closes setup permanently:
 `POST /v1/auth/setup` then answers `503`, and only the existing account can sign
 in. There is no in-app sign-up and no second account. Use a username you do not
 publish: an unknown username no longer counts toward the login backoff, but
 someone who knows the real one can still trigger the account-wide delay with
 wrong keys.
+
+After signing in, **Settings → Change username or password** changes either
+detail in place. It asks for the current password, keeps this device signed in
+and revokes every other device. A new password must have at least 12
+characters. There is no password reset: save the new credentials in a password
+manager before confirming.
 
 For personal installers, set the URL as a repository variable before tagging:
 

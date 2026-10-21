@@ -1,10 +1,10 @@
 //! Login key derivation: Argon2id on the device, never on the server.
 //!
 //! A free Worker gets 10 ms of CPU per request, so the server cannot stretch a
-//! passphrase. The device does it and sends the 32-byte result; the server
+//! password. The device does it and sends the 32-byte result; the server
 //! stores only a fast SHA-256 of it. The salt is derived from the username
 //! rather than stored, which keeps the wire format to one field and lets a
-//! fresh device log in with nothing but the username and passphrase.
+//! fresh device log in with nothing but the username and password.
 //!
 //! The parameters below are pinned by a known-answer test. Tuning them changes
 //! every derived key, which would lock every existing device out, so it is a
@@ -19,8 +19,14 @@ use crate::SyncError;
 /// Label hashed together with the username to build the Argon2id salt.
 ///
 /// It keeps this key distinct from any other key derived from the same
-/// passphrase elsewhere.
+/// password elsewhere.
 pub const SALT_LABEL: &[u8] = b"notebox-login-salt-v1";
+
+/// Shortest new password the client accepts.
+///
+/// The server never sees a password and cannot enforce this; it is a client
+/// policy shared by the app and the account-setup example.
+pub const MIN_PASSWORD_CHARS: usize = 12;
 
 /// Argon2id memory cost in 1 KiB blocks: 19 MiB.
 ///
@@ -57,13 +63,13 @@ pub fn login_salt(username: &str) -> [u8; SALT_BYTES] {
     salt
 }
 
-/// Stretch a passphrase into the login key the server compares.
+/// Stretch a password into the login key the server compares.
 ///
-/// The same username and passphrase always give the same key, on every device
+/// The same username and password always give the same key, on every device
 /// and every platform.
 pub fn derive_login_key(
     username: &str,
-    passphrase: &str,
+    password: &str,
 ) -> Result<[u8; LOGIN_KEY_BYTES], SyncError> {
     let params = Params::new(
         ARGON2_MEMORY_KIB,
@@ -76,7 +82,7 @@ pub fn derive_login_key(
     let salt = login_salt(username);
     let mut key = [0u8; LOGIN_KEY_BYTES];
     argon2
-        .hash_password_into(passphrase.as_bytes(), &salt, &mut key)
+        .hash_password_into(password.as_bytes(), &salt, &mut key)
         .map_err(|error| SyncError::KeyDerivation(error.to_string()))?;
     Ok(key)
 }
@@ -126,7 +132,7 @@ mod tests {
     }
 
     #[test]
-    fn a_different_username_or_passphrase_gives_a_different_key() {
+    fn a_different_username_or_password_gives_a_different_key() {
         let base = derive_login_key("alice", "hunter2 hunter2").expect("derive");
         let other_user = derive_login_key("bob", "hunter2 hunter2").expect("derive");
         let other_pass = derive_login_key("alice", "hunter3 hunter3").expect("derive");

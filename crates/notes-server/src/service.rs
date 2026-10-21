@@ -1,15 +1,16 @@
 //! Server handlers, independent of the Worker runtime.
 //!
 //! The handlers validate input, check the device token and call [`Storage`].
-//! They never merge CRDT updates and never hash a passphrase, so a request
+//! They never merge CRDT updates and never hash a password, so a request
 //! stays within the Workers free tier's CPU budget.
 
 use std::time::Duration;
 
 use notes_proto::{
-    is_sha256_hex, is_token_hex, AuthRequest, AuthResponse, BlobChunk, BlobStored, DeviceInfo,
-    DeviceList, PulledUpdate, SyncRequest, SyncResponse, MAX_BLOB_CHUNKS, MAX_BLOB_CHUNK_BYTES,
-    MAX_DEVICE_NAME_CHARS, MAX_PUSH_UPDATES, MAX_UPDATE_BYTES, MAX_USERNAME_CHARS,
+    is_sha256_hex, is_token_hex, AuthRequest, AuthResponse, BlobChunk, BlobStored,
+    CredentialUpdateRequest, CredentialUpdateResponse, DeviceInfo, DeviceList, PulledUpdate,
+    SyncRequest, SyncResponse, MAX_BLOB_CHUNKS, MAX_BLOB_CHUNK_BYTES, MAX_DEVICE_NAME_CHARS,
+    MAX_PUSH_UPDATES, MAX_UPDATE_BYTES, MAX_USERNAME_CHARS,
 };
 
 use crate::auth::{
@@ -155,6 +156,41 @@ impl<S: Storage> Server<S> {
 
         self.storage.set_login_state(0, 0).await?;
         self.issue_device(device_name, now).await
+    }
+
+    /// Change the account's username and/or login key.
+    ///
+    /// The request is authenticated by the device token and authorized by the
+    /// current password's derived key. The current device keeps working; every
+    /// other device is revoked so old tokens cannot outlive a credential
+    /// change. The server only hashes the new key with SHA-256; Argon2id stays
+    /// on the client.
+    pub async fn update_credentials(
+        &self,
+        device: &DeviceRow,
+        request: &CredentialUpdateRequest,
+    ) -> Result<CredentialUpdateResponse, ServerError> {
+        validate_login_key(&request.current_login_key)?;
+        validate_login_key(&request.new_login_key)?;
+        let new_username = validate_username(&request.new_username)?;
+        let account = self
+            .storage
+            .account()
+            .await?
+            .ok_or(ServerError::InvalidCredentials)?;
+
+        let current_hash = sha256_hex(request.current_login_key.as_bytes());
+        if !constant_time_eq(current_hash.as_bytes(), account.auth_hash.as_bytes()) {
+            return Err(ServerError::WrongPassword);
+        }
+
+        let new_auth_hash = sha256_hex(request.new_login_key.as_bytes());
+        self.storage
+            .update_credentials(&new_username, &new_auth_hash, &device.id)
+            .await?;
+        Ok(CredentialUpdateResponse {
+            username: new_username,
+        })
     }
 
     /// Check a bearer token and return the device that owns it.
@@ -362,23 +398,8 @@ fn pulled_update(row: UpdateRow) -> PulledUpdate {
 fn validate_auth(
     request: &AuthRequest,
 ) -> Result<(String, notes_proto::Base64Bytes, String), ServerError> {
-    let username = request.username.trim().to_string();
-    if username.is_empty() || username.chars().count() > MAX_USERNAME_CHARS {
-        return Err(ServerError::Invalid(format!(
-            "username must be 1 to {MAX_USERNAME_CHARS} characters"
-        )));
-    }
-    if username.chars().any(char::is_control) {
-        return Err(ServerError::Invalid(
-            "username must not contain control characters".into(),
-        ));
-    }
-    if request.login_key.len() != notes_proto::LOGIN_KEY_BYTES {
-        return Err(ServerError::Invalid(format!(
-            "login key must be exactly {} bytes",
-            notes_proto::LOGIN_KEY_BYTES
-        )));
-    }
+    let username = validate_username(&request.username)?;
+    validate_login_key(&request.login_key)?;
     let device_name = request.device_name.trim().to_string();
     if device_name.is_empty() || device_name.chars().count() > MAX_DEVICE_NAME_CHARS {
         return Err(ServerError::Invalid(format!(
@@ -391,6 +412,31 @@ fn validate_auth(
         ));
     }
     Ok((username, request.login_key.clone(), device_name))
+}
+
+fn validate_username(value: &str) -> Result<String, ServerError> {
+    let username = value.trim().to_string();
+    if username.is_empty() || username.chars().count() > MAX_USERNAME_CHARS {
+        return Err(ServerError::Invalid(format!(
+            "username must be 1 to {MAX_USERNAME_CHARS} characters"
+        )));
+    }
+    if username.chars().any(char::is_control) {
+        return Err(ServerError::Invalid(
+            "username must not contain control characters".into(),
+        ));
+    }
+    Ok(username)
+}
+
+fn validate_login_key(key: &notes_proto::Base64Bytes) -> Result<(), ServerError> {
+    if key.len() != notes_proto::LOGIN_KEY_BYTES {
+        return Err(ServerError::Invalid(format!(
+            "login key must be exactly {} bytes",
+            notes_proto::LOGIN_KEY_BYTES
+        )));
+    }
+    Ok(())
 }
 
 fn validate_blob(chunk: &BlobChunk) -> Result<(), ServerError> {

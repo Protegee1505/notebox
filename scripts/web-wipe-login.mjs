@@ -11,7 +11,7 @@
 //    first sync.
 // 3. Close the browser, delete the OPFS database, localStorage, cookies and
 //    service-worker caches. The next launch is a wiped device.
-// 4. Confirm the note is gone, sign in again with the same passphrase, and
+// 4. Confirm the note is gone, sign in again with the same password, and
 //    find the note, its tag, its pin and a history version produced on the
 //    other device.
 //
@@ -37,7 +37,9 @@ const PORT = Number(process.env.PORT || 8797);
 const SETUP_TOKEN = "wipe-e2e-setup-token";
 const BASE = `http://127.0.0.1:${PORT}`;
 const USERNAME = "wipe-e2e@notebox";
-const PASSPHRASE = "correct horse battery staple";
+const PASSWORD = "correct horse battery staple";
+const NEW_USERNAME = "wipe-e2e@notebox-2";
+const NEW_PASSWORD = "a second correct horse battery staple";
 const marker = `Wipe-${Date.now()}`;
 const title = `${marker} note`;
 const body = `${title}\n\nThis note and its history must survive a wipe.`;
@@ -189,16 +191,20 @@ async function openApp(errors) {
   return page;
 }
 
-async function openLogin(page) {
+async function openSettings(page) {
   await page.locator(".nav-row", { hasText: "Settings" }).click();
   await page.getByRole("heading", { name: "Local data" }).waitFor();
+}
+
+async function openLogin(page) {
+  await openSettings(page);
   await page.getByRole("button", { name: "Sign in to sync" }).click();
   await page.getByRole("heading", { name: "Sign in" }).waitFor();
 }
 
-async function fillLogin(page, passphrase) {
-  await page.getByLabel("Username").fill(USERNAME);
-  await page.getByLabel("Passphrase").fill(passphrase);
+async function fillLogin(page, username, password) {
+  await page.getByLabel("Username").fill(username);
+  await page.getByLabel("Password").fill(password);
 }
 
 async function createAccount(loginKey) {
@@ -283,7 +289,7 @@ try {
   await page.waitForTimeout(800);
 
   await openLogin(page);
-  await fillLogin(page, PASSPHRASE);
+  await fillLogin(page, USERNAME, PASSWORD);
   const firstLogin = page.waitForRequest(
     (request) =>
       request.method() === "POST" && request.url().endsWith("/v1/auth/login"),
@@ -294,14 +300,14 @@ try {
   const loginKey = loginBody?.payload?.login_key;
   results.push(
     check(
-      "the app sends a derived login key, not the passphrase",
+      "the app sends a derived login key, not the password",
       typeof loginKey === "string" && loginKey.length > 20,
       String(loginKey).slice(0, 12),
     ),
   );
   await page.locator(".form-error").waitFor({ timeout: 30_000 });
   await createAccount(loginKey);
-  await fillLogin(page, PASSPHRASE);
+  await fillLogin(page, USERNAME, PASSWORD);
   await page.getByRole("button", { name: "Connect" }).click();
   await waitForSynced(page);
   results.push(check("first device reached the Worker", true));
@@ -328,7 +334,7 @@ try {
   );
 
   await openLogin(page);
-  await fillLogin(page, PASSPHRASE);
+  await fillLogin(page, USERNAME, PASSWORD);
   await page.getByRole("button", { name: "Connect" }).click();
   await waitForMarker(page);
   await waitForSynced(page);
@@ -382,6 +388,44 @@ try {
     ),
   );
   await page.getByRole("button", { name: "Close history" }).click();
+
+  // ---- Change both credentials, sign out, and sign in with the new pair. ----
+  await openSettings(page);
+  await page.getByRole("button", { name: "Change username or password" }).click();
+  await page.locator("form.credentials-form").waitFor({ timeout: 10_000 });
+  results.push(check("the credential form opens with labelled fields", true));
+  await page.getByLabel("Current password").fill(PASSWORD);
+  await page.getByLabel("Username").fill(NEW_USERNAME);
+  await page.getByLabel("New password (optional)").fill(NEW_PASSWORD);
+  await page.getByLabel("Confirm new password").fill(NEW_PASSWORD);
+  await page.getByRole("button", { name: "Update sign-in details" }).click();
+  await page
+    .locator(".toast.is-success", { hasText: "Sign-in details updated" })
+    .waitFor({ timeout: 30_000 });
+  await page.locator(".account-copy strong", { hasText: NEW_USERNAME }).waitFor();
+  results.push(check("the account shows the new username", true));
+
+  const loggedOut = page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().endsWith("/v1/auth/logout"),
+  );
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await loggedOut;
+  await page.getByRole("button", { name: "Sign in to sync" }).waitFor();
+  await page.getByRole("button", { name: "Sign in to sync" }).click();
+  await page.getByRole("heading", { name: "Sign in" }).waitFor();
+  await fillLogin(page, NEW_USERNAME, NEW_PASSWORD);
+  await page.getByRole("button", { name: "Connect" }).click();
+  await waitForSynced(page);
+  await waitForMarker(page);
+  results.push(check("the new username and password sign in", true));
+  results.push(
+    check(
+      "the note is still there after the credential change",
+      (await page.locator(".note-card", { hasText: title }).count()) === 1,
+    ),
+  );
 
   await page.screenshot({ path: path.join(tmpdir(), "notebox-web-wipe.png") });
   await context.close();

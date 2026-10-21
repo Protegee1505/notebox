@@ -15,7 +15,7 @@ use std::env;
 use std::error::Error;
 use std::io::{self, Write};
 
-use notes_sync::{HttpTransport, MemoryTokenStore, SyncClient, SyncConfig};
+use notes_sync::{HttpTransport, MemoryTokenStore, SyncClient, SyncConfig, MIN_PASSWORD_CHARS};
 
 const USAGE: &str = "\
 Create the single account on a Notebox Worker.
@@ -68,19 +68,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("setup token is empty".into());
     }
 
-    let passphrase = rpassword::prompt_password("Passphrase: ")?;
-    let confirm = rpassword::prompt_password("Repeat passphrase: ")?;
-    if passphrase != confirm {
-        return Err("the two passphrases do not match".into());
+    let password = rpassword::prompt_password("Password: ")?;
+    let confirm = rpassword::prompt_password("Repeat password: ")?;
+    if password != confirm {
+        return Err("the two passwords do not match".into());
     }
-    if passphrase.chars().count() < 12 {
-        return Err("use a passphrase of at least 12 characters".into());
+    if password.chars().count() < MIN_PASSWORD_CHARS {
+        return Err(format!("use a password of at least {MIN_PASSWORD_CHARS} characters").into());
     }
 
     let transport = HttpTransport::new(server)?;
     let client = SyncClient::new(transport, SyncConfig::new(&username, &device));
     let sessions = MemoryTokenStore::new();
-    let session = pollster::block_on(client.setup(setup_token, &passphrase, &sessions))?;
+    let session = pollster::block_on(client.setup(setup_token, &password, &sessions))?;
 
     println!();
     println!("Account created for {username} on {server}.");
@@ -91,7 +91,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             session.device_id
         ),
     }
-    println!("Sign in on each device with the same username and passphrase.");
+    println!("Sign in on each device with the same username and password.");
     println!();
     println!("Now close setup on the server:");
     println!("  npx wrangler secret delete SETUP_TOKEN");

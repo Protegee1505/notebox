@@ -22,13 +22,14 @@ use std::cell::RefCell;
 
 use notes_core::{decode_version_vector, encode_version_vector, VersionVector};
 use notes_proto::{
-    AuthRequest, Base64Bytes, DeviceList, NoteId, PushUpdate, SyncRequest, MAX_DEVICE_NAME_CHARS,
-    MAX_PUSH_UPDATES, MAX_UPDATE_BYTES, MAX_USERNAME_CHARS,
+    AuthRequest, Base64Bytes, CredentialUpdateRequest, CredentialUpdateResponse, DeviceList,
+    NoteId, PushUpdate, SyncRequest, MAX_DEVICE_NAME_CHARS, MAX_PUSH_UPDATES, MAX_UPDATE_BYTES,
+    MAX_USERNAME_CHARS,
 };
 use notes_store::{NoteStore, SyncState};
 
 use crate::blob::{self, AttachmentData, AttachmentRef};
-use crate::key::{derive_login_key, normalize_username};
+use crate::key::{derive_login_key, normalize_username, MIN_PASSWORD_CHARS};
 use crate::retry::{self, Sleeper};
 use crate::{SyncError, SyncSession, SyncTransport, TokenStore};
 use uuid::Uuid;
@@ -186,11 +187,11 @@ impl<T: SyncTransport> SyncClient<T> {
     pub async fn setup(
         &self,
         setup_token: &str,
-        passphrase: &str,
+        password: &str,
         sessions: &dyn TokenStore,
     ) -> Result<SyncSession, SyncError> {
         self.config.validate()?;
-        let key = derive_login_key(&self.config.username, passphrase)?;
+        let key = derive_login_key(&self.config.username, password)?;
         let request = self.config.auth_request(&key);
         let response = self.transport.setup(setup_token, &request).await?;
         self.keep(sessions, response)
@@ -199,14 +200,60 @@ impl<T: SyncTransport> SyncClient<T> {
     /// Log this device in against an account that already exists.
     pub async fn login(
         &self,
-        passphrase: &str,
+        password: &str,
         sessions: &dyn TokenStore,
     ) -> Result<SyncSession, SyncError> {
         self.config.validate()?;
-        let key = derive_login_key(&self.config.username, passphrase)?;
+        let key = derive_login_key(&self.config.username, password)?;
         let request = self.config.auth_request(&key);
         let response = self.transport.login(&request).await?;
         self.keep(sessions, response)
+    }
+
+    /// Change the account's username and/or password.
+    ///
+    /// The current session authenticates the request; `current_password`
+    /// proves the caller knows the existing password. A blank `new_password`
+    /// keeps the current one, which is what a username-only change needs.
+    ///
+    /// The returned username is the trimmed value the server stored. The
+    /// caller must replace this client (or its configuration and session)
+    /// before another credential operation, because the username is part of
+    /// the next current-key derivation.
+    pub async fn change_credentials(
+        &self,
+        current_password: &str,
+        new_username: &str,
+        new_password: &str,
+    ) -> Result<CredentialUpdateResponse, SyncError> {
+        self.config.validate()?;
+        if current_password.is_empty() {
+            return Err(SyncError::Invalid("enter the current password".to_string()));
+        }
+        let new_username = normalize_username(new_username);
+        SyncConfig::new(new_username.clone(), self.config.device_name.clone()).validate()?;
+        let new_password = if new_password.is_empty() {
+            current_password
+        } else {
+            new_password
+        };
+        if new_password.chars().count() < MIN_PASSWORD_CHARS {
+            return Err(SyncError::Invalid(format!(
+                "password must be at least {MIN_PASSWORD_CHARS} characters"
+            )));
+        }
+
+        let current_key = derive_login_key(&self.config.username, current_password)?;
+        let new_key = derive_login_key(&new_username, new_password)?;
+        let session = self.token()?;
+        let request = CredentialUpdateRequest {
+            current_login_key: Base64Bytes::new(current_key.to_vec()),
+            new_username,
+            new_login_key: Base64Bytes::new(new_key.to_vec()),
+        };
+        self.transport
+            .change_credentials(&session.token, &request)
+            .await
     }
 
     /// Forget the stored session. The server keeps the device until it is

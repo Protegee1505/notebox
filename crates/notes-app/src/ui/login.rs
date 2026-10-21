@@ -10,7 +10,7 @@ pub fn LoginScreen() -> Element {
     let context = use_context::<AppContext>();
     let state = context.state.read();
     let username = state.login.username.clone();
-    let passphrase = state.login.passphrase.clone();
+    let password = state.login.password.clone();
     let server = state.login.server.clone();
     let device = state.login.device.clone();
     let error = state.login.error.clone();
@@ -60,7 +60,7 @@ pub fn LoginScreen() -> Element {
                         }
                     }
                 }
-                p { class: "login-footnote", "Your passphrase is stretched on this device. The server never sees it." }
+                p { class: "login-footnote", "Your password is stretched on this device. The server never sees it." }
             }
 
             section { class: "login-panel",
@@ -121,17 +121,17 @@ pub fn LoginScreen() -> Element {
                             }
                         }
                         label { class: "field",
-                            span { "Passphrase" }
+                            span { "Password" }
                             input {
                                 class: "input",
                                 r#type: "password",
                                 autocomplete: "current-password",
-                                placeholder: "six random words",
-                                value: "{passphrase}",
+                                placeholder: "at least 12 characters",
+                                value: "{password}",
                                 disabled: connecting,
                                 oninput: {
                                     let context = context.clone();
-                                    move |event| context.state.write_unchecked().login.passphrase = event.value()
+                                    move |event| context.state.write_unchecked().login.password = event.value()
                                 },
                             }
                         }

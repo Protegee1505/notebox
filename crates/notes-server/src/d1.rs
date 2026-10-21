@@ -134,6 +134,42 @@ impl Storage for D1Storage {
         Ok(())
     }
 
+    async fn update_credentials(
+        &self,
+        username: &str,
+        auth_hash: &str,
+        keep_device: &str,
+    ) -> Result<(), StorageError> {
+        let account = self
+            .sync
+            .prepare(
+                "UPDATE account \
+                 SET username = ?, auth_hash = ?, failed_logins = 0, blocked_until = 0 \
+                 WHERE id = 1",
+            )
+            .bind(&[text(username), text(auth_hash)])?;
+        let devices = self
+            .sync
+            .prepare("DELETE FROM device WHERE id <> ?")
+            .bind(&[text(keep_device)])?;
+        // D1 runs a batch atomically; either the account and device list both
+        // change or neither does.
+        let results = self.sync.batch(vec![account, devices]).await?;
+        for result in &results {
+            if !result.success() {
+                return Err(StorageError::Failed(
+                    result
+                        .error()
+                        .unwrap_or_else(|| "credential update failed".into()),
+                ));
+            }
+        }
+        // The caller already read the account; a successful batch means both
+        // statements ran. Do not use row-count changes: setting the same
+        // username or hash again can report zero changed rows.
+        Ok(())
+    }
+
     async fn create_device(&self, device: &DeviceRow) -> Result<(), StorageError> {
         let statement = self
             .sync

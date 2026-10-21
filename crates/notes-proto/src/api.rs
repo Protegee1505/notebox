@@ -48,7 +48,7 @@ pub const MAX_DEVICE_NAME_CHARS: usize = 100;
 /// Login and setup payload.
 ///
 /// `login_key` is the Argon2id output, computed on the device from the
-/// passphrase. The server only sees it and stores a fast hash of it.
+/// password. The server only sees it and stores a fast hash of it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthRequest {
     /// Account name chosen during setup.
@@ -66,6 +66,29 @@ pub struct AuthResponse {
     pub device_id: String,
     /// Bearer token. The web client also receives it as an HttpOnly cookie.
     pub token: String,
+}
+
+/// Replace the account's username and login key.
+///
+/// The username is part of the Argon2id salt, so changing it changes the
+/// derived key even when the password stays the same. The client therefore
+/// sends both the key for the current username and the key derived with the
+/// new username. The server never sees a password.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CredentialUpdateRequest {
+    /// Key derived from the current username and current password.
+    pub current_login_key: Base64Bytes,
+    /// New account name, trimmed by the server.
+    pub new_username: String,
+    /// Key derived from the new username and the new (or unchanged) password.
+    pub new_login_key: Base64Bytes,
+}
+
+/// What the server returns after a successful credential update.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CredentialUpdateResponse {
+    /// The trimmed username now stored on the account.
+    pub username: String,
 }
 
 /// One note update on its way to the server.
@@ -259,7 +282,10 @@ pub fn envelope<T>(payload: T) -> Envelope<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_sha256_hex, is_token_hex, Base64Bytes, SyncRequest, MAX_PUSH_UPDATES};
+    use super::{
+        is_sha256_hex, is_token_hex, Base64Bytes, CredentialUpdateRequest, SyncRequest,
+        MAX_PUSH_UPDATES,
+    };
     use crate::{Envelope, NoteId, PROTOCOL_VERSION};
 
     #[test]
@@ -288,6 +314,20 @@ mod tests {
         };
         let json = serde_json::to_string(&Envelope::new(&request)).expect("serialize");
         let back: Envelope<SyncRequest> = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.version, PROTOCOL_VERSION);
+        assert_eq!(back.payload, request);
+    }
+
+    #[test]
+    fn a_credential_update_survives_json() {
+        let request = CredentialUpdateRequest {
+            current_login_key: Base64Bytes::new(vec![1; 32]),
+            new_username: "bob".to_string(),
+            new_login_key: Base64Bytes::new(vec![2; 32]),
+        };
+        let json = serde_json::to_string(&Envelope::new(&request)).expect("serialize");
+        let back: Envelope<CredentialUpdateRequest> =
+            serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back.version, PROTOCOL_VERSION);
         assert_eq!(back.payload, request);
     }

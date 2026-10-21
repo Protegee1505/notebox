@@ -6,7 +6,7 @@ Oct 20, 2026 · @LoweSam
 
 Build a local-first Rust app: one Dioxus codebase for web, Windows, Linux and Android, syncing through a small Cloudflare Worker and D1 database that cost nothing to run.
 
-You open the app, enter your username and passphrase, and every note is there. Each note keeps its full edit history. Devices work offline and merge when they reconnect.
+You open the app, enter your username and password, and every note is there. Each note keeps its full edit history. Devices work offline and merge when they reconnect.
 
 | Layer | Choice | Fallback |
 | --- | --- | --- |
@@ -16,7 +16,7 @@ You open the app, enter your username and passphrase, and every note is there. E
 | Local storage | SQLite (rusqlite natively, sqlite-wasm-rs in the browser) | IndexedDB in the browser |
 | Server | Cloudflare Worker in Rust (workers-rs) + D1; the same Worker serves the web app | Same server crate as axum on another free host |
 | Images | Compressed WebP in a second D1 database (R2 reportedly needs a card) | R2, if you accept a card |
-| Login | One account; passphrase stretched on your device; one token per device | Passkeys, later |
+| Login | One account; password stretched on your device; one token per device | Passkeys, later |
 | Releases | Installable web app, .msi/.exe, AppImage/.deb, .apk on GitHub Releases | none |
 
 Two trade-offs to accept. The editor is Markdown-based, not Word-style WYSIWYG: Rust has no mature rich-text editor, and a plain text box keeps typing fast and Android keyboards reliable. And Phase 0 proves the five riskiest assumptions first, each with a fallback, before any feature work starts.
@@ -28,7 +28,7 @@ Agents cannot create your accounts or hold your secrets. Do these six things onc
 1. **Cloudflare account (free).** Confirm you can create a Worker and a D1 database without adding a card. Do not enable R2: sources say it asks for a payment method even on its free tier.
 2. **GitHub account and a public repo.** Actions builds the installers and Releases hosts them, so a fresh machine can download the app. The repo holds no secrets; the server is protected by your login.
 3. **Tools on your dev machine.** Rust via rustup, the Dioxus CLI (`dx`), Node.js for `wrangler`, and Android Studio with SDK and NDK. Run `npx wrangler login` once. If you skip Android Studio, CI can build the APK, but you lose emulator testing.
-4. **Username and a long passphrase.** Six or more random words. It is stretched into your login key on every device, and there is no email reset in v1.
+4. **Username and a long password.** At least 12 characters; six or more random words is better. It is stretched into your login key on every device, and there is no email reset in v1.
 5. **Secrets.** Let an agent generate a `SETUP_TOKEN` and store it with `npx wrangler secret put SETUP_TOKEN`. Generate the Android signing keystore with `keytool` and back it up outside the repo: lose it and you cannot update the app in place.
 6. **Commit this plan.** Export this doc to Markdown, save it as `PLAN.md` in a new repo, and open Claude Code or opencode there. Agents read `PLAN.md` and `AGENTS.md` (starter below) first.
 
@@ -113,15 +113,15 @@ The wire format is JSON with base64 blobs: easy to debug with curl, and cheap en
 
 ## Auth and device login
 
-Login is username and passphrase, but the password hashing happens on your device, not on the server. A free Worker gets 10 ms of CPU per request, and a proper password hash costs far more than that.
+Login is username and password, but the password hashing happens on your device, not on the server. A free Worker gets 10 ms of CPU per request, and a proper password hash costs far more than that.
 
 1. **First run.** `POST /v1/auth/setup` creates the single account and works only with the `SETUP_TOKEN` secret, so nobody else can claim a freshly deployed server.
-2. **Login key.** The device runs Argon2id over the passphrase, with a salt derived from the username, and sends the result. The server stores only a fast SHA-256 hash of that key. Argon2id runs in Rust on every target, including the browser. Set the memory and time cost in spike S3 so login stays under about one second on a mid-range phone.
+2. **Login key.** The device runs Argon2id over the password, with a salt derived from the username, and sends the result. The server stores only a fast SHA-256 hash of that key. Argon2id runs in Rust on every target, including the browser. Set the memory and time cost in spike S3 so login stays under about one second on a mid-range phone.
 3. **Device token.** The server returns a random 256-bit token, stores only its hash, and names the device. Native apps keep it in the OS keystore where one exists (Windows Credential Manager, Secret Service, Android Keystore). The web app uses an HttpOnly, SameSite=Strict cookie, since it shares the Worker's origin.
 4. **Abuse limits.** Failed logins back off exponentially, counted in D1. Settings lists devices and revokes any of them.
-5. **Recovery.** There is no email reset. An agent writes `scripts/reset-password`, which needs `SETUP_TOKEN`, so losing the passphrase never loses the data.
+5. **Recovery.** There is no email reset and no reset script. Losing the password while no device is signed in needs a deliberate disaster-recovery procedure with direct D1 access; `SETUP_TOKEN` creates the first account and does not reset an existing one.
 
-The server URL is compiled into each build from a CI variable, so a fresh machine needs only the username and passphrase. End-to-end encryption is a Phase 9 option: derive a second key from the same passphrase with a different salt and encrypt every update blob before it leaves the device. The cost is that a lost passphrase then means lost data.
+The server URL is compiled into each build from a CI variable, so a fresh machine needs only the username and password. End-to-end encryption is a Phase 9 option: derive a second key from the same password with a different salt and encrypt every update blob before it leaves the device. The cost is that a lost password then means lost data.
 
 ## Repo layout and agent roles
 
@@ -327,7 +327,7 @@ The biggest risks are the Android build and the browser database. Both are teste
 | Browser OPFS database unreliable | S4 fails in any major browser | IndexedDB-backed store |
 | Android keyboard breaks the text box binding | S5 or P4 device testing shows lost or doubled text | Guard composition events; send edits on composition end |
 | Images fill the 500 MB database | Usage meter above 80% | Stronger compression; a third D1 database |
-| Lost passphrase | You cannot log in | `scripts/reset-password` with `SETUP_TOKEN`; data is kept unless end-to-end encryption is on |
+| Lost password | You cannot log in | A deliberate recovery procedure with direct D1 access; data is kept unless end-to-end encryption is on |
 | Markdown is not WYSIWYG | You miss Word-style formatting | Phase 9 live-preview editor, which needs a small JS dependency |
 
 **Sources.** Figures come from search results for these pages, not full reads, so agents must re-check them before launch. The R2 card requirement is reported inconsistently across sources, which is why the plan avoids R2.

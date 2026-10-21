@@ -82,6 +82,24 @@ impl Storage for MemoryStorage {
         Ok(())
     }
 
+    async fn update_credentials(
+        &self,
+        username: &str,
+        auth_hash: &str,
+        keep_device: &str,
+    ) -> Result<(), StorageError> {
+        let mut state = self.lock();
+        let Some(account) = state.account.as_mut() else {
+            return Err(StorageError::Failed("account row is missing".into()));
+        };
+        account.username = username.to_string();
+        account.auth_hash = auth_hash.to_string();
+        account.failed_logins = 0;
+        account.blocked_until = 0;
+        state.devices.retain(|device| device.id == keep_device);
+        Ok(())
+    }
+
     async fn create_device(&self, device: &DeviceRow) -> Result<(), StorageError> {
         let mut state = self.lock();
         if state

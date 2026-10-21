@@ -1,7 +1,7 @@
 //! Token generation, fast key hashing and login backoff.
 //!
-//! The server never sees the passphrase and never runs Argon2: the device
-//! stretches the passphrase into a login key first. All the server does is
+//! The server never sees the password and never runs Argon2: the device
+//! stretches the password into a login key first. All the server does is
 //! compare that key and store a fast SHA-256 hash of the token it issued. Both
 //! are cheap enough for the Workers free tier's 10 ms CPU budget.
 

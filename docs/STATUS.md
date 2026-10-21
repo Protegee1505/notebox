@@ -28,6 +28,20 @@ the login screen still offers offline use and a different server.
 
 ## Shipped
 
+- `notes-app` and `notes-server`: **Settings → Change username or password**.
+  The form asks for the current password, allows a username change, and treats
+  a blank new password as "keep the current one". `POST
+  /v1/auth/credentials` verifies the current derived key, updates the account
+  row and `auth_hash` in one D1 batch, resets the login backoff, keeps the
+  calling device signed in and deletes every other device row. A wrong current
+  password returns `403 wrong_password`; there is no password reset. The app
+  saves the new username, rebuilds its client with the same device token and
+  refreshes the device list. `MIN_PASSWORD_CHARS = 12` is shared with account
+  setup, and no migration or server-side Argon2id was added. ADR-0017 records
+  the trade-offs.
+- `scripts/server-e2e.mjs`: the throwaway Worker drill now also tries a wrong
+  current key, changes the username and key, checks that only the caller's
+  device survives, rejects the old pair and accepts the new one.
 - `notes-app`: personal-server login. A native build reads `NBX_SERVER_URL` at
   compile time and pre-fills the Worker URL; the login screen keeps it editable,
   shows "Use the built-in server" after an edit, and explains when no URL is
@@ -36,7 +50,7 @@ the login screen still offers offline use and a different server.
   build, so local notes, history and images need no Worker.
 - `notes-sync`: `scripts/create-account` and the
   `create_account` example create the single account on a local or deployed
-  Worker. The passphrase and setup token are read without echo, the passphrase
+  Worker. The password and setup token are read without echo, the password
   must be at least 12 characters, setup errors are returned as typed sync
   errors, the temporary setup device is revoked, and the output tells the owner
   to delete `SETUP_TOKEN`.
@@ -97,15 +111,17 @@ the login screen still offers offline use and a different server.
   WebP bytes and a history version labelled as another device. Importing the
   same zip again does not duplicate the note or its history. The CI web job now
   runs it after the restart check.
-- `scripts/web-wipe-login.mjs`: 11-check P8 account drill. It boots
+- `scripts/web-wipe-login.mjs`: 15-check P8 account drill. It boots
   `wrangler dev --local` with both D1 databases, serves the release build and
   captures the app's derived login key from a first sign-in attempt. It creates
   the one account with the setup token, signs in, and waits for the first sync.
   It then closes the browser, deletes the OPFS database, `localStorage`,
   cookies and service-worker caches, confirms the note is gone, signs in again
-  with the same passphrase and pulls the note body, tag, pin and a history
-  version labelled as the other device. The pull does not duplicate it. The CI
-  web job installs `worker-build` and runs it after the backup round trip.
+  with the same password and pulls the note body, tag, pin and a history
+  version labelled as the other device. The pull does not duplicate it. Next it
+  opens the credential form, changes both username and password, signs out,
+  signs in with the new pair and confirms the note is still there. The CI web
+  job installs `worker-build` and runs it after the backup round trip.
 - `scripts/web-a11y.mjs`: 30-check P8 accessibility flow. It runs axe-core's
   WCAG 2.0, 2.1 and 2.2 A/AA rules on notes, history, the command palette,
   shortcuts, trash, Settings, Login and the mobile layout, each in light and
@@ -396,7 +412,7 @@ the login screen still offers offline use and a different server.
   own byte encoding of an equal vector is not stable enough for the queue's
   SQL byte comparison.
 - `notes-sync`: Argon2id login key (19 MiB, t=2, p=1) with a pinned known
-  answer; the passphrase and the key never reach the server.
+  answer; the password and the key never reach the server.
 - `notes-sync`: `SyncTransport` trait and a blocking `ureq` (rustls) HTTP
   transport for native builds; the browser transport is in P7. Session
   stores: memory, file (mode 0600, atomic rename) and a null store for the
@@ -513,9 +529,10 @@ the login screen still offers offline use and a different server.
 
 - **Owner sign-in**: the Worker, both D1 databases and the single account exist,
   the setup secret is gone and `NBX_SERVER_URL` is set. The owner still has to
-  save the generated username and passphrase outside the repository and sign in
+  save the generated username and password outside the repository and sign in
   at the live URL; native Windows/Linux login and sync still need a live run.
-  There is no password reset.
+  Once signed in, Settings can change the username or password; there is no
+  reset if both the password and every signed-in device are lost.
 - **Android runtime**: no `/dev/kvm` and no Android SDK, so S2/S5 cannot be run
   on a device or emulator locally, and the P4/P6 Android screenshot, camera and
   boot checks are still missing. The local `aarch64-linux-android` check also

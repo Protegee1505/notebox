@@ -2,7 +2,9 @@
 
 use std::rc::Rc;
 
-use notes_proto::{envelope, AuthRequest, BlobChunk, Envelope, ErrorBody, SyncRequest};
+use notes_proto::{
+    envelope, AuthRequest, BlobChunk, CredentialUpdateRequest, Envelope, ErrorBody, SyncRequest,
+};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use worker::{js_sys, Env, Request, Response, RouteContext, Router};
@@ -54,6 +56,7 @@ pub async fn handle(req: Request, env: Env) -> worker::Result<Response> {
         .get_async("/", health)
         .post_async("/v1/auth/setup", setup)
         .post_async("/v1/auth/login", login)
+        .post_async("/v1/auth/credentials", update_credentials)
         .post_async("/v1/auth/logout", logout)
         .post_async("/v1/sync", sync)
         .put_async("/v1/blob/:hash", put_blob)
@@ -96,6 +99,27 @@ async fn login(mut req: Request, ctx: RouteContext<AppState>) -> worker::Result<
     .await;
     match result {
         Ok(response) => auth_response(&req, response),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn update_credentials(
+    mut req: Request,
+    ctx: RouteContext<AppState>,
+) -> worker::Result<Response> {
+    let result = async {
+        let device = authenticate(&req, &ctx.data.server).await?;
+        let request: CredentialUpdateRequest = read_body(&mut req).await?;
+        let response = ctx
+            .data
+            .server
+            .update_credentials(&device, &request)
+            .await?;
+        Ok::<_, ServerError>(response)
+    }
+    .await;
+    match result {
+        Ok(response) => json_response(&envelope(response), 200),
         Err(error) => error_response(error),
     }
 }

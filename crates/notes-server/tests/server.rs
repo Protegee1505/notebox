@@ -4,8 +4,8 @@
 //! one account, one token per device, ordered updates, and idempotent chunks.
 
 use notes_proto::{
-    AuthRequest, Base64Bytes, BlobChunk, NoteId, PushUpdate, SyncRequest, MAX_PUSH_UPDATES,
-    MAX_UPDATE_BYTES,
+    AuthRequest, Base64Bytes, BlobChunk, CredentialUpdateRequest, NoteId, PushUpdate, SyncRequest,
+    MAX_PUSH_UPDATES, MAX_UPDATE_BYTES,
 };
 use notes_server::{MemoryStorage, Server, ServerConfig, ServerError, Storage};
 
@@ -21,6 +21,14 @@ fn request(username: &str, device: &str, key: u8) -> AuthRequest {
         username: username.to_string(),
         login_key: Base64Bytes::new(vec![key; notes_proto::LOGIN_KEY_BYTES]),
         device_name: device.to_string(),
+    }
+}
+
+fn change(current: u8, username: &str, new: u8) -> CredentialUpdateRequest {
+    CredentialUpdateRequest {
+        current_login_key: Base64Bytes::new(vec![current; notes_proto::LOGIN_KEY_BYTES]),
+        new_username: username.to_string(),
+        new_login_key: Base64Bytes::new(vec![new; notes_proto::LOGIN_KEY_BYTES]),
     }
 }
 
@@ -175,6 +183,120 @@ fn repeated_failures_back_off_exponentially() {
             .failed_logins,
         0
     );
+}
+
+#[test]
+fn a_credential_change_keeps_this_device_and_revokes_the_others() {
+    let server = server();
+    let laptop = pollster::block_on(server.setup(
+        Some("setup-secret"),
+        &request("alice", "laptop", 7),
+        1_000,
+    ))
+    .expect("setup");
+    let phone =
+        pollster::block_on(server.login(&request("alice", "phone", 7), 1_100)).expect("login");
+    let laptop_device = pollster::block_on(server.authenticate(&laptop.token, 1_100)).expect("a");
+
+    let response =
+        pollster::block_on(server.update_credentials(&laptop_device, &change(7, "bob", 9)))
+            .expect("update");
+    assert_eq!(response.username, "bob");
+
+    let account = pollster::block_on(server.storage().account())
+        .expect("account")
+        .expect("some");
+    assert_eq!(account.username, "bob");
+    assert_eq!(
+        account.auth_hash,
+        notes_server::sha256_hex(&[9; notes_proto::LOGIN_KEY_BYTES])
+    );
+    assert_eq!(account.failed_logins, 0);
+    assert_eq!(account.blocked_until, 0);
+    assert_eq!(server.storage().device_count(), 1);
+
+    // The device that made the change keeps its token; the other one is gone.
+    pollster::block_on(server.authenticate(&laptop.token, 1_200)).expect("laptop stays signed in");
+    assert_eq!(
+        pollster::block_on(server.authenticate(&phone.token, 1_200)).unwrap_err(),
+        ServerError::Unauthorized
+    );
+
+    // The old username/key pair no longer logs in; the new one does.
+    assert_eq!(
+        pollster::block_on(server.login(&request("alice", "tablet", 7), 1_300)).unwrap_err(),
+        ServerError::InvalidCredentials
+    );
+    pollster::block_on(server.login(&request("bob", "tablet", 9), 1_300)).expect("new login");
+}
+
+#[test]
+fn a_wrong_current_password_changes_nothing() {
+    let server = server();
+    let laptop = pollster::block_on(server.setup(
+        Some("setup-secret"),
+        &request("alice", "laptop", 7),
+        1_000,
+    ))
+    .expect("setup");
+    let phone =
+        pollster::block_on(server.login(&request("alice", "phone", 7), 1_100)).expect("login");
+    let laptop_device = pollster::block_on(server.authenticate(&laptop.token, 1_100)).expect("a");
+
+    assert_eq!(
+        pollster::block_on(server.update_credentials(&laptop_device, &change(8, "bob", 9)))
+            .unwrap_err(),
+        ServerError::WrongPassword
+    );
+
+    let account = pollster::block_on(server.storage().account())
+        .expect("account")
+        .expect("some");
+    assert_eq!(account.username, "alice");
+    assert_eq!(
+        account.auth_hash,
+        notes_server::sha256_hex(&[7; notes_proto::LOGIN_KEY_BYTES])
+    );
+    assert_eq!(server.storage().device_count(), 2);
+    pollster::block_on(server.authenticate(&laptop.token, 1_200)).expect("laptop");
+    pollster::block_on(server.authenticate(&phone.token, 1_200)).expect("phone");
+}
+
+#[test]
+fn a_credential_change_validates_the_new_fields() {
+    let server = server();
+    let laptop = pollster::block_on(server.setup(
+        Some("setup-secret"),
+        &request("alice", "laptop", 7),
+        1_000,
+    ))
+    .expect("setup");
+    let device = pollster::block_on(server.authenticate(&laptop.token, 1_000)).expect("auth");
+
+    let blank = change(7, "   ", 9);
+    assert!(matches!(
+        pollster::block_on(server.update_credentials(&device, &blank)).unwrap_err(),
+        ServerError::Invalid(_)
+    ));
+    let mut bad_key = change(7, "bob", 9);
+    bad_key.new_login_key = Base64Bytes::new(vec![9; 31]);
+    assert!(matches!(
+        pollster::block_on(server.update_credentials(&device, &bad_key)).unwrap_err(),
+        ServerError::Invalid(_)
+    ));
+    let control = change(7, "bob\nadmin", 9);
+    assert!(matches!(
+        pollster::block_on(server.update_credentials(&device, &control)).unwrap_err(),
+        ServerError::Invalid(_)
+    ));
+    let valid = change(7, " bob ", 9);
+    let response =
+        pollster::block_on(server.update_credentials(&device, &valid)).expect("trimmed username");
+    assert_eq!(response.username, "bob");
+    let account = pollster::block_on(server.storage().account())
+        .expect("account")
+        .expect("some");
+    assert_eq!(account.username, "bob");
 }
 
 #[test]

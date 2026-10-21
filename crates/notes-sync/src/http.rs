@@ -13,8 +13,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use notes_proto::{
-    AuthRequest, AuthResponse, BlobChunk, BlobStored, DeviceList, Envelope, SyncRequest,
-    SyncResponse, PROTOCOL_VERSION,
+    AuthRequest, AuthResponse, BlobChunk, BlobStored, CredentialUpdateRequest,
+    CredentialUpdateResponse, DeviceList, Envelope, SyncRequest, SyncResponse, PROTOCOL_VERSION,
 };
 use serde::de::DeserializeOwned;
 
@@ -126,6 +126,15 @@ impl SyncTransport for HttpTransport {
             .post(self.url("/v1/auth/login"))
             .send_json(Envelope::new(request));
         self.call(response)
+    }
+
+    async fn change_credentials(
+        &self,
+        token: &str,
+        request: &CredentialUpdateRequest,
+    ) -> Result<CredentialUpdateResponse, SyncError> {
+        let builder = self.bearer(self.agent.post(self.url("/v1/auth/credentials")), token);
+        self.call(builder.send_json(Envelope::new(request)))
     }
 
     async fn sync(&self, token: &str, request: &SyncRequest) -> Result<SyncResponse, SyncError> {

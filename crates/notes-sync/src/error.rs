@@ -53,7 +53,7 @@ pub enum SyncError {
     #[error("session storage failed: {0}")]
     Session(String),
 
-    /// Argon2id could not stretch the passphrase.
+    /// Argon2id could not stretch the password.
     #[error("login key derivation failed: {0}")]
     KeyDerivation(String),
 

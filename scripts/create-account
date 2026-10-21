@@ -4,7 +4,7 @@
 #   ./scripts/create-account \
 #     --server https://notebox.example.workers.dev --username alice
 #
-# The setup token and passphrase are prompted without echo. Delete SETUP_TOKEN
+# The setup token and password are prompted without echo. Delete SETUP_TOKEN
 # with `npx wrangler secret delete SETUP_TOKEN` afterwards.
 set -euo pipefail
 
