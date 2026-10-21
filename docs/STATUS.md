@@ -1,14 +1,42 @@
 # Status
 
-Updated: 2026-10-20
-Phase: 7 (app sync wiring); P1–P6 complete. The running app can sign in,
-restore a session, sync notes and attachments, show status, list and revoke
-devices, and keep a conflict copy. The web build is served by the Worker and
-syncs same-origin; local notes, history and images now persist in OPFS, with
-no account needed. The packaging/deploy side of P7 remains.
+Updated: 2026-10-21
+Phase: 7 (installable web app; installers remain); P1–P6 complete. The running
+app can sign in, restore a session, sync notes and attachments, show status,
+list and revoke devices, and keep a conflict copy. The web build is served by
+the Worker and syncs same-origin; local notes, history and images persist in
+OPFS, with no account needed. The web build is now installable and works
+offline after one visit, and a waiting deployment updates only when the user
+chooses Reload. The installer and release-artifact side of P7 remains.
 
 ## Shipped
 
+- `notes-app`: installable web app. `index.html` registers a root-scoped
+  service worker and publishes an update bridge; `manifest.webmanifest`,
+  desktop and maskable icons, and `_headers` are part of the release build.
+  The worker precaches only the current hashed assets from the Dioxus asset
+  manifest, serves navigations network-first with an offline shell fallback,
+  and never intercepts `/v1/*`, `/sw.js` or `/version.json`. New deployments
+  wait; the banner's Reload saves and flushes the open note, activates the
+  worker, and reloads. Later dismisses it for the session.
+- `notes-app`: About shows the package version plus `NBX_BUILD_ID` and the
+  short `NBX_GIT_SHA`; local builds say `dev`. CI stamps the run number and
+  commit.
+- `scripts/pwa-build.mjs`: post-build PWA pipeline. Copies the manifest and
+  icons, precaches the current assets only, writes a content-hashed build id
+  into `sw.js`, and writes `version.json`. `scripts/web-build.sh` wraps a clean
+  `dx build` and the PWA step; the deploy and CI commands use it.
+- `scripts/pwa-check.mjs`: 12-check Chromium flow for manifest and icon
+  validity, empty `Page.getInstallabilityErrors`, service-worker control,
+  offline reload, an offline edit across another reload, a simulated second
+  build showing the update banner, cache replacement on Reload, the note still
+  open after the update, no `/v1/*` requests and no console errors. It copies
+  the build before simulating the update, so the checked artifact is not
+  changed. `NBX_PWA_SCREENSHOTS=1` adds six layout captures.
+- `.github/workflows/ci.yml`: the web job builds through `web-build.sh`, runs
+  both browser flows, and uploads the release output including the PWA files.
+- `docs/adr/0011-installable-web-app.md` records the precache, update and
+  cache-header decisions and the offline/update evidence.
 - `notes-app`: P7 sync wiring. The running app signs in, restores a saved
   session, saves the open draft before each run, and syncs on start, focus,
   three seconds after an edit and every 60 seconds while visible, with a five
@@ -34,11 +62,11 @@ no account needed. The packaging/deploy side of P7 remains.
 - `notes-server`: `POST /v1/auth/logout` expires the cookie with `204`; the
   Worker serves the Dioxus build through `[assets]`, so browser requests are
   same-origin and no CORS surface is added.
-- `notes-store`: `notes_with_attachment_work` returns notes that need an
-  upload or a missing download, so one run moves up to eight notes' images.
 - `notes-app`: a saved account makes an empty database wait for the first
   pull instead of seeding demo notes, which would otherwise push a fresh set
   on every in-memory web reload.
+- `notes-store`: `notes_with_attachment_work` returns notes that need an
+  upload or a missing download, so one run moves up to eight notes' images.
 - `notes-store`: browser database images. `to_image()` writes `NBX1` plus a
   normal SQLite file; `from_image()` rejects a foreign or empty image before
   running the normal migrations; `change_count()` exposes
@@ -271,8 +299,10 @@ no account needed. The packaging/deploy side of P7 remains.
   [39385729456](https://github.com/Protegee1505/notebox/actions/runs/39385729456)
   is green across all eight jobs, including the client sync step in `server`.
 - ADR-0001, ADR-0002, ADR-0004, ADR-0005, ADR-0006 and ADR-0007 record the
-  spike, dependency and encoding decisions. `docs/API.md` documents the v1
-  endpoints the P3 engine implements.
+  spike, dependency and encoding decisions; ADR-0008 covers attachments,
+  ADR-0009 sync wiring, ADR-0010 browser persistence and ADR-0011 the
+  installable web app. `docs/API.md` documents the v1 endpoints the P3 engine
+  implements.
 - Development disk: Cargo target, Rust/Cargo/npm/yarn/dx caches and Playwright
   browsers now live under `/tmp/opencode`; `scripts/relocate-caches.sh` repairs
   the layout and `scripts/budget-check` fails below 512 MiB free on `/home`.
@@ -282,7 +312,7 @@ no account needed. The packaging/deploy side of P7 remains.
 
 | Check | Result |
 | --- | --- |
-| Native tests | 204 passed, 1 skipped (the ignored Worker client e2e) |
+| Native tests | 206 passed, 1 skipped (the ignored Worker client e2e) |
 | Search, 10,000 notes | seeded in 14,534 ms; search 4 ms (budget 100 ms), 1 hit |
 | 3-store convergence | random updates, metadata changes and sync order; identical text, metadata and history |
 | 3-replica core convergence | random edits, drops and random sync order |
@@ -291,9 +321,12 @@ no account needed. The packaging/deploy side of P7 remains.
 | P6 image ingest | 951,612 B 1200×700 PNG → 29,450 B WebP (3.1%), 1.3 s from picker to row in a release web build (headless Chromium) |
 | P6 note + photo transfer | two stores, 180,000 B photo: note and link arrive first, placeholder shows, download fills bytes, second pass is a no-op; a missing blob is counted without failing |
 | P7 browser flow (Playwright) | 22/22 checks: login, first sync, last sync, devices, current marker, two-click revoke, manual sync, sign-out, cookie/account clearing, reload, login reopen; no console errors |
+| P7 installable web app (Playwright) | 12/12 functional checks: manifest and icons, empty installability errors, service-worker control, offline note and edit across reloads, second build waits for the banner, Reload replaces the cache, note survives, no `/v1/*` requests, no console errors; 6 layout captures with `NBX_PWA_SCREENSHOTS=1` |
+| P7 PWA install/update layout | 360/900/1400 px, light and dark; banner wraps without horizontal overflow; screenshots `docs/screenshots/p7-pwa-*` |
+| PWA bundle | 10 precached files; 32,623 bytes of manifest, icons, HTML and worker; pre-cache assets from the Dioxus manifest only |
 | P7 browser persistence (Playwright) | 13/13 checks: Browser storage label, local-only note and PNG, WebP attachment, second-tab lock, browser restart, text/image/history, page-hide save, no console errors |
 | P7 conflict flow (Playwright) | 13/13 checks with two device contexts plus a third puller: delayed sync, edit during the run, conflict toast, merged original, `conflict`-tagged copy holding the typed text, follow-up sync before the minute timer, copy pulled by another device |
-| Web bundle (release, brotli) | P7 Dioxus build 1,792,565 B (1.71 MiB), raw 7,489,034 B, limit 3.00 MiB; P6 manual build 1,955,393 B (1.86 MiB), raw 9,353,273 B; P5 CI was 1,545,831 B |
+| Web bundle (release, brotli) | P7 PWA build 1,818,081 B (1.73 MiB), raw 7,529,317 B, limit 3.00 MiB; P7 Dioxus build 1,792,565 B (1.71 MiB), raw 7,489,034 B; P6 manual build 1,955,393 B (1.86 MiB), raw 9,353,273 B; P5 CI was 1,545,831 B |
 | P5 browser flow (Playwright) | 26/26 checks: autosave, timeline, diff, preview, restore, version retention, trash, confirm, cancel, restore and empty |
 | P5 layout review | 360/900/1400 px, light and dark; no horizontal overflow, no console errors |
 | Restore across stores | older version restored on store B reached store A after one update exchange; both reported the same three version ids |
@@ -344,16 +377,20 @@ no account needed. The packaging/deploy side of P7 remains.
   against a live Worker.
 ## Next
 
-1. S3 after `wrangler login`: deploy the Worker with the P7 assets, create the
+1. P7 installers and releases: tag-triggered CI for `.msi`/`.exe`, AppImage,
+   `.deb` and a signed `.apk`, size checks, clean-install boot smoke, checksums
+   and GitHub Release upload. Add the desktop update-available notice and a
+   fresh-machine README check. The Android keystore and release secrets are
+   owner actions; the release job must fail rather than publish an unsigned
+   APK. The web half of P7 (installable app, offline cache, update banner) is
+   done.
+2. S3 after `wrangler login`: deploy the Worker with the P7 assets, create the
    account, measure request CPU with `wrangler tail` and write
    `docs/adr/0003-worker-free-tier.md`. Then run the human P5/P6/P7 acceptance
-   on a desktop and a phone, including a photo and a version restore.
-2. Run S2/S5/P6/P7 on an Android emulator with `/dev/kvm` (CI or a physical
+   on a desktop and a phone, including a photo, a version restore and an
+   installed PWA update.
+3. Run S2/S5/P6/P7 on an Android emulator with `/dev/kvm` (CI or a physical
    device) to close the runtime gap, including Gboard composition, the camera
    picker and the in-app login/sync loop.
-3. P7 packaging: tagged `.msi`/`.exe`, AppImage, `.deb` and signed `.apk`
-   artifacts, an update-available notice, an offline app cache and a
-   fresh-machine README check. A native UI sync smoke test under Xvfb can ride
-   with that CI work.
 4. Measure an OPFS image write on 1,000 notes and 50 images; if it exceeds
    roughly 100 ms, schedule the worker-backed `SqliteStore` from ADR-0004.

@@ -8,24 +8,29 @@ The full specification and phase plan is [PLAN.md](PLAN.md). Agent rules are in
 
 ## Status
 
-Phase 7: app sync wiring. The note document, store, search, history, export,
-the browser SQLite spike and the Worker sync server are implemented, and
-`notes-sync` logs in with an Argon2id-derived key, pushes and pulls with a
-durable cursor and retries with backoff. The Dioxus app has a responsive shell
-(one, two and three panes), a Markdown editor with rendered preview, find,
-tags, card and list views, command palette, shortcuts, login and settings,
-with light and dark themes. Note history shows a version timeline, a diff and
-a read-only preview, and restore writes the old text as a new edit; the trash
-view restores notes and confirms before emptying; image attachments are
-compressed to WebP and transferred by content hash. The running app can sign
-in, run the sync loop on start, focus, after an edit and every minute, show
-status, list and revoke devices, and keep both bodies when an edit collides
-with a remote change. Native uses the SQLite file; the web build keeps SQLite
-in memory and saves a versioned database image to OPFS, so local notes, history
-and image bytes survive a reload without an account. A second tab is held at an
-"already open" screen rather than writing over the first. A remote deploy and
-the S3 CPU measurement wait for `wrangler login`, and Android runtime testing
-still needs an emulator. See
+Phase 7: app sync wiring and installable web app. The note document, store,
+search, history, export, the browser SQLite spike and the Worker sync server
+are implemented, and `notes-sync` logs in with an Argon2id-derived key, pushes
+and pulls with a durable cursor and retries with backoff. The Dioxus app has a
+responsive shell (one, two and three panes), a Markdown editor with rendered
+preview, find, tags, card and list views, command palette, shortcuts, login and
+settings, with light and dark themes. Note history shows a version timeline, a
+diff and a read-only preview, and restore writes the old text as a new edit;
+the trash view restores notes and confirms before emptying; image attachments
+are compressed to WebP and transferred by content hash. The running app can
+sign in, run the sync loop on start, focus, after an edit and every minute,
+show status, list and revoke devices, and keep both bodies when an edit
+collides with a remote change. Native uses the SQLite file; the web build keeps
+SQLite in memory and saves a versioned database image to OPFS, so local notes,
+history and image bytes survive a reload without an account. A second tab is
+held at an "already open" screen rather than writing over the first.
+
+The web build is also an installable PWA. A manifest, icons and a service worker
+precache the hashed app shell, so it opens offline after the first visit. New
+deployments wait until the user chooses Reload from the update banner; the old
+worker never swaps under an open editor. A remote deploy and the S3 CPU
+measurement wait for `wrangler login`, Android runtime testing still needs an
+emulator, and the installer/release pipeline is the remaining P7 work. See
 [docs/STATUS.md](docs/STATUS.md), [docs/API.md](docs/API.md) and
 [docs/adr/](docs/adr/).
 
@@ -53,13 +58,47 @@ cargo deny check
 ./scripts/budget-check
 python3 scripts/free-tier-sim.py
 ./scripts/wasm-size.sh
-# dx leaves old hashed files in the output; clear it for a clean bundle.
-rm -rf target/dx/notebox/release/web/public
-dx build -p notes-app --platform web --release --features web
+./scripts/web-build.sh
 node scripts/web-budget.mjs target/dx/notebox/release/web/public
-PLAYWRIGHT_MODULES=/path/to/node_modules \
-  node scripts/web-persist.mjs target/dx/notebox/release/web/public
 ```
+
+`web-build.sh` clears `dx`'s old hashed files, builds the release web app and
+runs `pwa-build.mjs`, which adds `manifest.webmanifest`, the icons, `_headers`,
+`sw.js` and `version.json`. The service worker precaches the current hashed
+assets. `pwa-build.mjs` reads the Dioxus asset manifest, so stale files left by
+an earlier build are not cached.
+
+The browser checks use Playwright:
+
+```bash
+PLAYWRIGHT_MODULES=/path/to/node_modules \
+  node scripts/web-persist.mjs
+PLAYWRIGHT_MODULES=/path/to/node_modules \
+  node scripts/pwa-check.mjs
+```
+
+`web-persist.mjs` restarts Chromium and checks local notes, images and history.
+`pwa-check.mjs` checks installability, an offline reload, an offline edit, and
+a simulated second build that waits for the update banner. Add
+`NBX_PWA_SCREENSHOTS=1` to refresh `docs/screenshots/p7-pwa-*`.
+
+## Web app and offline use
+
+The Worker serves the built web app from the same origin as sync. To install
+it, open the deployed URL in a browser and use its "Install" action. The first
+visit caches the app shell; later visits work without a network connection,
+including notes stored in OPFS. Sync requests are never cached: when offline,
+the app shows the local status and retries when the network returns.
+
+When a new deployment is published, the old service worker keeps serving the
+current build. The next check happens on load or when the tab becomes visible;
+if a new worker is waiting, a banner offers **Reload**. Choosing it saves the
+open note, activates the new worker and reloads. There is no automatic reload
+while you are typing.
+
+`Settings → About` shows the package version and, in CI builds, the build and
+commit identifiers. Set `NBX_BUILD_ID` and `NBX_GIT_SHA` when building to stamp
+them; local builds say `dev`.
 
 The UI has no default renderer. Select one explicitly:
 
@@ -125,7 +164,7 @@ cargo install worker-build --version 0.8.7 --locked
 npx wrangler d1 migrations apply notebox-sync --local
 npx wrangler d1 migrations apply notebox-blobs --local
 # Serve the real web app from the Worker (optional for the API scripts):
-dx build -p notes-app --platform web --release --features web
+./scripts/web-build.sh
 npx wrangler dev --local --var SETUP_TOKEN:local-dev-token
 ```
 
@@ -165,13 +204,16 @@ npx wrangler d1 create notebox-blobs    # copy the database_id
 npx wrangler d1 migrations apply notebox-sync --remote
 npx wrangler d1 migrations apply notebox-blobs --remote
 npx wrangler secret put SETUP_TOKEN     # generate a long random value
-rm -rf target/dx/notebox/release/web/public
-dx build -p notes-app --platform web --release --features web
+NBX_BUILD_ID="$(git rev-parse --short HEAD)" \
+  NBX_GIT_SHA="$(git rev-parse HEAD)" \
+  ./scripts/web-build.sh
 npx wrangler deploy
 ```
 
 The Worker serves the built web app through `[assets]` in `wrangler.toml`, so
-open the deployed URL itself rather than a separate static host.
+open the deployed URL itself rather than a separate static host. Run
+`web-build.sh` before every deploy: it writes the service worker, manifest,
+icons and `_headers` that make the app installable and offline-ready.
 
 After deploying, call `POST /v1/auth/setup` once with the setup token to create
 the account. Then measure CPU time for the S3 spike with `npx wrangler tail` and
