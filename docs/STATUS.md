@@ -42,7 +42,8 @@ the login screen still offers offline use and a different server.
   55-update log and 39 KB WebP into a local Worker and a debug wasm build:
   before the fix the panel showed `RuntimeError: unreachable` right after
   `GET /v1/blob/...`; after it the sync completed with the panel hidden and no
-  console errors.
+  console errors. Deployed as `bd6d1e6`; a fresh 360 px live boot loaded the new
+  wasm, kept the panel hidden and logged no console errors.
 - `notes-core` and `notes-app`: **phone title, layout and tap fixes**.
   `Note::title()` replaces Markdown images with their alt text, and the UI also
   sanitises cached summary titles on display and in conflict copies, so notes
@@ -530,14 +531,14 @@ the login screen still offers offline use and a different server.
 | S3 Argon2id | desktop release 38.2 ms median (20 runs, max 92.1 ms); Chromium release build 119 ms median (178/119/116 ms, includes local Worker round trip); phone not measured |
 | S3 free limits | re-read 2026-10-21: 100,000 requests/day, 10 ms CPU, 50 subrequests, 50 D1 queries, 2 MB rows, 10 D1 databases; 2 databases in use |
 | Native tests | 226 passed, 1 skipped (the ignored Worker client e2e) |
-| CI | Run 39587202523 on 759971a: all eight jobs green (gates, wasm, server, Windows, Android, desktop, OPFS, web) |
+| CI | Run 39592592855 on bd6d1e6: all eight jobs green (gates, wasm, server, Windows, Android, desktop, OPFS, web) |
 | P8 backup restore (Playwright) | 18/18 checks: fresh-profile export/import of a notebook, pinned tagged note and trashed note; text, tag, pin, trash, attachment row, decoded WebP, history peer label and idempotent second import; no console errors |
-| P8 wipe and sign-in (Playwright + local Worker) | 16/16 checks: three timed rejected logins (browser Argon2id median 119 ms), derived login key, account setup, first sync, OPFS/localStorage/cookie/cache wipe, note gone, sign in, note body/tag/pin, history labelled as the other device, no duplicate, no console errors |
+| P8 wipe and sign-in (Playwright + local Worker) | 19/19 checks: three timed rejected logins (browser Argon2id median 162 ms), derived login key, account setup, first sync, image attachment, OPFS/localStorage/cookie/cache wipe, note gone, sign in, attachment download without a crash, note body/tag/pin/image, history labelled as the other device, no duplicate, no console errors |
 | P8 accessibility and phone layout (Playwright + axe-core) | 40/40 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; note-list Arrow/Home/Enter, Tab and Shift+Tab stay inside the three dialogs, focus return after overlays, Settings/Login/dialog autofocus; image title and no list overflow at 390/360/320; 320 px header, scrollable toolbar and reachable Quote; colour sheet inside the viewport; one-tap Back and phone Settings/navigation; no console errors |
 | P8 phone sign-in (one-off Playwright, 360 px touch + local Worker) | New note saved, derived login key, account setup, status `Synced`, synced note in the list, no list overflow, Settings round trip, navigation drawer, one-tap Back with the colour menu open; no console errors |
 | Web login preview | Rebuilt release at 2026-10-21: the Worker origin is read-only with no URL input, the offline action is visible, and the screen has no horizontal overflow or console errors at 1400 px and 390 px |
-| Live Worker deployment | `https://notebox.nbx-7207a015.workers.dev` serves release 0.1.0 / 759971a; `/version.json` reports the same build. The earlier e9c8e82 deploy passed a fresh sign-in and first sync; the 759971a phone probe at 360 px created a local image note, displayed the title `image`, kept the list at 359 px with no horizontal scroll, opened the colour sheet, left the editor with one Back tap and logged no console errors |
-| Deploy guard | `./scripts/deploy-web.sh --check` reports live 0.1.0 / 759971a at tip, green CI run 39587202523, no pending migrations on either D1 database, `dx` 0.7.10 and `worker-build` 0.8.7; it blocks on a dirty tree before any build |
+| Live Worker deployment | `https://notebox.nbx-7207a015.workers.dev` serves release 0.1.0 / bd6d1e6; `/version.json` reports the same build. A fresh 360 px smoke boot loaded the new wasm, kept the crash panel hidden, had the `notebox-bd6d1e6` service-worker cache active and logged no console errors. The earlier e9c8e82 deploy passed a fresh sign-in and first sync; the 759971a phone probe at 360 px created a local image note, displayed the title `image`, kept the list at 359 px with no horizontal scroll, opened the colour sheet, left the editor with one Back tap and logged no console errors |
+| Deploy guard | `./scripts/deploy-web.sh --if-needed` deployed bd6d1e6 after green CI run 39592592855 and verified `/version.json`; the check also reports no pending migrations on either D1 database, `dx` 0.7.10 and `worker-build` 0.8.7 |
 | Remote D1 migrations | `notebox-sync` and `notebox-blobs` each applied `0001_init.sql`; `wrangler d1 migrations list --remote` reports no pending migrations |
 | P8 large note (web UI) | 102,415 B note: open median 11.5–42.9 ms across four runs (individual opens up to 57.7 ms); 120 typed characters, input-to-frame p95 8.4–9.0 ms, max 10.9–22.0 ms, none over 34 ms; text survives a reload; web cold start 786–1010 ms |
 | P8 desktop cold start (Linux release) | warm median 555 ms over 5 runs (547–587 ms), budget 600 ms; first run 628 ms with sample seeding, 2,170 ms when WebKit's cache is cold; Xvfb with isolated XDG directories |
@@ -618,8 +619,9 @@ the login screen still offers offline use and a different server.
   `load_attachments` (see Shipped) and trapped the wasm instance; the new panic
   panel showed `RuntimeError: unreachable`. The guard ordering is fixed and the
   failure was reproduced and re-tested locally with the live account data. The
-  fix still needs the deployed build checked on the owner's Brave Android
-  device. The OPFS image and the server both keep the notes; if the interrupted
+  deployed build now contains the fix; it still needs a retest on the owner's
+  Brave Android device. The OPFS image and the server both keep the notes; if
+  the interrupted
   run did not persist its pull or attachment, the next boot repeats that pull
   and download under the fixed code.
 - **Cold starts and large notes**: Linux desktop cold start is 555 ms warm
