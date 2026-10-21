@@ -10,6 +10,9 @@ use crate::ui::icons::Icon;
 #[component]
 pub fn SettingsPane() -> Element {
     let context = use_context::<AppContext>();
+    use_drop(move || {
+        let _ = document::eval("document.getElementById('app-root')?.focus();");
+    });
     let mut new_notebook = use_signal(String::new);
     let state = context.state.read();
     let theme = state.theme;
@@ -42,10 +45,17 @@ pub fn SettingsPane() -> Element {
         main { class: "settings-pane", aria_label: "Settings",
             header { class: "settings-header",
                 button {
+                    id: "settings-back",
                     class: "icon-button back-button",
                     r#type: "button",
                     aria_label: "Back to notes",
                     title: "Back to notes",
+                    autofocus: true,
+                    onmounted: move |_| {
+                        let _ = document::eval(
+                            "document.getElementById('settings-back')?.focus();",
+                        );
+                    },
                     onclick: {
                         let context = context.clone();
                         move |_| context.go(Screen::Notes)
@@ -359,6 +369,7 @@ pub fn SettingsPane() -> Element {
                         r#type: "file",
                         accept: ".zip,application/zip",
                         tabindex: "-1",
+                        aria_label: "Notebox backup archive",
                         onchange: {
                             let context = context.clone();
                             move |event| {

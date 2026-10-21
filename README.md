@@ -83,17 +83,29 @@ PLAYWRIGHT_MODULES=/path/to/node_modules \
 PLAYWRIGHT_MODULES=/path/to/node_modules \
   node scripts/web-restore.mjs
 PLAYWRIGHT_MODULES=/path/to/node_modules \
+  node scripts/web-a11y.mjs
+PLAYWRIGHT_MODULES=/path/to/node_modules \
+  node scripts/web-perf.mjs
+PLAYWRIGHT_MODULES=/path/to/node_modules \
   node scripts/web-wipe-login.mjs
 ```
 
 `web-persist.mjs` restarts Chromium and checks local notes, images and history.
 `web-restore.mjs` exports a backup in one profile and restores it in a fresh
-one, including its version history. `web-wipe-login.mjs` starts
+one, including its version history. `web-a11y.mjs` runs axe-core against every
+main screen in light and dark themes, and checks the note list's arrow keys and
+focus return after closing a panel; install `axe-core` beside Playwright.
+`web-perf.mjs` creates a 100 KB note, measures its open time and typing frame
+health, and reopens it after a reload. `web-wipe-login.mjs` starts
 `wrangler dev --local` (install the matching `worker-build` first), wipes a
 profile's OPFS database and session, signs in, and checks that the note and its
 history come back. `pwa-check.mjs` checks installability, an offline reload, an
 offline edit, and a simulated second build that waits for the update banner.
 Add `NBX_PWA_SCREENSHOTS=1` to refresh `docs/screenshots/p7-pwa-*`.
+
+Measure the Linux desktop cold start from a release build with
+`./scripts/desktop-cold-start.sh`; it boots a private Xvfb display and an
+isolated data directory, so it does not touch your notes.
 
 ## Web app and offline use
 
@@ -263,6 +275,10 @@ sudo apt install ./notebox_0.1.0_amd64.deb
 # Web: deploy the unzipped public directory with wrangler
 sha256sum -c SHA256SUMS
 ```
+
+The 20 MB desktop-installer budget is measured on the `.deb` (9.9 MB), which
+uses the system WebKitGTK. The self-contained AppImage bundles WebKitGTK, so it
+is larger (89.6 MB) and is outside that budget by ADR-0015.
 
 ### Android signing
 

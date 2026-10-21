@@ -20,6 +20,7 @@ mod commands;
 mod images;
 mod markdown_ops;
 mod media;
+mod perf;
 #[cfg(target_arch = "wasm32")]
 mod pwa;
 mod state;

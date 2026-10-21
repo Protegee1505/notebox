@@ -167,7 +167,7 @@ jobs:
           mkdir -p /tmp/notebox-web
           cd /tmp/notebox-web
           npm init -y >/dev/null
-          npm install playwright@1.64.1
+          npm install playwright@1.64.1 axe-core@4.10.2
           npx playwright install --with-deps chromium
 
       - name: Local notes, history and images survive a browser restart
@@ -179,6 +179,11 @@ jobs:
         env:
           PLAYWRIGHT_MODULES: /tmp/notebox-web/node_modules
         run: node scripts/web-restore.mjs
+
+      - name: Accessibility audit of every screen and theme
+        env:
+          PLAYWRIGHT_MODULES: /tmp/notebox-web/node_modules
+        run: node scripts/web-a11y.mjs
 
       - name: Installable, offline and deliberate updates
         env:

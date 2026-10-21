@@ -82,7 +82,7 @@ pub fn EditorPane() -> Element {
 
     let Some(id) = selected else {
         return rsx! {
-            section { class: "editor-pane is-empty", aria_label: "Editor",
+            main { class: "editor-pane is-empty", aria_label: "Editor",
                 div { class: "editor-empty",
                     div { class: "empty-mark", Icon { name: "note" } }
                     h2 { "Your notes, in one place" }
@@ -146,7 +146,7 @@ pub fn EditorPane() -> Element {
     };
 
     rsx! {
-        section { class: "editor-pane {tone}", aria_label: "Editor",
+        main { class: "editor-pane {tone}", aria_label: "Editor",
             ondragover: move |event| event.prevent_default(),
             ondrop: {
                 let context = context.clone();
@@ -165,6 +165,7 @@ pub fn EditorPane() -> Element {
                 accept: "image/png,image/jpeg,image/gif,image/webp",
                 multiple: true,
                 tabindex: "-1",
+                aria_label: "Image attachments",
                 onchange: {
                     let context = context.clone();
                     move |event| {
@@ -514,6 +515,7 @@ pub fn EditorPane() -> Element {
                         spellcheck: "true",
                         placeholder: "Start writing. The first line becomes the title.",
                         value: "{draft}",
+                        onmounted: move |_| crate::perf::editor_ready(),
                         oninput: {
                             let context = context.clone();
                             move |event| context.note_input(event.value())

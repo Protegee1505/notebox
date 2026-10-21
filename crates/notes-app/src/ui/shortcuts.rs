@@ -38,6 +38,9 @@ const GROUPS: [(&str, [(&str, &str); 4]); 3] = [
 #[component]
 pub fn ShortcutSheet() -> Element {
     let context = use_context::<AppContext>();
+    use_drop(move || {
+        let _ = document::eval("document.getElementById('app-root')?.focus();");
+    });
     rsx! {
         div { class: "overlay", role: "presentation",
             div {
@@ -58,6 +61,7 @@ pub fn ShortcutSheet() -> Element {
                         r#type: "button",
                         aria_label: "Close shortcuts",
                         title: "Close",
+                        autofocus: true,
                         onclick: {
                             let context = context.clone();
                             move |_| context.state.write_unchecked().shortcuts_open = false

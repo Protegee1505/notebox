@@ -9,6 +9,9 @@ use crate::ui::icons::Icon;
 #[component]
 pub fn CommandPalette() -> Element {
     let context = use_context::<AppContext>();
+    use_drop(move || {
+        let _ = document::eval("document.getElementById('app-root')?.focus();");
+    });
     let state = context.state.read();
     let query = state.palette_query.clone();
     let index = state.palette_index;

@@ -204,6 +204,9 @@ pub fn NoteList() -> Element {
                 }
             } else {
                 div { class: "{list_class}",
+                    role: "listbox",
+                    aria_label: "Notes",
+                    aria_multiselectable: "false",
                     for note in notes {
                         NoteCard {
                             key: "{note.id}",
@@ -262,9 +265,40 @@ fn NoteCard(
             onkeydown: {
                 let context = context.clone();
                 move |event| {
-                    if event.key() == Key::Enter || event.key() == Key::Character(" ".to_string()) {
-                        event.prevent_default();
-                        context.select_note(id);
+                    match event.key() {
+                        Key::Enter => {
+                            event.prevent_default();
+                            context.select_note(id);
+                        }
+                        Key::Character(value) if value == " " => {
+                            event.prevent_default();
+                            context.select_note(id);
+                        }
+                        Key::ArrowDown => {
+                            event.prevent_default();
+                            let _ = document::eval(
+                                "document.activeElement?.nextElementSibling?.focus();",
+                            );
+                        }
+                        Key::ArrowUp => {
+                            event.prevent_default();
+                            let _ = document::eval(
+                                "document.activeElement?.previousElementSibling?.focus();",
+                            );
+                        }
+                        Key::Home => {
+                            event.prevent_default();
+                            let _ = document::eval(
+                                "document.activeElement?.parentElement?.firstElementChild?.focus();",
+                            );
+                        }
+                        Key::End => {
+                            event.prevent_default();
+                            let _ = document::eval(
+                                "document.activeElement?.parentElement?.lastElementChild?.focus();",
+                            );
+                        }
+                        _ => {}
                     }
                 }
             },
@@ -287,22 +321,6 @@ fn NoteCard(
             }
             footer { class: "note-meta",
                 span { "{edited}" }
-                if trash_view {
-                    button {
-                        class: "restore-button",
-                        r#type: "button",
-                        title: "Restore note",
-                        onclick: {
-                            let context = context.clone();
-                            move |event| {
-                                event.stop_propagation();
-                                context.restore_note(id);
-                            }
-                        },
-                        Icon { name: "undo" }
-                        span { "Restore" }
-                    }
-                }
             }
         }
     }

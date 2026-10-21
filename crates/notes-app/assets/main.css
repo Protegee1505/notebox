@@ -46,7 +46,7 @@
   --surface-3: #ded9c9;
   --text: #222722;
   --text-soft: #4c544b;
-  --muted: #767e73;
+  --muted: #626a5e;
   --border: #ddd7c7;
   --border-strong: #c7c0ad;
   --primary: #2c6b55;
@@ -90,7 +90,7 @@
   --surface-3: #303630;
   --text: #e8ece6;
   --text-soft: #b5bdb4;
-  --muted: #8e978d;
+  --muted: #95a096;
   --border: #303630;
   --border-strong: #444c44;
   --primary: #82c2a6;
@@ -131,7 +131,7 @@
     --surface-3: #303630;
     --text: #e8ece6;
     --text-soft: #b5bdb4;
-    --muted: #8e978d;
+    --muted: #95a096;
     --border: #303630;
     --border-strong: #444c44;
     --primary: #82c2a6;
@@ -983,7 +983,7 @@ kbd {
 }
 
 .note-card.is-trashed {
-  opacity: 0.82;
+  border-style: dashed;
 }
 
 .note-card-top {
@@ -1058,8 +1058,10 @@ kbd {
 .restore-button {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 0.25rem;
-  padding: 0.2rem 0.45rem;
+  min-height: 1.5rem;
+  padding: 0.3rem 0.55rem;
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   background: var(--surface);
@@ -1480,8 +1482,8 @@ kbd {
 .tag-remove {
   display: inline-grid;
   place-items: center;
-  width: 1rem;
-  height: 1rem;
+  width: 1.5rem;
+  height: 1.5rem;
   padding: 0;
   border: none;
   border-radius: 50%;
@@ -3120,7 +3122,6 @@ kbd {
 .palette-tip {
   margin-left: auto;
   overflow: hidden;
-  opacity: 0.65;
   white-space: nowrap;
   text-overflow: ellipsis;
 }

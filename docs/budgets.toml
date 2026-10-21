@@ -19,4 +19,7 @@ first_load_brotli_mb = 3
 apk_mb = 25
 
 [installer]
+# Platform installer using the system webview: .deb on Linux, .msi on Windows.
+# The self-contained AppImage bundles WebKitGTK and is outside this budget
+# (ADR-0015).
 desktop_mb = 20

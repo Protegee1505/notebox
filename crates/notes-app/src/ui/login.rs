@@ -99,12 +99,19 @@ pub fn LoginScreen() -> Element {
                         label { class: "field",
                             span { "Username" }
                             input {
+                                id: "login-username",
                                 class: "input",
                                 r#type: "text",
                                 autocomplete: "username",
                                 placeholder: "your name",
                                 value: "{username}",
                                 disabled: connecting,
+                                autofocus: true,
+                                onmounted: move |_| {
+                                    let _ = document::eval(
+                                        "document.getElementById('login-username')?.focus();",
+                                    );
+                                },
                                 oninput: {
                                     let context = context.clone();
                                     move |event| context.state.write_unchecked().login.username = event.value()

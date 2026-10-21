@@ -10,6 +10,9 @@ use crate::ui::icons::Icon;
 #[component]
 pub fn HistoryPanel() -> Element {
     let context = use_context::<AppContext>();
+    use_drop(move || {
+        let _ = document::eval("document.getElementById('app-root')?.focus();");
+    });
     let state = context.state.read();
     let versions = state.history_versions.clone();
     let selected_id = state.history_selected.clone();
