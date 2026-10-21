@@ -80,6 +80,32 @@ fn saving_updates_the_summary_and_the_search_index() {
 }
 
 #[test]
+fn search_matches_tags_without_using_body_text() {
+    let store = store();
+    let note = create(&store, "title\nbody without the word", 1_000);
+    note.add_tag("books").expect("tag");
+    store.save_note(&note, 1_100).expect("save");
+
+    for query in ["books", "#books", "boo"] {
+        let hits = store.search(&SearchQuery::new(query)).expect("search");
+        assert_eq!(hits.len(), 1, "query {query}");
+        assert_eq!(hits[0].note.id, note.id());
+        assert!(!hits[0].snippet.contains("books"));
+    }
+}
+
+#[test]
+fn search_snippet_keeps_literal_brackets() {
+    let store = store();
+    let note = create(&store, "Use [draft] here\nbody about draft", 1_000);
+    store.save_note(&note, 1_100).expect("save");
+
+    let hits = store.search(&SearchQuery::new("draft")).expect("search");
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].snippet.contains("[draft]"));
+}
+
+#[test]
 fn pinned_notes_sort_first_then_recently_updated() {
     let store = store();
     let old = create(&store, "old", 1_000);
@@ -264,7 +290,7 @@ fn search_matches_title_and_body_by_prefix() {
         .expect("search");
     assert_eq!(hits.len(), 1);
     assert!(
-        hits[0].snippet.contains("[brown]"),
+        hits[0].snippet.contains("brown fox"),
         "snippet: {}",
         hits[0].snippet
     );

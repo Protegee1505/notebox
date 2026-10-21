@@ -130,9 +130,11 @@ async function openApp(browser, profile, url, errors) {
     }
   });
   await page.goto(url, { waitUntil: "networkidle" });
-  await page
-    .locator("#note-editor")
-    .waitFor({ state: "visible", timeout: 60_000 });
+  const offline = page.getByRole("button", { name: /Try it offline/ });
+  if (await offline.isVisible().catch(() => false)) {
+    await offline.click();
+  }
+  await page.locator(".workspace").waitFor({ state: "visible", timeout: 60_000 });
   return { context, page };
 }
 
@@ -151,7 +153,7 @@ async function chooseBackup(page, zipPath) {
 }
 
 async function chooseBackupFromPalette(page, zipPath) {
-  await page.keyboard.press("Control+k");
+  await page.keyboard.press("Control+p");
   await page.locator("#palette-input").waitFor({ timeout: 10_000 });
   await page.locator("#palette-input").fill("restore from backup");
   const chooser = page.waitForEvent("filechooser");

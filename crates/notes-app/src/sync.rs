@@ -752,7 +752,7 @@ pub fn revoke_blocking(
 
 /// Atomically write a small JSON file.
 #[cfg(not(target_arch = "wasm32"))]
-fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }

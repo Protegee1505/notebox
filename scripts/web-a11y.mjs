@@ -172,8 +172,79 @@ try {
     }
   });
   await page.goto(started.base, { waitUntil: "networkidle" });
+  await page.getByRole("heading", { name: "Welcome to Notebox" }).waitFor({ timeout: 60_000 });
+  results.push(check("first launch opens the welcome login screen", true));
+  const firstRunBack = await page.getByRole("button", { name: "Back to notes" }).count();
+  results.push(check("first launch hides the login back button", firstRunBack === 0));
+  await page.getByRole("button", { name: /Try it offline/ }).click();
+  await page.locator(".empty-list").waitFor({ timeout: 10_000 });
+  results.push(
+    check(
+      "offline mode starts without sample notes",
+      (await page.locator(".note-card").count()) === 0,
+    ),
+  );
+  await page.getByRole("button", { name: "Add welcome tour" }).click();
+  await page.locator(".note-card").nth(2).waitFor({ timeout: 60_000 });
   await page.locator("#note-editor").waitFor({ timeout: 60_000 });
   await settle(page, 600);
+  await page.locator("#note-editor").click();
+  await page.keyboard.press("Control+k");
+  await page.waitForFunction(
+    () => document.activeElement?.id === "global-search",
+    null,
+    { timeout: 10_000 },
+  );
+  results.push(check("Ctrl K focuses note search", true));
+
+  await page.locator("#global-search").fill("pragmatic");
+  await page.locator(".note-card").first().waitFor({ timeout: 10_000 });
+  const marks = await page.locator(".note-card .search-mark").allTextContents();
+  results.push(
+    check(
+      "search highlights a matching result",
+      marks.includes("Pragmatic"),
+      marks.join("|"),
+    ),
+  );
+  await page.locator(".note-card").first().click();
+  await page.locator("#find-input").waitFor({ timeout: 10_000 });
+  const openedFind = await page.locator("#find-input").inputValue();
+  results.push(
+    check(
+      "opening a search hit prefills Find with the body match",
+      openedFind.toLowerCase() === "pragmatic",
+      openedFind,
+    ),
+  );
+  await page.keyboard.press("Escape");
+  await page.locator("#find-input").waitFor({ state: "hidden", timeout: 10_000 });
+
+  await page.locator("#global-search").fill("personal");
+  await page.waitForFunction(
+    () => document.querySelectorAll(".note-card").length === 1,
+    null,
+    { timeout: 10_000 },
+  );
+  const tagMarks = await page.locator(".note-tag .search-mark").allTextContents();
+  results.push(
+    check(
+      "search matches a tag even when the body lacks the word",
+      tagMarks.includes("personal"),
+      tagMarks.join("|"),
+    ),
+  );
+  await page.locator(".note-card").first().click();
+  const tagOnlyFind = await page.locator("#find-input").count();
+  results.push(check("a tag-only hit leaves Find closed", tagOnlyFind === 0));
+
+  await page.locator("#global-search").fill("");
+  await page.waitForFunction(
+    () => document.querySelectorAll(".note-card").length === 3,
+    null,
+    { timeout: 10_000 },
+  );
+  await page.locator("#note-editor").click();
   await page.addScriptTag({ path: axePath });
 
   async function audit(name) {
@@ -226,6 +297,11 @@ try {
 
   await setTheme(page, "dark");
   await audit("notes, dark");
+
+  const desktopFab = await page.locator(".new-note-fab").isVisible();
+  results.push(
+    check("the floating new-note button stays off desktop", !desktopFab),
+  );
 
   // A soft keyboard exposes whatever page area sits below the app. html, body
   // and the static crash panel carry the app's theme, not the light default.
@@ -300,7 +376,7 @@ try {
 
   // ---- Command palette, both themes. ----
   await setTheme(page, "light");
-  await page.keyboard.press("Control+k");
+  await page.keyboard.press("Control+p");
   await page.locator("#palette-input").waitFor({ timeout: 10_000 });
   await settle(page);
   await audit("command palette, light");
@@ -324,7 +400,7 @@ try {
   results.push(check("closing the palette returns focus to the app", true));
 
   await setTheme(page, "dark");
-  await page.keyboard.press("Control+k");
+  await page.keyboard.press("Control+p");
   await page.locator("#palette-input").waitFor({ timeout: 10_000 });
   await settle(page);
   await audit("command palette, dark");
@@ -332,7 +408,7 @@ try {
 
   // ---- Shortcut sheet, opened from the palette. ----
   await setTheme(page, "light");
-  await page.keyboard.press("Control+k");
+  await page.keyboard.press("Control+p");
   await page.locator("#palette-input").fill("keyboard shortcuts");
   await page.keyboard.press("Enter");
   await page.locator(".shortcuts-sheet").waitFor({ timeout: 10_000 });
@@ -358,7 +434,7 @@ try {
   results.push(check("closing the shortcut sheet returns focus to the app", true));
 
   await setTheme(page, "dark");
-  await page.keyboard.press("Control+k");
+  await page.keyboard.press("Control+p");
   await page.locator("#palette-input").fill("keyboard shortcuts");
   await page.keyboard.press("Enter");
   await page.locator(".shortcuts-sheet").waitFor({ timeout: 10_000 });
@@ -447,6 +523,18 @@ try {
   // ---- Phone regression: long image titles, narrow chrome, one-tap Back. ----
   await page.getByRole("button", { name: "Back to notes" }).click();
   await page.locator("#note-editor").waitFor();
+  await page.getByRole("button", { name: "Back to notes" }).click();
+  await page.locator(".workspace.show-list").waitFor();
+  const phoneFab = page.locator(".new-note-fab");
+  results.push(
+    check(
+      "the phone note list shows a floating new-note button",
+      await phoneFab.isVisible(),
+    ),
+  );
+  await phoneFab.click();
+  await page.locator("#note-editor").waitFor({ timeout: 10_000 });
+  results.push(check("the floating button opens a new note", true));
   await page.getByRole("button", { name: "Back to notes" }).click();
   await page.locator(".workspace.show-list").waitFor();
   await page.getByRole("button", { name: "Open navigation" }).click();
@@ -727,6 +815,68 @@ try {
     .waitFor({ timeout: 5_000 });
   results.push(check("the add-tag button tags the note on a phone", true));
 
+  // The chip row folds away while the note body scrolls so the text gets the
+  // height back, and returns when the note is back at its start.
+  await page
+    .locator("#note-editor")
+    .fill(
+      Array.from(
+        { length: 40 },
+        (_, index) => `Line ${index + 1} keeps the phone editor scrolling.`,
+      ).join("\n"),
+    );
+  await settle(page, 300);
+  const scrolledTop = await page.evaluate(async () => {
+    const body = document.getElementById("note-editor");
+    body.scrollTop = body.scrollHeight;
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve)),
+    );
+    return Math.round(body.scrollTop);
+  });
+  await settle(page, 300);
+  const collapsedRow = await page.evaluate(() => {
+    const row = document.querySelector(".editor-tags");
+    return {
+      height: row ? Number(row.getBoundingClientRect().height.toFixed(1)) : -1,
+      visibility: row ? getComputedStyle(row).visibility : "missing",
+    };
+  });
+  const chipHidden = !(await page
+    .locator(".editor-tag", { hasText: "phone-tag" })
+    .isVisible());
+  results.push(
+    check(
+      "tag chips collapse when the note body scrolls",
+      scrolledTop > 0 &&
+        collapsedRow.height < 1 &&
+        collapsedRow.visibility === "hidden" &&
+        chipHidden,
+      JSON.stringify({ scrolledTop, ...collapsedRow, chipHidden }),
+    ),
+  );
+
+  const backToTop = await page.evaluate(async () => {
+    const body = document.getElementById("note-editor");
+    body.scrollTop = 0;
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve)),
+    );
+    return Math.round(body.scrollTop);
+  });
+  await settle(page, 300);
+  const returnedRow = await page.locator(".editor-tags").boundingBox();
+  const chipBack = await page
+    .locator(".editor-tag", { hasText: "phone-tag" })
+    .isVisible();
+  results.push(
+    check(
+      "tag chips return at the top of the note",
+      backToTop === 0 && chipBack && (returnedRow?.height ?? 0) > 8,
+      JSON.stringify({ backToTop, row: returnedRow, chipBack }),
+    ),
+  );
+
   await page.getByRole("button", { name: "Remove tag phone-tag" }).click();
   await settle(page, 150);
   results.push(
@@ -781,7 +931,15 @@ try {
   await page.getByRole("button", { name: "Open navigation" }).click();
   await page.locator(".sidebar.is-open").waitFor();
   results.push(check("phone Settings and navigation open", true));
-  await page.locator(".scrim").click();
+  // At 320 px the open drawer covers the scrim's centre, so tap the exposed
+  // strip on the right rather than letting Playwright aim at the hidden middle.
+  const scrimBox = await page.locator(".scrim").boundingBox();
+  if (scrimBox) {
+    await page.mouse.click(
+      scrimBox.x + scrimBox.width - 12,
+      scrimBox.y + scrimBox.height / 2,
+    );
+  }
   await settle(page, 200);
 
   await page.screenshot({ path: path.join(tmpdir(), "notebox-a11y.png") });

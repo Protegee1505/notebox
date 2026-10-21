@@ -127,9 +127,11 @@ async function openApp(browser, profile, url, errors) {
     }
   });
   await page.goto(url, { waitUntil: "networkidle" });
-  await page
-    .locator("#note-editor")
-    .waitFor({ state: "visible", timeout: 60_000 });
+  const offline = page.getByRole("button", { name: /Try it offline/ });
+  if (await offline.isVisible().catch(() => false)) {
+    await offline.click();
+  }
+  await page.locator(".workspace").waitFor({ state: "visible", timeout: 60_000 });
   return { context, page };
 }
 
@@ -206,6 +208,13 @@ try {
     ),
   );
 
+  // Display choices are local preferences, not note data. A reload must keep
+  // them, and they must never appear in the synced note itself.
+  await page.getByRole("button", { name: "Toggle theme" }).click();
+  await page.getByRole("button", { name: "Toggle theme" }).click();
+  await page.getByRole("button", { name: "List view" }).click();
+  await page.waitForTimeout(300);
+
   // A second tab on the same origin must not open a second writer.
   const second = await context.newPage();
   await second.goto(url, { waitUntil: "networkidle" });
@@ -228,6 +237,16 @@ try {
   context = undefined;
 
   ({ context, page } = await openApp(browser, profile, url, errors));
+  const restoredTheme = await page.locator("#app-root").getAttribute("data-theme");
+  const restoredList = await page.locator(".note-list").getAttribute("class");
+  results.push(check("theme survives a restart", restoredTheme === "dark", restoredTheme ?? ""));
+  results.push(
+    check(
+      "layout survives a restart",
+      (restoredList ?? "").includes("note-rows"),
+      restoredList ?? "",
+    ),
+  );
   await page.waitForFunction(
     (expected) =>
       Array.from(document.querySelectorAll(".note-title")).some(

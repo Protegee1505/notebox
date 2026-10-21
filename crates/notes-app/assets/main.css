@@ -960,6 +960,44 @@ kbd {
   scrollbar-gutter: stable;
 }
 
+/* The list carries its own new-note control while the sidebar is off-canvas.
+   It stays hidden wherever the sidebar button is on screen. */
+.new-note-fab {
+  position: absolute;
+  right: var(--space-4);
+  bottom: calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
+  z-index: 10;
+  display: none;
+  place-items: center;
+  width: calc(var(--space-6) + var(--space-4));
+  height: calc(var(--space-6) + var(--space-4));
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--primary) 70%, var(--border));
+  border-radius: 50%;
+  background: var(--primary);
+  color: var(--primary-contrast);
+  box-shadow: var(--shadow);
+  transition: background 120ms ease, transform 120ms ease;
+}
+
+.new-note-fab:hover {
+  background: var(--primary-hover);
+}
+
+.new-note-fab:active {
+  transform: translateY(1px);
+}
+
+.new-note-fab:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.new-note-fab .icon {
+  width: 1.35rem;
+  height: 1.35rem;
+}
+
 .note-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(13rem, 100%), 1fr));
@@ -1053,6 +1091,13 @@ kbd {
 .note-tag {
   color: var(--muted);
   font-size: var(--text-xs);
+}
+
+.search-mark {
+  border-radius: var(--radius-sm);
+  background: var(--primary-soft);
+  color: inherit;
+  font: inherit;
 }
 
 .note-title {
@@ -1195,6 +1240,13 @@ kbd {
   color: var(--muted);
   font-size: var(--text-sm);
   line-height: 1.55;
+}
+
+.empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
 }
 
 /* ---------- editor ---------- */
@@ -1511,11 +1563,38 @@ kbd {
   height: 1.02rem;
 }
 
+/* The row folds away once the note body scrolls, so the text gets the height
+   back on a phone. The outer grid animates to a zero row without a measured
+   height; the inner element keeps the chips wrapping as before. */
 .editor-tags {
+  display: grid;
+  grid-template-rows: 1fr;
+  overflow: hidden;
+  padding: 0.45rem var(--space-4) 0;
+  transition: grid-template-rows 160ms ease, padding-top 160ms ease,
+    visibility 0s linear 0s;
+}
+
+.editor-tags-inner {
   display: flex;
   flex-wrap: wrap;
   gap: 0.3rem;
-  padding: 0.45rem var(--space-4) 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.editor-tags.is-collapsed {
+  grid-template-rows: 0fr;
+  padding-top: 0;
+  visibility: hidden;
+  transition: grid-template-rows 160ms ease, padding-top 160ms ease,
+    visibility 0s linear 160ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .editor-tags.is-collapsed {
+    transition-delay: 0s;
+  }
 }
 
 .editor-tag {
@@ -3412,8 +3491,23 @@ kbd {
     box-shadow: var(--shadow-lg);
   }
 
+  .list-pane {
+    position: relative;
+  }
+
   .menu-button {
     display: inline-grid;
+  }
+
+  .new-note-fab {
+    display: grid;
+  }
+
+  /* Keep the last card scrollable clear of the floating button. */
+  .note-list {
+    padding-bottom: calc(
+      var(--space-7) + var(--space-5) + env(safe-area-inset-bottom, 0px)
+    );
   }
 
   .scrim {
@@ -3576,7 +3670,8 @@ kbd {
   }
 
   .note-list {
-    padding: 0 var(--space-3) var(--space-5);
+    padding: 0 var(--space-3)
+      calc(var(--space-7) + var(--space-5) + env(safe-area-inset-bottom, 0px));
   }
 
   .note-grid {

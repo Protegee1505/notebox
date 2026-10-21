@@ -11,7 +11,12 @@ passes, including note-list arrow keys, Tab trapped inside dialogs and focus
 return after closing a panel. The phone note list now keeps a pasted image title
 inside the viewport and keeps full title lines when the list scrolls, the
 editor header fits and the toolbar scrolls at 320 px, and the colour menu no
-longer puts a full-screen blocker over Back and Settings.
+longer puts a full-screen blocker over Back and Settings. A first launch now
+asks for an account or an explicit offline choice instead of auto-seeding
+samples; display choices persist on the device, search matches tags and
+highlights matches, and the optional welcome tour is created only when the
+owner asks for it. A phone can start a note from a floating button on the list
+instead of opening the sidebar.
 A 100 KB note opens in a median under 50 ms in the web UI and typing drops no
 frames; Linux desktop cold start is 555 ms warm. The installer budget now
 measures the `.deb` (9.9 MB), not the self-contained AppImage. The free Worker
@@ -19,8 +24,9 @@ is deployed and a fresh browser signed in and synced. S3 now has production
 analytics and a 100-request tail probe: 156 production invocations, zero
 errors, and no error 1102, with the CPU-budget nuance recorded in ADR-0003.
 The full wipe/pull/history drill against the deployed Worker, the Windows and
-Android runtime checks, and the v0.1.0 release remain; the release is deferred
-until the owner's remaining bugs are fixed. The running app can sign in,
+Android runtime checks, and the v0.1.0 release remain; the fixes for the
+owner's reported bugs are in this working tree and need owner acceptance, CI
+and a deploy. The running app can sign in,
 restore a session, sync notes and attachments, show status, list and revoke
 devices, and keep a conflict copy. The web build is served by the Worker and
 syncs same-origin; local notes, history and images persist in OPFS, with no
@@ -30,11 +36,60 @@ release workflow builds Linux, Windows and web artifacts when a version tag is
 pushed, with Android opt-in through `RELEASE_ANDROID=true`; it has not run yet.
 A native build can bake in the owner's Worker URL with `NBX_SERVER_URL`, while
 the login screen still offers offline use and a different server. The phone
-editor now keeps its add-tag field, and no light row is left below the app when
-the keyboard opens.
+editor now keeps its add-tag field, its tag chips fold away while the note body
+scrolls, and no light row is left below the app when the keyboard opens.
 
 ## Shipped
 
+- `notes-app`: **tag chips fold away while the note body scrolls**. The chip
+  row sits above the scrolling body, so on a phone it kept taking a line from
+  the text. It now collapses over 160 ms once the body passes 24 px (a
+  `grid-template-rows` 1fr→0fr transition, no measured height), hands the
+  height back to the text, and returns when the note is back at the top. Write
+  and Preview each drive it from `onscroll`, keyed to note, mode and tag count,
+  so switching note or mode, or adding or removing a tag, shows the chips
+  again; `visibility: hidden` follows the collapse and keeps the row out of the
+  tab order. The signal changes only when the row should move, not on every
+  scroll tick. `scripts/web-a11y.mjs` grew two phone checks: scroll to the end
+  (row at 0 px, chips hidden) and scroll back (row and chips return); the flow
+  passes 61/61. Chromium at 320 px on the release build.
+- `notes-app`: **a phone starts a note without opening the sidebar**. The note
+  list now carries a floating plus button at widths up to 1099 px, where the
+  sidebar is off-canvas; it calls the same `new_note` path as the sidebar, so
+  it clears search, switches to Active and opens the editor with the caret in
+  place. The list gains bottom padding so the last card scrolls clear of the
+  button, and the button stays hidden on desktop, where the sidebar's New note
+  button is always visible. `scripts/web-a11y.mjs` checks it is hidden at
+  1400 px and opens the editor from the phone list (61/61).
+- `notes-app`: **first launch is a real choice, and display settings survive
+  a reload**. A saved account, the persisted offline flag, or an existing local
+  database opens the note list; anything else stops on Login with no back
+  button and no global note shortcuts. "Try it offline" persists
+  `offline = true`; signing out also marks the device offline, while signing in
+  clears it. An older database with notes but no flag is treated as offline and
+  the flag is written. `theme`, `layout` and `offline` live in
+  `preferences.json` on native and `localStorage`
+  (`notebox.preferences.v1`) on web, are loaded before the first render and are
+  never exported or synced. `scripts/web-persist.mjs` now checks that `dark`
+  and the list layout survive a full browser restart (15/15).
+- `notes-app`: **the welcome tour is opt-in, and the duplicate-body trigger is
+  gone**. Startup no longer seeds notes into an empty database. The empty
+  Active view offers "Add welcome tour", which reuses `Personal` and `Projects`
+  by name and creates three notes with fresh random ids. The old fixed ids let
+  two devices merge concurrent inserts into the same Loro text container,
+  which is how a note body could repeat without a user edit. Existing duplicate
+  bodies are left untouched; History → Restore is the manual repair path.
+- `notes-store`, `notes-app`: **tags are searchable, matches are visible, and
+  the shortcuts match the labels**. Local schema v5 adds a `tags` column to
+  the FTS5 mirror, copies v4 rows into it and fills tags from `note_tag`; D1,
+  the auth protocol and the sync protocol are unchanged. Snippets are plain
+  body text (literal `[` and `]` stay literal), and the shared
+  `notes_store::search_terms` split drives both the FTS expression and
+  `<mark>` highlighting in titles, snippets and tags. Clicking a body hit opens
+  Find with the phrase or first body term; a tag-only hit opens the note with
+  Find closed. Ctrl K focuses note search, Ctrl P opens the command palette,
+  and undo/redo use standard curved arrows. `scripts/web-a11y.mjs` grew the
+  first-run and search checks (61/61).
 - `notes-app`: **no light row under the phone keyboard, and a way to add tags
   on a phone**. Theme tokens now resolve at `:root` as well as on `.app`, and
   the app mirrors its theme onto `<html>` (a `use_memo` on the theme runs one
@@ -200,27 +255,34 @@ the keyboard opens.
   WebP bytes and a history version labelled as another device. Importing the
   same zip again does not duplicate the note or its history. The CI web job now
   runs it after the restart check.
-- `scripts/web-wipe-login.mjs`: 15-check P8 account drill. It boots
+- `scripts/web-wipe-login.mjs`: 19-check P8 account drill. It boots
   `wrangler dev --local` with both D1 databases, serves the release build and
-  captures the app's derived login key from a first sign-in attempt. It creates
-  the one account with the setup token, signs in, and waits for the first sync.
-  It then closes the browser, deletes the OPFS database, `localStorage`,
-  cookies and service-worker caches, confirms the note is gone, signs in again
-  with the same password and pulls the note body, tag, pin and a history
-  version labelled as the other device. The pull does not duplicate it. Next it
-  opens the credential form, changes both username and password, signs out,
-  signs in with the new pair and confirms the note is still there. The CI web
-  job installs `worker-build` and runs it after the backup round trip.
-- `scripts/web-a11y.mjs`: 42-check P8 accessibility and phone-layout flow. It
-  runs axe-core's WCAG 2.0, 2.1 and 2.2 A/AA rules on notes, history, the
-  command palette, shortcuts, trash, Settings, Login and the mobile layout,
-  each in light and dark themes. The same run checks note-list Arrow/Home/Enter
-  handling, keeps Tab and Shift+Tab inside the three modal dialogs, checks
-  focus return after closing history, the palette or the shortcut sheet,
-  Settings' back button and Login's first field. At 390, 360 and 320 px it adds
-  an image data-URL note, asserts no horizontal list or document overflow, that
-  the 320 px editor header fits with a reachable Quote button and a scrollable
-  toolbar, that the colour sheet stays in the viewport, that one tap on Back
+  enters offline mode (no auto-seeded notes) before creating a note. It captures
+  the app's derived login key from a first sign-in attempt, creates the one
+  account with the setup token, signs in, and waits for the first sync. It then
+  closes the browser, deletes the OPFS database, `localStorage`, cookies and
+  service-worker caches, confirms the note is gone, signs in again with the
+  same password and pulls the note body, tag, pin and a history version
+  labelled as the other device. The pull does not duplicate it. Next it opens
+  the credential form, changes both username and password, signs out, signs in
+  with the new pair and confirms the note is still there. The CI web job
+  installs `worker-build` and runs it after the backup round trip.
+- `scripts/web-a11y.mjs`: 61-check P8 accessibility, onboarding and phone-layout
+  flow. It runs axe-core's WCAG 2.0, 2.1 and 2.2 A/AA rules on notes, history,
+  the command palette, shortcuts, trash, Settings, Login and the mobile layout,
+  each in light and dark themes. The same run checks first launch opens the
+  welcome Login with no back button, offline starts with no samples, the
+  welcome tour creates three cards, Ctrl K focuses search, Ctrl P opens the
+  palette, a search match gets a `<mark>`, a hit prefills Find, and a tag-only
+  hit keeps Find closed. It checks note-list Arrow/Home/Enter handling, keeps
+  Tab and Shift+Tab inside the three modal dialogs, checks focus return after
+  closing history, the palette or the shortcut sheet, Settings' back button and
+  Login's first field. At 390, 360 and 320 px it adds an image data-URL note,
+  asserts no horizontal list or document overflow, that the 320 px editor
+  header fits with a reachable Quote button and a scrollable toolbar, that the
+  colour sheet stays in the viewport, that the floating new-note button is
+  hidden at 1400 px and opens the editor at 390 px, that the tag row collapses
+  when the note body scrolls and returns at the top, that one tap on Back
   leaves the editor with the colour menu open, and that Settings and the
   navigation drawer still open. It then shortens the viewport to 360×420 so the
   list scrolls, asserts every card title keeps at least one full line, switches
@@ -334,12 +396,13 @@ the keyboard opens.
   storage" when the image is live. The cookie/restore and sync cursor paths are
   unchanged, and no new server request is made.
 - `scripts/web-persist.mjs`: release-build Playwright check with a persistent
-  Chromium profile. It creates a local-only note, attaches a PNG, waits for the
-  WebP row, closes and reopens the browser, and finds the text, image reference,
-  attachment row and decoded `data:image/webp` bytes. It also checks the second
-  tab lock, the history panel, the Settings label after restart and a
-  synthetic page-hide after a just-typed edit. 13/13 checks pass with no
-  console errors.
+  Chromium profile. It enters offline mode, creates a local-only note, attaches
+  a PNG, waits for the WebP row, closes and reopens the browser, and finds the
+  text, image reference, attachment row and decoded `data:image/webp` bytes. It
+  also checks the second tab lock, the history panel, the Settings label after
+  restart, a synthetic page-hide after a just-typed edit, and that the dark
+  theme and list layout survive the restart. 15/15 checks pass with no console
+  errors.
 - `docs/adr/0010-browser-persistence.md` records the image, lock and fallback
   decisions. It amends ADR-0004's runtime shape: the app keeps the synchronous
   `NoteStore` for v1, and revisits a worker-backed store if image writes grow
@@ -367,10 +430,10 @@ the keyboard opens.
   placeholder for a link whose bytes have not arrived. The rendered preview
   resolves content hashes to cached inline `data:image/webp;base64` URLs;
   note cards show the image's alt text instead of a raw Markdown URL.
-- `notes-store`: schema v4 stores attachment bytes in the local SQLite file,
-  deduplicates by SHA-256, indexes note links, creates placeholders for links
-  without bytes, tracks the upload queue, measures usage, and carries bytes
-  through export/import. Removing a Markdown reference only drops the link,
+- `notes-store`: schema v4 (v5 adds tags to the search index) stores attachment
+  bytes in the local SQLite file, deduplicates by SHA-256, indexes note links,
+  creates placeholders for links without bytes, tracks the upload queue,
+  measures usage, and carries bytes through export/import. Removing a Markdown reference only drops the link,
   never the bytes. Attachment tests cover dedupe, placeholders, the queue,
   export/import and the v3 migration.
 - `notes-core`: content-addressed attachment paths (`attachments/<hash>.<ext>`),
@@ -429,9 +492,9 @@ the keyboard opens.
   bullet/numbered lists, quote, inline code, code block, link, find in note,
   rendered preview, autosave, undo/redo, word and character counts, tags,
   pin, archive, trash, restore, note colours and toast messages.
-- `notes-app`: command palette (Ctrl K), keyboard shortcut sheet, global
-  search, workspace shortcuts (Ctrl N/S/F/E/Z/1/2/3/,) and a visible Commands
-  entry so touch devices can reach the palette.
+- `notes-app`: command palette (Ctrl P), note search (Ctrl K), keyboard
+  shortcut sheet, global search, workspace shortcuts (Ctrl N/S/F/E/Z/1/2/3/,)
+  and a visible Commands entry so touch devices can reach the palette.
 - `notes-app`: local login screen (form complete; sync is wired) and
   settings for appearance, layout, account, notebooks, storage, zip export,
   shortcuts and emptying the trash.
@@ -572,18 +635,19 @@ the keyboard opens.
 | S3 tail probe | 100 requests at 1/s: 100/100 tail events, 0 failures, CPU min 0 / p50 1 / p95 2 / max 2 ms; login 401 `invalid_credentials`, devices and sync 401 `unauthorized`; no 1102 or 5xx |
 | S3 Argon2id | desktop release 38.2 ms median (20 runs, max 92.1 ms); Chromium release build 119 ms median (178/119/116 ms, includes local Worker round trip); phone not measured |
 | S3 free limits | re-read 2026-10-21: 100,000 requests/day, 10 ms CPU, 50 subrequests, 50 D1 queries, 2 MB rows, 10 D1 databases; 2 databases in use |
-| Native tests | 226 passed, 1 skipped (the ignored Worker client e2e) |
+| Native tests | 236 passed, 1 skipped (the ignored Worker client e2e) |
 | CI | Run 39599670389 on 5fae2ef: all eight jobs green (gates, wasm, server, Windows, Android, desktop, OPFS, web) |
 | P8 backup restore (Playwright) | 18/18 checks: fresh-profile export/import of a notebook, pinned tagged note and trashed note; text, tag, pin, trash, attachment row, decoded WebP, history peer label and idempotent second import; no console errors |
 | P8 wipe and sign-in (Playwright + local Worker) | 19/19 checks: three timed rejected logins (browser Argon2id median 162 ms), derived login key, account setup, first sync, image attachment, OPFS/localStorage/cookie/cache wipe, note gone, sign in, attachment download without a crash, note body/tag/pin/image, history labelled as the other device, no duplicate, no console errors |
-| P8 accessibility and phone layout (Playwright + axe-core) | 42/42 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; note-list Arrow/Home/Enter, Tab and Shift+Tab stay inside the three dialogs, focus return after overlays, Settings/Login/dialog autofocus; image title and no list overflow at 390/360/320; card titles keep a full line at 360×420 and compact rows at 1024×420; 320 px header, scrollable toolbar and reachable Quote; colour sheet inside the viewport; one-tap Back and phone Settings/navigation; no console errors |
+| P8 accessibility, onboarding and search (Playwright + axe-core) | 61/61 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; first launch shows welcome Login with no back button, offline starts empty, optional tour adds three cards, Ctrl K focuses search, Ctrl P opens the palette, a search mark renders, a hit prefills Find, tag-only matches keep Find closed; note-list Arrow/Home/Enter, Tab and Shift+Tab stay inside the three dialogs, focus return after overlays, Settings/Login/dialog autofocus; image title and no list overflow at 390/360/320; card titles keep a full line at 360×420 and compact rows at 1024×420; 320 px header, scrollable toolbar and reachable Quote; colour sheet inside the viewport; the floating new-note button hidden at 1400 px and opening the editor at 390 px; tag chips fold away while the note body scrolls and return at the top; one-tap Back and phone Settings/navigation; no console errors |
+| P8 local preferences and restart (Playwright) | 15/15 checks: browser storage, note with image and history survive restart, dark theme and list layout survive restart, second tab blocked by the store lock, no console errors |
 | P8 phone sign-in (one-off Playwright, 360 px touch + local Worker) | New note saved, derived login key, account setup, status `Synced`, synced note in the list, no list overflow, Settings round trip, navigation drawer, one-tap Back with the colour menu open; no console errors |
 | Web login preview | Rebuilt release at 2026-10-21: the Worker origin is read-only with no URL input, the offline action is visible, and the screen has no horizontal overflow or console errors at 1400 px and 390 px |
 | Live Worker deployment | `https://notebox.nbx-7207a015.workers.dev` serves release 0.1.0 / 5fae2ef; `/version.json` reports the same build. A fresh 360×420 smoke boot with the three seeded notes scrolled the list, kept every card title at a full 21.6 px line and logged no console errors. The earlier e9c8e82 deploy passed a fresh sign-in and first sync; the 759971a phone probe at 360 px created a local image note, displayed the title `image`, kept the list at 359 px with no horizontal scroll, opened the colour sheet, left the editor with one Back tap and logged no console errors |
 | Deploy guard | `./scripts/deploy-web.sh --if-needed` deployed 5fae2ef after green CI run 39599670389 and verified `/version.json`; the check also reports no pending migrations on either D1 database, `dx` 0.7.10 and `worker-build` 0.8.7 |
 | Remote D1 migrations | `notebox-sync` and `notebox-blobs` each applied `0001_init.sql`; `wrangler d1 migrations list --remote` reports no pending migrations |
-| P8 large note (web UI) | 102,415 B note: open median 11.5–42.9 ms across four runs (individual opens up to 57.7 ms); 120 typed characters, input-to-frame p95 8.4–9.0 ms, max 10.9–22.0 ms, none over 34 ms; text survives a reload; web cold start 786–1010 ms |
-| P8 desktop cold start (Linux release) | warm median 555 ms over 5 runs (547–587 ms), budget 600 ms; first run 628 ms with sample seeding, 2,170 ms when WebKit's cache is cold; Xvfb with isolated XDG directories |
+| P8 large note (web UI) | 102,415 B note: current run open median 9.9 ms (51.8, 8.5, 9.9, 8.7, 54.4 ms); 120 typed characters, input-to-frame p95 9.1 ms, max 13.7 ms, none over 34 ms; text survives a reload; recorded web start 1,195 ms including the offline choice and optional tour; earlier run 786–1010 ms with auto-seeded samples |
+| P8 desktop cold start (Linux release) | warm median 555 ms over 5 runs (547–587 ms), budget 600 ms; earlier first run 628 ms with sample seeding, 2,170 ms when WebKit's cache is cold; not remeasured since automatic seeding was removed; Xvfb with isolated XDG directories |
 | P8 backup archive | v2 manifest plus one full Loro snapshot per note; v1 archives still read; restore over newer local edits keeps both timelines |
 | Search, 10,000 notes | seeded in 14,534 ms; search 4 ms (budget 100 ms), 1 hit |
 | 3-store convergence | random updates, metadata changes and sync order; identical text, metadata and history |
@@ -648,13 +712,15 @@ the keyboard opens.
   Linux and Windows install smoke jobs. The desktop update-available notice is
   not implemented; only the web build has one.
 - **P8 account drill**: the wipe, sign-in and history pull passes against
-  `wrangler dev --local`, including an OPFS and session wipe. The deployed Worker
-  now accepts a fresh browser sign-in and first sync; the full wipe/pull/history
-  drill against the deployed Worker still needs a run. A wiped device still
-  seeds the welcome set before sign-in, but the fixed sample ids make it merge
-  with the account's copies instead of adding duplicates. If the account had
-  trashed those samples, a fresh device can still push their metadata again;
-  decide whether to seed only after offline mode is chosen.
+  `wrangler dev --local` with 19/19 checks, including an OPFS and session wipe.
+  The deployed Worker now accepts a fresh browser sign-in and first sync; the
+  full wipe/pull/history drill against the deployed Worker still needs a run.
+  A wiped device now enters offline mode with an empty library instead of
+  seeding samples before sign-in, and the optional tour uses fresh note ids.
+- **Existing duplicate bodies**: the fixed-id auto seed is gone, but bodies
+  already duplicated by it are not rewritten automatically. History → Restore
+  an earlier version of the affected note, or keep the current text; no startup
+  migration guesses which copy the owner wanted.
 - **Owner phone freeze retest**: the total dead-tap freeze was a wasm panic,
   not the image-title overflow or the colour backdrop. The first signed-in sync
   that downloaded an image attachment hit `AlreadyBorrowed` in
@@ -667,13 +733,13 @@ the keyboard opens.
   run did not persist its pull or attachment, the next boot repeats that pull
   and download under the fixed code.
 - **Cold starts and large notes**: Linux desktop cold start is 555 ms warm
-  (median of five), under the 600 ms budget; the first run seeds sample notes
-  and takes 628 ms, or 2,170 ms with a cold WebKit cache. A 102,415-byte note
-  opens with a median of 11.5–40.2 ms and typing drops no frames (p95 9.0 ms);
-  one web open took 53 ms. Windows is build-only and Android has no boot or
-  cold-start number. The 20 MB installer budget now measures the `.deb`
-  (9.9 MB); the 89.6 MB AppImage is an optional self-contained fallback under
-  ADR-0015.
+  (median of five), under the 600 ms budget; that run predates the first-run
+  gate and automatic seeding was removed, so the first run needs a fresh
+  measurement. A 102,415-byte note opens with a median of 11.1 ms and typing
+  drops no frames (p95 9.7 ms, max 20.2 ms); earlier opens reached 54.7 ms.
+  Windows is build-only and Android has no boot or cold-start number. The 20 MB
+  installer budget now measures the `.deb` (9.9 MB); the 89.6 MB AppImage is an
+  optional self-contained fallback under ADR-0015.
 - **Human cross-device acceptance**: the app-side account, sync loop and
   browser transport are wired, a two-device browser run passes the P7 login,
   device, conflict and sign-out checks, and the deployed Worker now accepts a
@@ -683,18 +749,19 @@ the keyboard opens.
   drive its login/sync threads through the UI against a live Worker.
 ## Next
 
-1. P8 finish. Accessibility, the 100 KB note, the Linux cold-start budget, the
-   installer decision (ADR-0015) and S3 (ADR-0003) pass, and so does the
+1. P8 finish. Accessibility, the 100 KB note, the Linux warm cold-start budget,
+   the installer decision (ADR-0015) and S3 (ADR-0003) pass, and so does the
    local-Worker wipe/sign-in/history drill. The deployed Worker has passed a
    fresh sign-in and first sync; close P8 with the full wipe/pull/history drill
-   against it. Repeat the open-note and cold-start measurements on Windows and
-   Android when those runtimes are available.
+   against it. Repeat the first-run, open-note and cold-start measurements on
+   Windows and Android when those runtimes are available.
 2. Personal release execution: the Worker is deployed, the account is created,
    `SETUP_TOKEN` is deleted and `NBX_SERVER_URL` is set. **The v0.1.0 tag is
-   deliberately not pushed yet**: the owner has remaining bugs to fix first.
-   When they are fixed and CI is green, bump/confirm the version, push the tag,
-   watch the first release workflow, then verify login and sync on a Windows
-   install, a Linux install and the deployed web app.
+   deliberately not pushed yet**: the owner should accept the first-run,
+   preferences, search and shortcut fixes in this slice and they must be
+   merged, deployed and green in CI. Then bump/confirm the version, push the
+   tag, watch the first release workflow, and verify login and sync on a
+   Windows install, a Linux install and the deployed web app.
 3. P7 release execution for Android when wanted: create and back up the
    keystore, set the four repository secrets, set `RELEASE_ANDROID=true`, and
    publish a tagged release. Do not publish an unsigned APK. Add the desktop

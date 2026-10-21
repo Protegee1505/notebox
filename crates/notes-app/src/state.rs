@@ -20,7 +20,7 @@ use notes_store::{
     TagCount,
 };
 use notes_sync::BoxedTransport;
-use uuid::Uuid;
+use serde::{Deserialize, Serialize};
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::closure::Closure;
 #[cfg(target_arch = "wasm32")]
@@ -46,7 +46,8 @@ pub enum Screen {
 }
 
 /// Colour theme choice. `System` follows the operating system.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Theme {
     /// Follow `prefers-color-scheme`.
     System,
@@ -77,7 +78,8 @@ impl Theme {
 }
 
 /// Card grid or compact list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Layout {
     /// Keep-style cards.
     Grid,
@@ -231,6 +233,10 @@ pub struct CredentialsForm {
 pub struct AppState {
     /// Current screen.
     pub screen: Screen,
+    /// First launch is asking for an account or the offline path.
+    pub login_first_run: bool,
+    /// The owner chose local-only use (or signed out).
+    pub offline: bool,
     /// List filter.
     pub view: NoteView,
     /// Notebook filter.
@@ -357,6 +363,7 @@ pub struct AppState {
 
 impl AppState {
     fn new(storage: StorageInfo, storage_error: Option<String>) -> Self {
+        let preferences = crate::prefs::load();
         let saved = sync::load_account();
         let (server, username, device) = match saved {
             Some(account) => (account.server, account.username, account.device),
@@ -368,6 +375,8 @@ impl AppState {
         };
         Self {
             screen: Screen::Notes,
+            login_first_run: false,
+            offline: preferences.offline,
             view: NoteView::Active,
             notebook: None,
             tag: None,
@@ -388,8 +397,8 @@ impl AppState {
             saved_at: 0,
             edit_seq: 0,
             seen_seq: 0,
-            layout: Layout::Grid,
-            theme: Theme::System,
+            layout: preferences.layout,
+            theme: preferences.theme,
             editor_mode: EditorMode::Write,
             find_open: false,
             find_query: String::new(),
@@ -575,20 +584,158 @@ impl AppContext {
         let Some(store) = self.store() else {
             return;
         };
-        // With a saved account, an empty database means the account's notes
-        // are about to be pulled. Seeding welcome notes there would push demo
-        // content into the account, and on the in-memory web store it would
-        // add a fresh copy on every reload.
-        let account_saved = sync::load_account().is_some();
-        match store.note_count() {
-            Ok(0) if !account_saved => self.seed(store),
-            Ok(_) => {}
-            Err(error) => self.toast_danger(format!("Could not read notes: {error}")),
-        }
         self.reload();
-        let first = self.state.peek().notes.first().map(|note| note.id);
-        if let Some(id) = first {
-            self.select_note(id);
+        let has_notes = match store.list_notes(&NoteQuery {
+            view: NoteView::All,
+            limit: 1,
+            ..NoteQuery::default()
+        }) {
+            Ok(notes) => !notes.is_empty(),
+            Err(error) => {
+                self.toast_danger(format!("Could not read notes: {error}"));
+                true
+            }
+        };
+        let current_offline = self.state.peek().offline;
+        let start = startup_choice(sync::load_account().is_some(), current_offline, has_notes);
+        let first_run = start.login_first_run;
+        {
+            let mut state = self.state.write_unchecked();
+            state.offline = start.offline;
+            state.login_first_run = first_run;
+            if first_run {
+                state.selected = None;
+                state.mobile_list = true;
+                state.screen = Screen::Login;
+                hide_history(&mut state);
+                hide_editor_overlays(&mut state);
+            } else {
+                state.screen = Screen::Notes;
+            }
+        }
+        if start.offline != current_offline {
+            self.save_preferences();
+        }
+        if !start.login_first_run {
+            let first = self.state.peek().notes.first().map(|note| note.id);
+            if let Some(id) = first {
+                self.select_note(id);
+            }
+        }
+    }
+
+    /// Add the optional tour to an empty local workspace.
+    ///
+    /// The notes get fresh random ids. Fixed ids made two devices merge their
+    /// welcome text into the same Loro document, and concurrent inserts from
+    /// both peers repeated the body. Ordinary notes avoid that merge shape.
+    pub fn add_welcome_tour(&self) {
+        self.save_now();
+        let Some(store) = self.store() else {
+            return;
+        };
+        let timestamp = now();
+        let result: Result<NoteId, String> = (|| {
+            let notebooks = store
+                .list_notebooks()
+                .map_err(|error| format!("Could not read notebooks: {error}"))?;
+            let personal = match notebooks.iter().find(|item| item.name == "Personal") {
+                Some(notebook) => notebook.id,
+                None => {
+                    store
+                        .create_notebook("Personal", timestamp - 86_400 * 3)
+                        .map_err(|error| format!("Could not create a notebook: {error}"))?
+                        .id
+                }
+            };
+            let projects = match notebooks.iter().find(|item| item.name == "Projects") {
+                Some(notebook) => notebook.id,
+                None => {
+                    store
+                        .create_notebook("Projects", timestamp - 86_400 * 2)
+                        .map_err(|error| format!("Could not create a notebook: {error}"))?
+                        .id
+                }
+            };
+
+            let welcome = "Welcome to Notebox\n\n\
+                A local-first place for your notes. Everything you write stays on this device.\n\n\
+                ## Try the basics\n\n\
+                - [ ] Press **Ctrl K** to search your notes\n\
+                - [ ] Press **Ctrl P** to open the command palette\n\
+                - [ ] Type Markdown and switch to the rendered view with the eye button\n\
+                - [ ] Pin a note to keep it at the top of the list\n\n\
+                > Edits are saved automatically as you type.\n\n\
+                ## Shortcuts\n\n\
+                | Keys | Action |\n\
+                | --- | --- |\n\
+                | Ctrl K | Search notes |\n\
+                | Ctrl P | Command palette |\n\
+                | Ctrl N | New note |\n\
+                | Ctrl F | Find in note |\n\
+                | Ctrl S | Save now |\n\
+                | Ctrl Z | Undo |";
+
+            let reading = "Reading list\n\n\
+                - [x] The Pragmatic Programmer\n\
+                - [x] A Philosophy of Software Design\n\
+                - [ ] The Design of Everyday Things\n\n\
+                #books #design";
+
+            let weekend = "Weekend ideas\n\n\
+                - Walk the coastal path before the rain\n\
+                - Try the new bakery on Mill Street\n\
+                - Finish the sketchbook page\n\n\
+                A slow Saturday, no alarm.";
+
+            let welcome_id = create_tour_note(
+                store,
+                welcome,
+                &["welcome"],
+                Some(projects),
+                "sage",
+                timestamp - 3_600,
+                true,
+            )?;
+            create_tour_note(
+                store,
+                reading,
+                &["books", "design"],
+                Some(personal),
+                "sky",
+                timestamp - 86_400,
+                false,
+            )?;
+            create_tour_note(
+                store,
+                weekend,
+                &["personal"],
+                Some(personal),
+                "amber",
+                timestamp - 3_600 * 8,
+                false,
+            )?;
+            Ok(welcome_id)
+        })();
+
+        match result {
+            Ok(id) => {
+                {
+                    let mut state = self.state.write_unchecked();
+                    state.screen = Screen::Notes;
+                    state.view = NoteView::Active;
+                    state.notebook = None;
+                    state.tag = None;
+                    state.search.clear();
+                    state.search_hits = None;
+                    state.snippets.clear();
+                    state.login_first_run = false;
+                }
+                self.reload();
+                self.select_note(id);
+                self.toast_success("Welcome tour added");
+            }
+            Err(message) => self.toast_danger(message),
         }
     }
 
@@ -658,101 +805,6 @@ impl AppContext {
         state.login.server = account.server;
         state.login.username = account.username;
         state.login.device = account.device;
-    }
-
-    /// A small welcome set, only on a brand-new database.
-    ///
-    /// The ids are fixed so two fresh devices merge their welcome content
-    /// instead of adding a duplicate set to the account.
-    fn seed(&self, store: &dyn NoteStore) {
-        let timestamp = now();
-        let personal = store
-            .create_notebook_with_id(
-                NotebookId::from_uuid(Uuid::from_u128(0xaaaa_aaaa_aaaa_4aaa_8aaa_aaaa_aaaa_aaaa)),
-                "Personal",
-                timestamp - 86_400 * 3,
-            )
-            .ok();
-        let projects = store
-            .create_notebook_with_id(
-                NotebookId::from_uuid(Uuid::from_u128(0xbbbb_bbbb_bbbb_4bbb_8bbb_bbbb_bbbb_bbbb)),
-                "Projects",
-                timestamp - 86_400 * 2,
-            )
-            .ok();
-
-        let welcome = "Welcome to Notebox\n\n\
-            A local-first place for your notes. Everything you write stays on this device.\n\n\
-            ## Try the basics\n\n\
-            - [ ] Press **Ctrl K** to open the command palette\n\
-            - [ ] Type Markdown and switch to the rendered view with the eye button\n\
-            - [ ] Pin a note to keep it at the top of the list\n\n\
-            > Edits are saved automatically as you type.\n\n\
-            ## Shortcuts\n\n\
-            | Keys | Action |\n\
-            | --- | --- |\n\
-            | Ctrl N | New note |\n\
-            | Ctrl F | Find in note |\n\
-            | Ctrl S | Save now |\n\
-            | Ctrl Z | Undo |";
-
-        let reading = "Reading list\n\n\
-            - [x] The Pragmatic Programmer\n\
-            - [x] A Philosophy of Software Design\n\
-            - [ ] The Design of Everyday Things\n\n\
-            #books #design";
-
-        let weekend = "Weekend ideas\n\n\
-            - Walk the coastal path before the rain\n\
-            - Try the new bakery on Mill Street\n\
-            - Finish the sketchbook page\n\n\
-            A slow Saturday, no alarm.";
-
-        if let Ok(note) = store.create_note(NewNote {
-            id: Some(NoteId::from_uuid(Uuid::from_u128(
-                0x1111_1111_1111_4111_8111_1111_1111_1111,
-            ))),
-            text: welcome.to_string(),
-            created_at: timestamp - 3_600,
-            notebook_id: projects.as_ref().map(|notebook| notebook.id),
-            tags: vec!["welcome".to_string()],
-        }) {
-            if let Ok(opened) = store.open_note(&note.id()) {
-                let _ = opened.set_pinned(true);
-                let _ = opened.set_color(Some("sage"));
-                let _ = store.save_note(&opened, timestamp - 3_600);
-            }
-        }
-
-        if let Ok(note) = store.create_note(NewNote {
-            id: Some(NoteId::from_uuid(Uuid::from_u128(
-                0x2222_2222_2222_4222_8222_2222_2222_2222,
-            ))),
-            text: reading.to_string(),
-            created_at: timestamp - 86_400,
-            notebook_id: personal.as_ref().map(|notebook| notebook.id),
-            tags: vec!["books".to_string(), "design".to_string()],
-        }) {
-            if let Ok(opened) = store.open_note(&note.id()) {
-                let _ = opened.set_color(Some("sky"));
-                let _ = store.save_note(&opened, timestamp - 86_400);
-            }
-        }
-
-        if let Ok(note) = store.create_note(NewNote {
-            id: Some(NoteId::from_uuid(Uuid::from_u128(
-                0x3333_3333_3333_4333_8333_3333_3333_3333,
-            ))),
-            text: weekend.to_string(),
-            created_at: timestamp - 3_600 * 8,
-            notebook_id: personal.as_ref().map(|notebook| notebook.id),
-            tags: vec!["personal".to_string()],
-        }) {
-            if let Ok(opened) = store.open_note(&note.id()) {
-                let _ = opened.set_color(Some("amber"));
-                let _ = store.save_note(&opened, timestamp - 3_600 * 8);
-            }
-        }
     }
 
     /// Re-read the list, filter controls and sidebar counts.
@@ -916,6 +968,32 @@ impl AppContext {
         if opened {
             self.load_attachments(id);
         }
+    }
+
+    /// Open a search result and put the matching body text in Find.
+    ///
+    /// Tag-only matches have no body text to reveal, so Find stays closed.
+    pub fn open_search_result(&self, id: NoteId, query: String) {
+        self.select_note(id);
+        if self.state.peek().selected != Some(id) {
+            return;
+        }
+        let term = {
+            let state = self.state.read();
+            best_find_term(&state.draft, &query)
+        };
+        let Some(term) = term else {
+            return;
+        };
+        {
+            let mut state = self.state.write_unchecked();
+            state.find_open = true;
+            state.find_query = term;
+            state.find_index = 0;
+            state.editor_mode = EditorMode::Write;
+        }
+        self.focus_find();
+        self.find_select_after(0, 60);
     }
 
     /// Create an empty note in the selected notebook and open it.
@@ -1385,13 +1463,18 @@ impl AppContext {
     }
 
     fn find_select(&self, index: usize) {
+        self.find_select_after(index, 0);
+    }
+
+    fn find_select_after(&self, index: usize, delay_ms: u32) {
         let query = self.state.peek().find_query.clone();
         if query.is_empty() {
             return;
         }
         let needle = serde_json::to_string(&query).unwrap_or_else(|_| "\"\"".to_string());
         let _ = document::eval(&format!(
-            "const el = document.getElementById('note-editor');\
+            "setTimeout(() => {{\
+             const el = document.getElementById('note-editor');\
              if (!el) return;\
              const needle = {needle}.toLowerCase();\
              const hay = el.value.toLowerCase();\
@@ -1403,7 +1486,8 @@ impl AppContext {
              }}\
              if (index >= 0) {{\
                 el.setSelectionRange(index, index + needle.length);\
-             }}"
+             }}\
+             }}, {delay_ms});"
         ));
     }
 
@@ -1659,6 +1743,10 @@ impl AppContext {
         }
         if screen == Screen::Login {
             state.login.error = None;
+            state.login_first_run = false;
+        }
+        if screen == Screen::Notes {
+            state.login_first_run = false;
         }
     }
 
@@ -1668,26 +1756,54 @@ impl AppContext {
             Theme::System | Theme::Dark => Theme::Light,
             Theme::Light => Theme::Dark,
         };
-        self.state.write_unchecked().theme = next;
+        {
+            self.state.write_unchecked().theme = next;
+        }
+        self.save_preferences();
     }
 
     /// Pick a specific theme.
     pub fn set_theme(&self, theme: Theme) {
-        self.state.write_unchecked().theme = theme;
+        {
+            self.state.write_unchecked().theme = theme;
+        }
+        self.save_preferences();
     }
 
     /// Switch between cards and list.
     pub fn toggle_layout(&self) {
-        let mut state = self.state.write_unchecked();
-        state.layout = match state.layout {
-            Layout::Grid => Layout::List,
-            Layout::List => Layout::Grid,
-        };
+        {
+            let mut state = self.state.write_unchecked();
+            state.layout = match state.layout {
+                Layout::Grid => Layout::List,
+                Layout::List => Layout::Grid,
+            };
+        }
+        self.save_preferences();
     }
 
     /// Set the card layout from Settings.
     pub fn set_layout(&self, layout: Layout) {
-        self.state.write_unchecked().layout = layout;
+        {
+            self.state.write_unchecked().layout = layout;
+        }
+        self.save_preferences();
+    }
+
+    /// Write the local display and onboarding choices.
+    fn save_preferences(&self) {
+        let (theme, layout, offline) = {
+            let state = self.state.read();
+            (state.theme, state.layout, state.offline)
+        };
+        let preferences = crate::prefs::Preferences {
+            theme,
+            layout,
+            offline,
+        };
+        if let Err(error) = crate::prefs::save(&preferences) {
+            self.toast_danger(format!("Could not save preferences: {error}"));
+        }
     }
 
     /// Source or preview.
@@ -1925,8 +2041,11 @@ impl AppContext {
             state.color_open = false;
         } else if state.history_open {
             hide_history(&mut state);
+        } else if state.screen == Screen::Login && state.login_first_run {
+            // The first launch needs an account or an explicit offline choice.
         } else if state.screen == Screen::Settings || state.screen == Screen::Login {
             state.screen = Screen::Notes;
+            state.login_first_run = false;
             state.mobile_list = state.selected.is_none();
         } else if !state.mobile_list {
             state.mobile_list = true;
@@ -1954,6 +2073,28 @@ impl AppContext {
     /// Close the command palette.
     pub fn close_palette(&self) {
         self.state.write_unchecked().palette_open = false;
+    }
+
+    /// Put the caret in note search, switching back to Notes when needed.
+    pub fn focus_search(&self) {
+        {
+            let mut state = self.state.write_unchecked();
+            if state.screen == Screen::Login {
+                return;
+            }
+            if state.screen != Screen::Notes {
+                state.screen = Screen::Notes;
+                state.mobile_list = true;
+                hide_history(&mut state);
+                hide_editor_overlays(&mut state);
+            }
+            state.palette_open = false;
+            state.shortcuts_open = false;
+            state.sidebar_open = false;
+        }
+        let _ = document::eval(
+            "setTimeout(() => { const el = document.getElementById('global-search'); if (el) { el.focus(); el.select(); } }, 30);",
+        );
     }
 
     /// Filter palette rows.
@@ -2374,9 +2515,12 @@ impl AppContext {
             state.sync.devices_error = None;
             state.sync.confirm_revoke = None;
             state.screen = Screen::Notes;
+            state.login_first_run = false;
+            state.offline = false;
             state.mobile_list = state.selected.is_none();
             hide_editor_overlays(&mut state);
         }
+        self.save_preferences();
         self.toast_success(format!("Connected as {}", success.account.username));
         // Do not show “Synced” before anything has been synced. Starting the
         // first run here also removes the tick delay after login.
@@ -2409,10 +2553,13 @@ impl AppContext {
             state.login.error = None;
             state.profile.sync_connected = false;
             state.sync.status = SyncStatus::Local;
+            state.offline = true;
+            state.login_first_run = false;
             state.screen = Screen::Notes;
             state.mobile_list = state.selected.is_none();
             hide_editor_overlays(&mut state);
         }
+        self.save_preferences();
         self.toast_info("Your notes stay on this device.");
     }
 
@@ -3237,12 +3384,15 @@ impl AppContext {
             let mut state = self.state.write_unchecked();
             state.profile = Profile::default();
             state.sync = SyncUi::default();
+            state.offline = true;
+            state.login_first_run = false;
             state.login.username.clear();
             state.login.password.clear();
             state.login.error = None;
             state.login.server = server;
             state.login.device = device;
         }
+        self.save_preferences();
         self.toast_info("Signed out. Your notes stay on this device.");
     }
 
@@ -3656,11 +3806,81 @@ pub fn edited_label(updated_at: i64) -> String {
     }
 }
 
+/// What the first screen should be after storage opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StartupChoice {
+    offline: bool,
+    login_first_run: bool,
+}
+
+fn startup_choice(account_saved: bool, offline: bool, has_notes: bool) -> StartupChoice {
+    // Notes written before the offline flag existed belong to the local user.
+    // Mark them offline so a later launch does not ask for an account.
+    let offline = offline || (!account_saved && has_notes);
+    if account_saved || offline {
+        StartupChoice {
+            offline,
+            login_first_run: false,
+        }
+    } else {
+        StartupChoice {
+            offline: false,
+            login_first_run: true,
+        }
+    }
+}
+
+fn best_find_term(text: &str, query: &str) -> Option<String> {
+    let haystack = text.to_lowercase();
+    let full = query.trim();
+    if full.is_empty() {
+        return None;
+    }
+    if haystack.contains(&full.to_lowercase()) {
+        return Some(full.to_string());
+    }
+    notes_store::search_terms(query)
+        .into_iter()
+        .find(|term| haystack.contains(&term.to_lowercase()))
+}
+
+fn create_tour_note(
+    store: &dyn NoteStore,
+    text: &str,
+    tags: &[&str],
+    notebook_id: Option<NotebookId>,
+    color: &str,
+    created_at: i64,
+    pinned: bool,
+) -> Result<NoteId, String> {
+    let note = store
+        .create_note(NewNote {
+            id: None,
+            text: text.to_string(),
+            created_at,
+            notebook_id,
+            tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
+        })
+        .map_err(|error| format!("Could not add the welcome tour: {error}"))?;
+    let id = note.id();
+    let opened = store
+        .open_note(&id)
+        .map_err(|error| format!("Could not open a welcome note: {error}"))?;
+    if pinned {
+        let _ = opened.set_pinned(true);
+    }
+    let _ = opened.set_color(Some(color));
+    store
+        .save_note(&opened, created_at)
+        .map_err(|error| format!("Could not save a welcome note: {error}"))?;
+    Ok(id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        attachment_label, attachment_set_changed, find_match_count, note_title, restore_summary,
-        tone_class, word_count, PendingRestore,
+        attachment_label, attachment_set_changed, best_find_term, find_match_count, note_title,
+        restore_summary, startup_choice, tone_class, word_count, PendingRestore,
     };
     use notes_proto::NoteId;
     use notes_store::{Attachment, ImportReport, NoteSummary};
@@ -3750,6 +3970,39 @@ mod tests {
     fn word_count_ignores_extra_whitespace() {
         assert_eq!(word_count("  one\ntwo\tthree  "), 3);
         assert_eq!(word_count(""), 0);
+    }
+
+    #[test]
+    fn search_result_find_term_prefers_a_phrase_then_a_body_word() {
+        assert_eq!(
+            best_find_term("The quick brown fox", "brown fox"),
+            Some("brown fox".to_string())
+        );
+        assert_eq!(
+            best_find_term("The quick brown fox", "brown fox!"),
+            Some("brown".to_string())
+        );
+        assert_eq!(best_find_term("Only a book tag", "books"), None);
+        assert_eq!(best_find_term("anything", "#Books"), None);
+    }
+
+    #[test]
+    fn first_launch_asks_for_an_account_until_the_owner_chooses_offline() {
+        let login = startup_choice(false, false, false);
+        assert!(login.login_first_run);
+        assert!(!login.offline);
+
+        let chosen = startup_choice(false, true, false);
+        assert!(!chosen.login_first_run);
+        assert!(chosen.offline);
+
+        let saved_account = startup_choice(true, false, false);
+        assert!(!saved_account.login_first_run);
+        assert!(!saved_account.offline);
+
+        let old_notes = startup_choice(false, false, true);
+        assert!(!old_notes.login_first_run);
+        assert!(old_notes.offline);
     }
 
     #[test]

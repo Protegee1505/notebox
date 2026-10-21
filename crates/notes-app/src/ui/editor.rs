@@ -3,7 +3,7 @@
 use dioxus::html::HasFileData;
 use dioxus::prelude::*;
 use notes_core::{parse_attachment_url, render_markdown_with_images};
-use notes_proto::NotebookId;
+use notes_proto::{NoteId, NotebookId};
 
 use crate::markdown_ops::Mark;
 use crate::media::{attachment_kind, format_size};
@@ -13,6 +13,14 @@ use crate::state::{
 };
 use crate::ui::icons::Icon;
 use crate::ui::HistoryPanel;
+
+/// A few pixels of scroll keep the row still; roughly one text line hides it.
+const TAG_ROW_SCROLL_THRESHOLD: f64 = 24.0;
+
+/// The note, mode and tag count the chip row was last measured on, plus
+/// whether the body was scrolled past the top. A mismatch means the row is
+/// visible again after a note switch, a mode switch or a tag edit.
+type TagRowState = (Option<NoteId>, EditorMode, usize, bool);
 
 /// Clipboard images cannot travel through Dioxus's paste event, so a page
 /// listener hands them to the hidden file input instead. A single listener is
@@ -79,6 +87,10 @@ pub fn EditorPane() -> Element {
         .as_ref()
         .and_then(|note| note.color.clone())
         .unwrap_or_default();
+    // The chip row folds away while the note body scrolls, then returns at the
+    // top. Keying the state to the note, mode and tag count means a switch or
+    // a tag edit shows the chips again without a reset effect.
+    let tag_row = use_signal(|| (selected, mode, 0usize, false) as TagRowState);
 
     let Some(id) = selected else {
         return rsx! {
@@ -102,7 +114,8 @@ pub fn EditorPane() -> Element {
                         span { "New note" }
                     }
                     div { class: "shortcut-strip",
-                        span { kbd { class: "key-hint", "Ctrl K" } " Palette" }
+                        span { kbd { class: "key-hint", "Ctrl K" } " Search" }
+                        span { kbd { class: "key-hint", "Ctrl P" } " Palette" }
                         span { kbd { class: "key-hint", "Ctrl F" } " Find" }
                         span { kbd { class: "key-hint", "Ctrl E" } " Preview" }
                     }
@@ -121,6 +134,12 @@ pub fn EditorPane() -> Element {
     };
     drop(state);
 
+    let tag_count = tags.len();
+    let (collapsed_note, collapsed_mode, collapsed_tags, collapsed) = *tag_row.read();
+    let tags_collapsed = collapsed
+        && collapsed_note == Some(id)
+        && collapsed_mode == mode
+        && collapsed_tags == tag_count;
     let words = word_count(&draft);
     let characters = draft.chars().count();
     let matches = find_match_count(&draft, &find_query);
@@ -488,20 +507,23 @@ pub fn EditorPane() -> Element {
             }
 
             if !tags.is_empty() {
-                div { class: "editor-tags",
-                    for tag in tags {
-                        span { key: "{tag}", class: "editor-tag",
-                            "#{tag}"
-                            button {
-                                class: "tag-remove",
-                                r#type: "button",
-                                aria_label: "Remove tag {tag}",
-                                onclick: {
-                                    let context = context.clone();
-                                    let tag = tag.clone();
-                                    move |_| context.remove_tag(tag.clone())
-                                },
-                                Icon { name: "x" }
+                div {
+                    class: if tags_collapsed { "editor-tags is-collapsed" } else { "editor-tags" },
+                    div { class: "editor-tags-inner",
+                        for tag in tags {
+                            span { key: "{tag}", class: "editor-tag",
+                                "#{tag}"
+                                button {
+                                    class: "tag-remove",
+                                    r#type: "button",
+                                    aria_label: "Remove tag {tag}",
+                                    onclick: {
+                                        let context = context.clone();
+                                        let tag = tag.clone();
+                                        move |_| context.remove_tag(tag.clone())
+                                    },
+                                    Icon { name: "x" }
+                                }
                             }
                         }
                     }
@@ -522,6 +544,15 @@ pub fn EditorPane() -> Element {
                             let context = context.clone();
                             move |event| context.note_input(event.value())
                         },
+                        onscroll: move |event| {
+                            set_tag_row_scroll(
+                                tag_row,
+                                id,
+                                mode,
+                                tag_count,
+                                event.scroll_top(),
+                            );
+                        },
                         onblur: {
                             let context = context.clone();
                             move |_| context.save_now()
@@ -540,6 +571,15 @@ pub fn EditorPane() -> Element {
                         class: "editor-preview markdown-body",
                         aria_label: "Rendered note",
                         dangerous_inner_html: "{preview_html}",
+                        onscroll: move |event| {
+                            set_tag_row_scroll(
+                                tag_row,
+                                id,
+                                mode,
+                                tag_count,
+                                event.scroll_top(),
+                            );
+                        },
                     }
                 }
             }
@@ -654,6 +694,27 @@ pub fn EditorPane() -> Element {
                 HistoryPanel {}
             }
         }
+    }
+}
+
+/// Collapse the chip row once the note body scrolls, and only for the note,
+/// mode and tag list that was measured. Peeking avoids a re-render on every
+/// scroll tick; the signal changes only when the row should move.
+fn set_tag_row_scroll(
+    mut tag_row: Signal<TagRowState>,
+    note: NoteId,
+    mode: EditorMode,
+    tag_count: usize,
+    scroll_top: f64,
+) {
+    let next: TagRowState = (
+        Some(note),
+        mode,
+        tag_count,
+        scroll_top > TAG_ROW_SCROLL_THRESHOLD,
+    );
+    if *tag_row.peek() != next {
+        tag_row.set(next);
     }
 }
 

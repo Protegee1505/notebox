@@ -137,9 +137,11 @@ async function openApp(context, url, errors) {
     }
   });
   await page.goto(url, { waitUntil: "networkidle" });
-  await page
-    .locator("#note-editor")
-    .waitFor({ state: "visible", timeout: 60_000 });
+  const offline = page.getByRole("button", { name: /Try it offline/ });
+  if (await offline.isVisible().catch(() => false)) {
+    await offline.click();
+  }
+  await page.locator(".workspace").waitFor({ state: "visible", timeout: 60_000 });
   await page.waitForFunction(
     () => Boolean(navigator.serviceWorker?.controller),
     null,

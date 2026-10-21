@@ -3,7 +3,7 @@
 use std::io::Cursor;
 
 use notes_core::{attachment_url, content_hash, read_export_zip, ExportBundle};
-use notes_store::{export_bundle, NewNote, NoteStore, SqliteStore, SCHEMA_VERSION};
+use notes_store::{export_bundle, NewNote, NoteStore, SearchQuery, SqliteStore, SCHEMA_VERSION};
 
 fn store() -> SqliteStore {
     SqliteStore::open_in_memory().expect("in-memory store")
@@ -257,24 +257,66 @@ fn a_v3_database_keeps_its_legacy_attachment_metadata() {
                  peer_id INTEGER NOT NULL
              );
              INSERT INTO device (id, peer_id) VALUES (1, 42);
+             CREATE TABLE note (
+                 seq         INTEGER PRIMARY KEY,
+                 id          TEXT NOT NULL UNIQUE,
+                 snapshot    BLOB NOT NULL,
+                 title       TEXT NOT NULL,
+                 preview     TEXT NOT NULL,
+                 notebook_id TEXT,
+                 pinned      INTEGER NOT NULL DEFAULT 0,
+                 archived    INTEGER NOT NULL DEFAULT 0,
+                 color       TEXT,
+                 created_at  INTEGER NOT NULL,
+                 updated_at  INTEGER NOT NULL,
+                 trashed_at  INTEGER NOT NULL DEFAULT 0,
+                 last_pushed BLOB,
+                 local_vv    BLOB
+             );
+             CREATE TABLE note_tag (
+                 note_id  TEXT NOT NULL,
+                 tag      TEXT NOT NULL,
+                 position INTEGER NOT NULL,
+                 PRIMARY KEY (note_id, tag)
+             ) WITHOUT ROWID;
+             CREATE VIRTUAL TABLE note_fts USING fts5 (
+                 note_id UNINDEXED,
+                 title,
+                 body,
+                 tokenize = 'unicode61 remove_diacritics 2'
+             );
+             INSERT INTO note
+                 (seq, id, snapshot, title, preview, created_at, updated_at)
+                 VALUES (1, '11111111-1111-4111-8111-111111111111', X'',
+                         'Tagged note', 'body with no match', 1, 1);
+             INSERT INTO note_tag (note_id, tag, position)
+                 VALUES ('11111111-1111-4111-8111-111111111111', 'books', 0);
+             INSERT INTO note_fts (rowid, note_id, title, body)
+                 VALUES (1, '11111111-1111-4111-8111-111111111111',
+                         'Tagged note', 'body with no match');
              PRAGMA user_version = 3;",
         )
         .expect("v3 schema");
     }
 
     let store = SqliteStore::open(&path).expect("migrate");
-    assert_eq!(SCHEMA_VERSION, 4);
+    assert_eq!(SCHEMA_VERSION, 5);
     assert!(store
         .note_attachments(&notes_proto::NoteId::new())
         .expect("links")
         .is_empty());
+    let hits = store
+        .search(&SearchQuery::new("books"))
+        .expect("tag search after migration");
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].note.tags, vec!["books"]);
     drop(store);
 
     let conn = rusqlite::Connection::open(&path).expect("reopen");
     let version: i32 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("version");
-    assert_eq!(version, 4);
+    assert_eq!(version, 5);
     let legacy: (String, String) = conn
         .query_row("SELECT name, mime FROM attachment_legacy", [], |row| {
             Ok((row.get(0)?, row.get(1)?))

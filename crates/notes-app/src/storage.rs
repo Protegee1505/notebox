@@ -236,6 +236,12 @@ pub(crate) fn session_path() -> std::path::PathBuf {
     data_directory().join("session.json")
 }
 
+/// Local display and onboarding preferences. Never synced.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn preferences_path() -> std::path::PathBuf {
+    data_directory().join("preferences.json")
+}
+
 /// Server URL, username and device name. No secret lives here.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn account_path() -> std::path::PathBuf {

@@ -146,12 +146,12 @@ pub fn Icon(name: &'static str) -> Element {
                     path { d: "M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" }
                 },
                 "undo" => rsx! {
-                    path { d: "M3 7v6h6" }
-                    path { d: "M3 13a9 9 0 1 0 3-7.7L3 7" }
+                    path { d: "M9 14 4 9l5-5" }
+                    path { d: "M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11" }
                 },
                 "redo" => rsx! {
-                    path { d: "M21 7v6h-6" }
-                    path { d: "M21 13a9 9 0 1 1-3-7.7L21 7" }
+                    path { d: "m15 14 5-5-5-5" }
+                    path { d: "M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13" }
                 },
                 "x" => rsx! {
                     path { d: "M18 6L6 18M6 6l12 12" }

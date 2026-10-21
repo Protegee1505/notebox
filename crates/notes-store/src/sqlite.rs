@@ -25,12 +25,12 @@ use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 
 use crate::error::StoreError;
 use crate::{
-    Attachment, AttachmentUsage, ImportReport, NewNote, NoteQuery, NoteStore, NoteSummary,
-    NoteView, SearchHit, SearchQuery, SyncState, TagCount, WorkspacePush,
+    search_terms, Attachment, AttachmentUsage, ImportReport, NewNote, NoteQuery, NoteStore,
+    NoteSummary, NoteView, SearchHit, SearchQuery, SyncState, TagCount, WorkspacePush,
 };
 
 /// Schema version written to `PRAGMA user_version`.
-pub const SCHEMA_VERSION: i32 = 4;
+pub const SCHEMA_VERSION: i32 = 5;
 
 /// Workspace columns read by [`NoteStore::workspace_pending`]:
 /// snapshot, local version vector, last pushed version vector.
@@ -85,6 +85,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS note_fts USING fts5 (
     note_id UNINDEXED,
     title,
     body,
+    tags,
     tokenize = 'unicode61 remove_diacritics 2'
 );
 
@@ -196,6 +197,27 @@ CREATE TABLE note_attachment (
     PRIMARY KEY (note_id, hash)
 ) WITHOUT ROWID;
 CREATE INDEX note_attachment_hash ON note_attachment (hash);
+"#;
+
+/// Schema v4 to v5: index tags next to titles and bodies.
+///
+/// Tags live in `note_tag`, and the FTS table cannot gain a column in place.
+/// The old index is copied into a new table, tags are folded in, and the old
+/// table is dropped. Nothing in the note or tag tables changes.
+const MIGRATION_V5: &str = r#"
+CREATE VIRTUAL TABLE note_fts_v5 USING fts5 (
+    note_id UNINDEXED,
+    title,
+    body,
+    tags,
+    tokenize = 'unicode61 remove_diacritics 2'
+);
+INSERT INTO note_fts_v5 (rowid, note_id, title, body, tags)
+SELECT f.rowid, f.note_id, f.title, f.body,
+       COALESCE((SELECT group_concat(t.tag, ' ') FROM note_tag t WHERE t.note_id = f.note_id), '')
+FROM note_fts f;
+DROP TABLE note_fts;
+ALTER TABLE note_fts_v5 RENAME TO note_fts;
 "#;
 
 const UPSERT_NOTE: &str = r#"
@@ -971,17 +993,25 @@ fn migrate(conn: &Connection) -> Result<(), StoreError> {
             conn.execute_batch(MIGRATION_V2)?;
             conn.execute_batch(MIGRATION_V3)?;
             conn.execute_batch(MIGRATION_V4)?;
+            conn.execute_batch(MIGRATION_V5)?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             Ok(())
         }
         2 => {
             conn.execute_batch(MIGRATION_V3)?;
             conn.execute_batch(MIGRATION_V4)?;
+            conn.execute_batch(MIGRATION_V5)?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             Ok(())
         }
         3 => {
             conn.execute_batch(MIGRATION_V4)?;
+            conn.execute_batch(MIGRATION_V5)?;
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            Ok(())
+        }
+        4 => {
+            conn.execute_batch(MIGRATION_V5)?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             Ok(())
         }
@@ -1217,14 +1247,15 @@ fn save_note_with(
     }
 
     // The FTS row shares the note's integer rowid, so this touches one row.
+    let tags_text = tags.join(" ");
     conn.execute(
         "DELETE FROM note_fts WHERE rowid = (SELECT seq FROM note WHERE id = ?1)",
         params![id_text],
     )?;
     conn.execute(
-        "INSERT INTO note_fts (rowid, note_id, title, body)
-         VALUES ((SELECT seq FROM note WHERE id = ?1), ?1, ?2, ?3)",
-        params![id_text, title, text],
+        "INSERT INTO note_fts (rowid, note_id, title, body, tags)
+         VALUES ((SELECT seq FROM note WHERE id = ?1), ?1, ?2, ?3, ?4)",
+        params![id_text, title, text, tags_text],
     )?;
 
     update_note_attachment_links(conn, &id_text, &text, updated_at)?;
@@ -1355,7 +1386,7 @@ fn list_with(
     Ok(summaries)
 }
 
-/// Full-text search over title and body.
+/// Full-text search over title, body and tags.
 fn search_with(conn: &Connection, query: &SearchQuery) -> Result<Vec<SearchHit>, StoreError> {
     let Some(expression) = fts_expression(&query.text) else {
         return Ok(Vec::new());
@@ -1364,7 +1395,7 @@ fn search_with(conn: &Connection, query: &SearchQuery) -> Result<Vec<SearchHit>,
 
     let mut sql = format!(
         "SELECT {SUMMARY_COLUMNS}, bm25(note_fts) AS rank, \
-         snippet(note_fts, -1, '[', ']', '…', 12) \
+         snippet(note_fts, 2, '', '', '…', 12) \
          FROM note_fts JOIN note n ON n.id = note_fts.note_id WHERE note_fts MATCH ?"
     );
     let mut params: Vec<Value> = vec![Value::Text(expression)];
@@ -1421,14 +1452,10 @@ fn search_with(conn: &Connection, query: &SearchQuery) -> Result<Vec<SearchHit>,
 /// The whole query is quoted, so `AND`, `OR` and `*` typed by the user cannot
 /// be read as FTS5 syntax.
 fn fts_expression(text: &str) -> Option<String> {
-    let mut terms = Vec::new();
-    for word in text.split(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '\'')) {
-        let word = word.trim_matches('\'');
-        if word.is_empty() {
-            continue;
-        }
-        terms.push(format!("\"{word}\"*"));
-    }
+    let terms: Vec<String> = search_terms(text)
+        .into_iter()
+        .map(|word| format!("\"{word}\"*"))
+        .collect();
     if terms.is_empty() {
         None
     } else {

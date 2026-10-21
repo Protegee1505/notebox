@@ -189,9 +189,11 @@ async function openApp(errors) {
   const page = context.pages()[0] ?? (await context.newPage());
   watch(page, errors);
   await page.goto(BASE, { waitUntil: "networkidle" });
-  await page
-    .locator("#note-editor")
-    .waitFor({ state: "visible", timeout: 60_000 });
+  const offline = page.getByRole("button", { name: /Try it offline/ });
+  if (await offline.isVisible().catch(() => false)) {
+    await offline.click();
+  }
+  await page.locator(".workspace").waitFor({ state: "visible", timeout: 60_000 });
   return page;
 }
 
@@ -368,7 +370,6 @@ try {
 
   // ---- Device 2: the same profile, now empty. Sign in and pull. ----
   page = await openApp(errors);
-  await page.locator(".note-card").first().waitFor({ timeout: 30_000 });
   const before = await page.locator(".note-card", { hasText: title }).count();
   results.push(
     check("the wipe removed the local note", before === 0, `${before} found`),

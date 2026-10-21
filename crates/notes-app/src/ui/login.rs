@@ -15,6 +15,7 @@ pub fn LoginScreen() -> Element {
     let device = state.login.device.clone();
     let error = state.login.error.clone();
     let connecting = state.sync.status.busy();
+    let first_run = state.login_first_run;
     drop(state);
     let default_server = crate::sync::default_server();
     let server_baked = crate::sync::has_baked_server();
@@ -64,22 +65,29 @@ pub fn LoginScreen() -> Element {
             }
 
             section { class: "login-panel",
-                button {
-                    class: "icon-button login-close",
-                    r#type: "button",
-                    aria_label: "Back to notes",
-                    title: "Back to notes",
-                    disabled: connecting,
-                    onclick: {
-                        let context = context.clone();
-                        move |_| context.go(Screen::Notes)
-                    },
-                    Icon { name: "arrow-left" }
+                if !first_run {
+                    button {
+                        class: "icon-button login-close",
+                        r#type: "button",
+                        aria_label: "Back to notes",
+                        title: "Back to notes",
+                        disabled: connecting,
+                        onclick: {
+                            let context = context.clone();
+                            move |_| context.go(Screen::Notes)
+                        },
+                        Icon { name: "arrow-left" }
+                    }
                 }
                 div { class: "login-form-wrap",
                     div { class: "login-heading",
-                        h2 { "Sign in" }
-                        p { "Sign in to sync, or try it offline first — no account needed." }
+                        if first_run {
+                            h2 { "Welcome to Notebox" }
+                            p { "Sign in to sync across devices, or start with notes that stay on this device." }
+                        } else {
+                            h2 { "Sign in" }
+                            p { "Sign in to sync, or try it offline first — no account needed." }
+                        }
                     }
                     if let Some(message) = error {
                         div { class: "form-error", role: "alert",

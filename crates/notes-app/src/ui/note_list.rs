@@ -1,7 +1,7 @@
 //! The note list: a Keep-style card grid or a compact list.
 
 use dioxus::prelude::*;
-use notes_store::{NoteSummary, NoteView};
+use notes_store::{search_terms, NoteSummary, NoteView};
 
 use crate::state::{edited_label, note_title, tone_class, AppContext, Layout};
 use crate::ui::icons::Icon;
@@ -28,11 +28,12 @@ pub fn NoteList() -> Element {
     });
     drop(state);
 
+    let can_add_tour = view == NoteView::Active && tag.is_none() && notebook.is_none();
     let heading = if !search.trim().is_empty() {
         "Search".to_string()
     } else {
         match view {
-            NoteView::Active => notebook.unwrap_or_else(|| {
+            NoteView::Active => notebook.clone().unwrap_or_else(|| {
                 if let Some(tag) = tag {
                     format!("#{tag}")
                 } else {
@@ -175,6 +176,8 @@ pub fn NoteList() -> Element {
                             "Try a shorter word, or clear the search."
                         } else if empty_view {
                             "Notes you delete wait here until you erase them."
+                        } else if can_add_tour {
+                            "Start with a blank note, or add three notes for a short welcome tour."
                         } else {
                             "Start with a blank note. The first line becomes its title."
                         }
@@ -190,15 +193,29 @@ pub fn NoteList() -> Element {
                             "Clear search"
                         }
                     } else if !empty_view {
-                        button {
-                            class: "primary-button",
-                            r#type: "button",
-                            onclick: {
-                                let context = context.clone();
-                                move |_| context.new_note()
-                            },
-                            Icon { name: "plus" }
-                            span { "New note" }
+                        div { class: "empty-actions",
+                            button {
+                                class: "primary-button",
+                                r#type: "button",
+                                onclick: {
+                                    let context = context.clone();
+                                    move |_| context.new_note()
+                                },
+                                Icon { name: "plus" }
+                                span { "New note" }
+                            }
+                            if can_add_tour {
+                                button {
+                                    class: "secondary-button",
+                                    r#type: "button",
+                                    onclick: {
+                                        let context = context.clone();
+                                        move |_| context.add_welcome_tour()
+                                    },
+                                    Icon { name: "sparkle" }
+                                    span { "Add welcome tour" }
+                                }
+                            }
                         }
                     }
                 }
@@ -212,11 +229,27 @@ pub fn NoteList() -> Element {
                             key: "{note.id}",
                             note: note.clone(),
                             snippet: snippets.iter().find(|(id, _)| *id == note.id).map(|(_, text)| text.clone()),
+                            query: search.clone(),
                             selected: selected == Some(note.id),
                             trash_view: view == NoteView::Trash,
                         }
                     }
                 }
+            }
+
+            // The sidebar is off-canvas on phones and tablets, so the list
+            // carries its own new-note control there. CSS hides it whenever
+            // the sidebar's button is on screen.
+            button {
+                class: "new-note-fab",
+                r#type: "button",
+                aria_label: "New note",
+                title: "New note",
+                onclick: {
+                    let context = context.clone();
+                    move |_| context.new_note()
+                },
+                Icon { name: "plus" }
             }
         }
     }
@@ -226,6 +259,7 @@ pub fn NoteList() -> Element {
 fn NoteCard(
     note: NoteSummary,
     snippet: Option<String>,
+    query: String,
     selected: bool,
     trash_view: bool,
 ) -> Element {
@@ -234,10 +268,11 @@ fn NoteCard(
     let title = note_title(&note);
     let preview = snippet
         .as_deref()
-        .map(|text| text.replace(['[', ']'], ""))
         .filter(|text| !text.trim().is_empty())
+        .map(str::to_string)
         .unwrap_or_else(|| note.preview.clone());
-    let tags = note.tags.clone();
+    let tags = tags_for_display(&note.tags, &query);
+    let tag_count = note.tags.len();
     let pinned = note.pinned;
     let color = tone_class(note.color.as_deref());
     let stamp = if trash_view {
@@ -251,6 +286,17 @@ fn NoteCard(
         if selected { " is-selected" } else { "" },
         if trash_view { " is-trashed" } else { "" }
     );
+    let activate = {
+        let context = context.clone();
+        let query = query.clone();
+        move || {
+            if query.trim().is_empty() {
+                context.select_note(id);
+            } else {
+                context.open_search_result(id, query.clone());
+            }
+        }
+    };
 
     rsx! {
         article {
@@ -259,20 +305,20 @@ fn NoteCard(
             tabindex: "0",
             aria_selected: if selected { "true" } else { "false" },
             onclick: {
-                let context = context.clone();
-                move |_| context.select_note(id)
+                let activate = activate.clone();
+                move |_| activate()
             },
             onkeydown: {
-                let context = context.clone();
+                let activate = activate.clone();
                 move |event| {
                     match event.key() {
                         Key::Enter => {
                             event.prevent_default();
-                            context.select_note(id);
+                            activate();
                         }
                         Key::Character(value) if value == " " => {
                             event.prevent_default();
-                            context.select_note(id);
+                            activate();
                         }
                         Key::ArrowDown => {
                             event.prevent_default();
@@ -308,20 +354,226 @@ fn NoteCard(
                 }
                 div { class: "note-tags",
                     for tag in tags.iter().take(2) {
-                        span { class: "note-tag", "#{tag}" }
+                        span { class: "note-tag", "#" HighlightedText { text: tag.clone(), query: query.clone() } }
                     }
-                    if tags.len() > 2 {
-                        span { class: "note-tag", "+{tags.len() - 2}" }
+                    if tag_count > 2 {
+                        span { class: "note-tag", "+{tag_count - 2}" }
                     }
                 }
             }
-            h3 { class: "note-title", "{title}" }
+            h3 { class: "note-title", HighlightedText { text: title, query: query.clone() } }
             if !preview.is_empty() {
-                p { class: "note-preview", "{preview}" }
+                p { class: "note-preview", HighlightedText { text: preview, query } }
             }
             footer { class: "note-meta",
                 span { "{edited}" }
             }
         }
+    }
+}
+
+/// One run of text, either plain or a search match.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TextSegment {
+    text: String,
+    marked: bool,
+}
+
+/// Lowercase `text` only when every character keeps its byte width.
+///
+/// A matching byte offset can then slice both strings safely. Rare mappings
+/// such as `İ` (one character becoming two) return `None`; the caller shows
+/// the original text without marks.
+fn lowercase_aligned(text: &str) -> Option<String> {
+    let mut lower = String::with_capacity(text.len());
+    for character in text.chars() {
+        let mut mapped = character.to_lowercase();
+        let next = mapped.next()?;
+        if mapped.next().is_some() || next.len_utf8() != character.len_utf8() {
+            return None;
+        }
+        lower.push(next);
+    }
+    Some(lower)
+}
+
+/// Split `text` into plain and highlighted runs for `query`.
+///
+/// Search is case-insensitive and prefix-based at a word boundary, matching
+/// the FTS index. Literal brackets in a note stay literal: no markup is added
+/// to the stored or excerpt text.
+fn highlight_segments(text: &str, query: &str) -> Vec<TextSegment> {
+    let plain = || {
+        vec![TextSegment {
+            text: text.to_string(),
+            marked: false,
+        }]
+    };
+    if text.is_empty() || query.trim().is_empty() {
+        return plain();
+    }
+    // Every character must keep its byte width when lowercased, or offsets in
+    // the lowercase copy no longer point at the same place in `text`. One
+    // unusual character (such as `İ`) makes the whole result plain instead of
+    // risking a panic or marking the wrong bytes.
+    let Some(lower) = lowercase_aligned(text) else {
+        return plain();
+    };
+    let terms: Vec<String> = search_terms(query)
+        .into_iter()
+        .map(|term| term.to_lowercase())
+        .filter(|term| !term.is_empty())
+        .collect();
+    if terms.is_empty() {
+        return plain();
+    }
+
+    let mut ranges = Vec::new();
+    for term in terms {
+        let mut from = 0;
+        while let Some(offset) = lower[from..].find(&term) {
+            let start = from + offset;
+            let end = start + term.len();
+            let at_boundary = start == 0
+                || !text[..start]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|ch| ch.is_alphanumeric() || ch == '_');
+            if at_boundary {
+                ranges.push((start, end));
+            }
+            from = end.max(start + 1);
+        }
+    }
+    if ranges.is_empty() {
+        return plain();
+    }
+    ranges.sort_by_key(|(start, _)| *start);
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for (start, end) in ranges {
+        if let Some(last) = merged.last_mut() {
+            if start <= last.1 {
+                last.1 = last.1.max(end);
+                continue;
+            }
+        }
+        merged.push((start, end));
+    }
+
+    let mut segments = Vec::new();
+    let mut cursor = 0;
+    for (start, end) in merged {
+        if start > cursor {
+            segments.push(TextSegment {
+                text: text[cursor..start].to_string(),
+                marked: false,
+            });
+        }
+        segments.push(TextSegment {
+            text: text[start..end].to_string(),
+            marked: true,
+        });
+        cursor = end;
+    }
+    if cursor < text.len() {
+        segments.push(TextSegment {
+            text: text[cursor..].to_string(),
+            marked: false,
+        });
+    }
+    segments
+}
+
+/// Show matching tags first so a tag-only hit is visible before the two-tag cap.
+fn tags_for_display(tags: &[String], query: &str) -> Vec<String> {
+    let terms: Vec<String> = search_terms(query)
+        .into_iter()
+        .map(|term| term.to_lowercase())
+        .collect();
+    if terms.is_empty() {
+        return tags.to_vec();
+    }
+    let mut ordered = tags.to_vec();
+    ordered.sort_by_key(|tag| {
+        let tag = tag.to_lowercase();
+        !terms.iter().any(|term| tag.starts_with(term))
+    });
+    ordered
+}
+
+#[component]
+fn HighlightedText(text: String, query: String) -> Element {
+    let segments = highlight_segments(&text, &query);
+    rsx! {
+        for (index, segment) in segments.into_iter().enumerate() {
+            if segment.marked {
+                mark { key: "{index}", class: "search-mark", "{segment.text}" }
+            } else {
+                span { key: "{index}", "{segment.text}" }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{highlight_segments, tags_for_display};
+
+    fn marked(text: &str, query: &str) -> Vec<String> {
+        highlight_segments(text, query)
+            .into_iter()
+            .filter(|segment| segment.marked)
+            .map(|segment| segment.text)
+            .collect()
+    }
+
+    #[test]
+    fn highlights_are_case_insensitive_and_keep_literal_brackets() {
+        let segments = highlight_segments("Use [Draft] here, draft twice", "draft");
+        let rebuilt: String = segments
+            .iter()
+            .map(|segment| segment.text.as_str())
+            .collect();
+        assert_eq!(rebuilt, "Use [Draft] here, draft twice");
+        assert_eq!(
+            marked("Use [Draft] here, draft twice", "draft").join("|"),
+            "Draft|draft"
+        );
+    }
+
+    #[test]
+    fn highlights_start_at_word_boundaries_and_match_prefixes() {
+        assert_eq!(marked("quicksilver is quick", "qui").join("|"), "qui|qui");
+        assert!(marked("unquick", "qui").is_empty());
+        assert_eq!(marked("The Brown Fox", "brown fox").join("|"), "Brown|Fox");
+        assert_eq!(
+            marked("Café menu, CAFÉ list", "café").join("|"),
+            "Café|CAFÉ"
+        );
+    }
+
+    #[test]
+    fn unusual_lowercase_never_slices_inside_a_character() {
+        let segments = highlight_segments("İÅ draft", "draft");
+        assert!(segments.iter().all(|segment| !segment.marked));
+        let rebuilt: String = segments
+            .iter()
+            .map(|segment| segment.text.as_str())
+            .collect();
+        assert_eq!(rebuilt, "İÅ draft");
+    }
+
+    #[test]
+    fn tag_highlights_move_matching_tags_before_the_cap() {
+        let tags = vec![
+            "personal".to_string(),
+            "reading".to_string(),
+            "books".to_string(),
+        ];
+        assert_eq!(
+            tags_for_display(&tags, "boo"),
+            vec!["books", "personal", "reading"]
+        );
+        assert_eq!(tags_for_display(&tags, ""), tags);
     }
 }

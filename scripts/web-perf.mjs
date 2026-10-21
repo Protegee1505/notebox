@@ -134,6 +134,11 @@ try {
 
   const navigationStart = Date.now();
   await page.goto(started.base, { waitUntil: "networkidle" });
+  const offline = page.getByRole("button", { name: /Try it offline/ });
+  if (await offline.isVisible().catch(() => false)) {
+    await offline.click();
+  }
+  await page.getByRole("button", { name: "Add welcome tour" }).click();
   await page.locator("#note-editor").waitFor({ timeout: 60_000 });
   const webColdStart = Date.now() - navigationStart;
   await page.waitForTimeout(500);
@@ -152,7 +157,7 @@ try {
   }
   const text = header + body.join("");
 
-  await page.keyboard.press("Control+n");
+  await page.locator(".new-note-button").click();
   await page.locator("#note-editor").waitFor();
   await page.locator("#note-editor").fill(text);
   await page.keyboard.press("Control+s");

@@ -5,11 +5,12 @@ use dioxus::prelude::*;
 use crate::state::AppContext;
 use crate::ui::icons::Icon;
 
-const GROUPS: [(&str, [(&str, &str); 4]); 3] = [
+const GROUPS: [(&str, &[(&str, &str)]); 3] = [
     (
         "General",
-        [
-            ("Ctrl K", "Command palette"),
+        &[
+            ("Ctrl K", "Search notes"),
+            ("Ctrl P", "Command palette"),
             ("Ctrl N", "New note"),
             ("Ctrl S", "Save now"),
             ("Esc", "Close a panel"),
@@ -17,7 +18,7 @@ const GROUPS: [(&str, [(&str, &str); 4]); 3] = [
     ),
     (
         "Editor",
-        [
+        &[
             ("Ctrl F", "Find in note"),
             ("Ctrl E", "Write and preview"),
             ("Ctrl Z", "Undo"),
@@ -26,7 +27,7 @@ const GROUPS: [(&str, [(&str, &str); 4]); 3] = [
     ),
     (
         "Navigation",
-        [
+        &[
             ("Ctrl 1", "All notes"),
             ("Ctrl 2", "Archive"),
             ("Ctrl 3", "Trash"),
@@ -101,7 +102,7 @@ pub fn ShortcutSheet() -> Element {
                 }
                 footer { class: "sheet-footer",
                     span { "Tip: type " }
-                    kbd { class: "key-hint", "Ctrl K" }
+                    kbd { class: "key-hint", "Ctrl P" }
                     span { " and start typing what you want to do." }
                 }
             }

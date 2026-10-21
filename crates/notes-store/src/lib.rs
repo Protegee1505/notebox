@@ -159,10 +159,26 @@ impl SearchQuery {
 pub struct SearchHit {
     /// The matching note.
     pub note: NoteSummary,
-    /// Body excerpt with the matched words wrapped in `[` `]`.
+    /// Plain body excerpt around the best match. The UI adds highlighting.
     pub snippet: String,
     /// FTS5 relevance score, lower is better.
     pub rank: f64,
+}
+
+/// Words a search query looks for, in the order typed.
+///
+/// Punctuation is a separator, so `#books` searches for `books`. The same
+/// split feeds the FTS expression and the UI highlighter, so the two cannot
+/// drift apart.
+pub fn search_terms(text: &str) -> Vec<String> {
+    let mut terms = Vec::new();
+    for word in text.split(|ch: char| !(ch.is_alphanumeric() || ch == '_' || ch == '\'')) {
+        let word = word.trim_matches('\'');
+        if !word.is_empty() {
+            terms.push(word.to_string());
+        }
+    }
+    terms
 }
 
 /// A tag and how many notes carry it.
@@ -426,4 +442,15 @@ pub fn export_bundle(store: &dyn NoteStore, exported_at: i64) -> Result<ExportBu
         notes: export_notes,
         attachments,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::search_terms;
+
+    #[test]
+    fn search_terms_ignore_punctuation_and_keep_word_order() {
+        assert_eq!(search_terms("#books don't"), vec!["books", "don't"]);
+        assert!(search_terms(" # — ").is_empty());
+    }
 }

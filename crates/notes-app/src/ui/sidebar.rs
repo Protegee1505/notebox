@@ -206,7 +206,7 @@ pub fn Sidebar() -> Element {
                         },
                         Icon { name: "command" }
                         span { class: "nav-label", "Commands" }
-                        kbd { class: "key-hint", "Ctrl K" }
+                        kbd { class: "key-hint", "Ctrl P" }
                     }
                     button {
                         class: if screen == Screen::Settings { "nav-row is-active" } else { "nav-row" },
