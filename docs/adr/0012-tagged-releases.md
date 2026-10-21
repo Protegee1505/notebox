@@ -68,7 +68,7 @@ keys in the repository?
   `notebox_0.1.0_x86_64.AppImage` (89,597,120 B) with the patched lockfile. The
   installed `.deb` and the extracted AppImage each stayed up for 20 seconds
   under Xvfb. The web release built with `NBX_BUILD_ID=v0.1.0` and passed the
-  3 MiB budget at 1,818,993 B brotli.
+  3 MiB budget at 1,818,284 B brotli.
 - The workflow itself has not run on GitHub yet. The first tag needs the
   owner's Android keystore secrets; until then the Android job fails by design.
   No GitHub release artifact was published from this workstation.

@@ -342,10 +342,10 @@ owner action.
 | P7 browser flow (Playwright) | 22/22 checks: login, first sync, last sync, devices, current marker, two-click revoke, manual sync, sign-out, cookie/account clearing, reload, login reopen; no console errors |
 | P7 installable web app (Playwright) | 12/12 functional checks: manifest and icons, empty installability errors, service-worker control, offline note and edit across reloads, second build waits for the banner, Reload replaces the cache, note survives, no `/v1/*` requests, no console errors; 6 layout captures with `NBX_PWA_SCREENSHOTS=1` |
 | P7 PWA install/update layout | 360/900/1400 px, light and dark; banner wraps without horizontal overflow; screenshots `docs/screenshots/p7-pwa-*` |
-| PWA bundle | 10 precached files; 32,615 bytes of manifest, icons, HTML and worker; pre-cache assets from the Dioxus manifest only |
+| PWA bundle | 10 precached files; 32,610 bytes of manifest, icons, HTML and worker; pre-cache assets from the Dioxus manifest only |
 | P7 browser persistence (Playwright) | 13/13 checks: Browser storage label, local-only note and PNG, WebP attachment, second-tab lock, browser restart, text/image/history, page-hide save, no console errors |
 | P7 conflict flow (Playwright) | 13/13 checks with two device contexts plus a third puller: delayed sync, edit during the run, conflict toast, merged original, `conflict`-tagged copy holding the typed text, follow-up sync before the minute timer, copy pulled by another device |
-| Web bundle (release, brotli) | P7 release build 1,818,993 B (1.73 MiB), raw 7,529,588 B, limit 3.00 MiB; P7 Dioxus build 1,792,565 B (1.71 MiB), raw 7,489,034 B; P6 manual build 1,955,393 B (1.86 MiB), raw 9,353,273 B; P5 CI was 1,545,831 B |
+| Web bundle (release, brotli) | P7 release build 1,818,284 B (1.73 MiB), raw 7,529,584 B, limit 3.00 MiB; P7 Dioxus build 1,792,565 B (1.71 MiB), raw 7,489,034 B; P6 manual build 1,955,393 B (1.86 MiB), raw 9,353,273 B; P5 CI was 1,545,831 B |
 | Linux bundles | `notebox_0.1.0_amd64.deb` 9,867,218 B; `notebox_0.1.0_x86_64.AppImage` 89,597,120 B. The `.deb` installed and stayed up for 20 s under Xvfb; the extracted AppImage did the same. Both from `dx bundle` 0.7.10 with the patched lockfile |
 | P5 browser flow (Playwright) | 26/26 checks: autosave, timeline, diff, preview, restore, version retention, trash, confirm, cancel, restore and empty |
 | P5 layout review | 360/900/1400 px, light and dark; no horizontal overflow, no console errors |
