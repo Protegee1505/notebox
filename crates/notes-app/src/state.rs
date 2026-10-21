@@ -967,12 +967,15 @@ impl AppContext {
         };
         if opened {
             self.load_attachments(id);
+            self.reset_editor_scroll();
         }
     }
 
-    /// Open a search result and put the matching body text in Find.
+    /// Open a search result at its first matching body text.
     ///
-    /// Tag-only matches have no body text to reveal, so Find stays closed.
+    /// Find stays closed and nothing is selected: the search highlight belongs
+    /// to the result cards. Tag-only matches have no body text, so the note
+    /// opens at the top.
     pub fn open_search_result(&self, id: NoteId, query: String) {
         self.select_note(id);
         if self.state.peek().selected != Some(id) {
@@ -980,20 +983,11 @@ impl AppContext {
         }
         let term = {
             let state = self.state.read();
-            best_find_term(&state.draft, &query)
+            best_body_term(&state.draft, &query)
         };
-        let Some(term) = term else {
-            return;
-        };
-        {
-            let mut state = self.state.write_unchecked();
-            state.find_open = true;
-            state.find_query = term;
-            state.find_index = 0;
-            state.editor_mode = EditorMode::Write;
+        if let Some(term) = term {
+            self.reveal_editor_term(&term);
         }
-        self.focus_find();
-        self.find_select_after(0, 60);
     }
 
     /// Create an empty note in the selected notebook and open it.
@@ -1488,6 +1482,66 @@ impl AppContext {
                 el.setSelectionRange(index, index + needle.length);\
              }}\
              }}, {delay_ms});"
+        ));
+    }
+
+    /// Start a newly opened note at the top.
+    ///
+    /// A textarea keeps its scroll position when its value changes, so a long
+    /// note opened after another one would otherwise start partway down.
+    fn reset_editor_scroll(&self) {
+        let _ = document::eval(
+            "setTimeout(() => {\
+             const el = document.getElementById('note-editor');\
+             if (el) el.scrollTop = 0;\
+             }, 0);",
+        );
+    }
+
+    /// Put the caret on `term` and scroll it into view without focusing.
+    ///
+    /// A textarea does not scroll to a selection while it is unfocused, so a
+    /// hidden copy of its text measures the match. Focusing the editor would
+    /// open the on-screen keyboard on a phone and take the arrow keys away
+    /// from the note list.
+    fn reveal_editor_term(&self, term: &str) {
+        let needle = serde_json::to_string(term).unwrap_or_else(|_| "\"\"".to_string());
+        let _ = document::eval(&format!(
+            "setTimeout(() => {{\
+             const el = document.getElementById('note-editor');\
+             if (!el) return;\
+             const needle = {needle}.toLowerCase();\
+             if (!needle) return;\
+             const at = el.value.toLowerCase().indexOf(needle);\
+             if (at < 0) return;\
+             el.setSelectionRange(at, at);\
+             const style = getComputedStyle(el);\
+             const mirror = document.createElement('div');\
+             mirror.style.position = 'absolute';\
+             mirror.style.visibility = 'hidden';\
+             mirror.style.top = '0';\
+             mirror.style.left = '-10000px';\
+             mirror.style.width = el.clientWidth + 'px';\
+             mirror.style.boxSizing = 'border-box';\
+             mirror.style.whiteSpace = 'pre-wrap';\
+             mirror.style.overflowWrap = 'break-word';\
+             mirror.style.fontFamily = style.fontFamily;\
+             mirror.style.fontSize = style.fontSize;\
+             mirror.style.fontWeight = style.fontWeight;\
+             mirror.style.fontStyle = style.fontStyle;\
+             mirror.style.lineHeight = style.lineHeight;\
+             mirror.style.letterSpacing = style.letterSpacing;\
+             mirror.style.tabSize = style.tabSize;\
+             mirror.style.padding = style.padding;\
+             mirror.textContent = el.value.slice(0, at);\
+             const marker = document.createElement('span');\
+             marker.textContent = el.value.slice(at, at + 1) || '.';\
+             mirror.appendChild(marker);\
+             document.body.appendChild(mirror);\
+             const top = marker.offsetTop;\
+             mirror.remove();\
+             el.scrollTop = Math.max(0, top - el.clientHeight / 3);\
+             }}, 60);"
         ));
     }
 
@@ -3830,7 +3884,9 @@ fn startup_choice(account_saved: bool, offline: bool, has_notes: bool) -> Startu
     }
 }
 
-fn best_find_term(text: &str, query: &str) -> Option<String> {
+/// Pick the term to land on: the whole phrase when the body has it, else the
+/// first word of the query the body contains.
+fn best_body_term(text: &str, query: &str) -> Option<String> {
     let haystack = text.to_lowercase();
     let full = query.trim();
     if full.is_empty() {
@@ -3879,7 +3935,7 @@ fn create_tour_note(
 #[cfg(test)]
 mod tests {
     use super::{
-        attachment_label, attachment_set_changed, best_find_term, find_match_count, note_title,
+        attachment_label, attachment_set_changed, best_body_term, find_match_count, note_title,
         restore_summary, startup_choice, tone_class, word_count, PendingRestore,
     };
     use notes_proto::NoteId;
@@ -3973,17 +4029,17 @@ mod tests {
     }
 
     #[test]
-    fn search_result_find_term_prefers_a_phrase_then_a_body_word() {
+    fn search_landing_term_prefers_a_phrase_then_a_body_word() {
         assert_eq!(
-            best_find_term("The quick brown fox", "brown fox"),
+            best_body_term("The quick brown fox", "brown fox"),
             Some("brown fox".to_string())
         );
         assert_eq!(
-            best_find_term("The quick brown fox", "brown fox!"),
+            best_body_term("The quick brown fox", "brown fox!"),
             Some("brown".to_string())
         );
-        assert_eq!(best_find_term("Only a book tag", "books"), None);
-        assert_eq!(best_find_term("anything", "#Books"), None);
+        assert_eq!(best_body_term("Only a book tag", "books"), None);
+        assert_eq!(best_body_term("anything", "#Books"), None);
     }
 
     #[test]

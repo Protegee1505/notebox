@@ -96,3 +96,11 @@ without recreating the duplicate-body merge seen on two devices?
   rather than opening it with the wrong index shape.
 - Future onboarding material must use fresh ids and stay opt-in. Reintroducing
   startup seeding would revive the duplicate-body merge that this ADR closes.
+
+## Amendment (2026-10-21)
+
+Opening a search hit no longer pre-fills Find or focuses it. The result card is
+the only place with search marks; the note opens at the first matching body
+text with a collapsed caret and the editor unfocused, so a phone keyboard stays
+closed. Ctrl F remains the deliberate Find action. The a11y flow now checks
+Find closed, no selection, the long-note scroll and the phone tap.

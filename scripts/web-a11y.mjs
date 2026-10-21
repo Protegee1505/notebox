@@ -188,6 +188,15 @@ try {
   await page.locator(".note-card").nth(2).waitFor({ timeout: 60_000 });
   await page.locator("#note-editor").waitFor({ timeout: 60_000 });
   await settle(page, 600);
+  await page.locator(".new-note-button").click();
+  await page.locator("#note-editor").waitFor({ timeout: 10_000 });
+  const longBody = [
+    "Long note for the search landing",
+    ...Array.from({ length: 70 }, (_, index) => `line ${index + 1}`),
+    "zebralanding",
+  ].join("\n");
+  await page.locator("#note-editor").fill(longBody);
+  await settle(page, 1200);
   await page.locator("#note-editor").click();
   await page.keyboard.press("Control+k");
   await page.waitForFunction(
@@ -208,17 +217,26 @@ try {
     ),
   );
   await page.locator(".note-card").first().click();
-  await page.locator("#find-input").waitFor({ timeout: 10_000 });
-  const openedFind = await page.locator("#find-input").inputValue();
+  await settle(page, 300);
+  const hitOpen = await page.evaluate(() => {
+    const editor = document.getElementById("note-editor");
+    const value = editor?.value ?? "";
+    return {
+      find: document.querySelectorAll("#find-input").length,
+      start: editor?.selectionStart ?? -1,
+      end: editor?.selectionEnd ?? -1,
+      at: value.toLowerCase().indexOf("pragmatic"),
+    };
+  });
   results.push(
     check(
-      "opening a search hit prefills Find with the body match",
-      openedFind.toLowerCase() === "pragmatic",
-      openedFind,
+      "opening a search hit leaves Find closed and selects no text",
+      hitOpen.find === 0 &&
+        hitOpen.start === hitOpen.at &&
+        hitOpen.end === hitOpen.at,
+      JSON.stringify(hitOpen),
     ),
   );
-  await page.keyboard.press("Escape");
-  await page.locator("#find-input").waitFor({ state: "hidden", timeout: 10_000 });
 
   await page.locator("#global-search").fill("personal");
   await page.waitForFunction(
@@ -238,9 +256,39 @@ try {
   const tagOnlyFind = await page.locator("#find-input").count();
   results.push(check("a tag-only hit leaves Find closed", tagOnlyFind === 0));
 
+  await page.locator("#global-search").fill("zebralanding");
+  await page.waitForFunction(
+    () => document.querySelectorAll(".note-card").length === 1,
+    null,
+    { timeout: 10_000 },
+  );
+  await page.locator(".note-card").first().click();
+  await settle(page, 300);
+  const landed = await page.evaluate(() => {
+    const editor = document.getElementById("note-editor");
+    const value = editor?.value ?? "";
+    return {
+      find: document.querySelectorAll("#find-input").length,
+      start: editor?.selectionStart ?? -1,
+      end: editor?.selectionEnd ?? -1,
+      at: value.toLowerCase().indexOf("zebralanding"),
+      scroll: editor?.scrollTop ?? 0,
+    };
+  });
+  results.push(
+    check(
+      "a long note opens at the match without Find or a selection",
+      landed.find === 0 &&
+        landed.start === landed.at &&
+        landed.end === landed.at &&
+        landed.scroll > 0,
+      JSON.stringify(landed),
+    ),
+  );
+
   await page.locator("#global-search").fill("");
   await page.waitForFunction(
-    () => document.querySelectorAll(".note-card").length === 3,
+    () => document.querySelectorAll(".note-card").length === 4,
     null,
     { timeout: 10_000 },
   );
@@ -532,6 +580,50 @@ try {
       await phoneFab.isVisible(),
     ),
   );
+
+  await page.locator("#global-search").fill("zebralanding");
+  await page.waitForFunction(
+    () => document.querySelectorAll(".note-card").length === 1,
+    null,
+    { timeout: 10_000 },
+  );
+  await page.locator(".note-card").first().click();
+  await page.locator("#note-editor").waitFor({ timeout: 10_000 });
+  await settle(page, 300);
+  const phoneHit = await page.evaluate(() => {
+    const editor = document.getElementById("note-editor");
+    return {
+      active: document.activeElement?.id ?? "",
+      find: document.querySelectorAll("#find-input").length,
+      start: editor?.selectionStart ?? -1,
+      end: editor?.selectionEnd ?? -1,
+      at: (editor?.value ?? "").toLowerCase().indexOf("zebralanding"),
+      scroll: editor?.scrollTop ?? 0,
+      viewport: window.visualViewport?.height ?? window.innerHeight,
+      window: window.innerHeight,
+    };
+  });
+  results.push(
+    check(
+      "tapping a search hit on a phone keeps the keyboard closed",
+      phoneHit.active !== "note-editor" &&
+        phoneHit.active !== "find-input" &&
+        phoneHit.find === 0 &&
+        phoneHit.start === phoneHit.at &&
+        phoneHit.end === phoneHit.at &&
+        phoneHit.scroll > 0,
+      JSON.stringify(phoneHit),
+    ),
+  );
+  await page.getByRole("button", { name: "Back to notes" }).click();
+  await page.locator(".workspace.show-list").waitFor();
+  await page.locator("#global-search").fill("");
+  await page.waitForFunction(
+    () => document.querySelectorAll(".note-card").length === 3,
+    null,
+    { timeout: 10_000 },
+  );
+
   await phoneFab.click();
   await page.locator("#note-editor").waitFor({ timeout: 10_000 });
   results.push(check("the floating button opens a new note", true));

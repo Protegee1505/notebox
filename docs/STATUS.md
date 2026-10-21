@@ -13,10 +13,11 @@ inside the viewport and keeps full title lines when the list scrolls, the
 editor header fits and the toolbar scrolls at 320 px, and the colour menu no
 longer puts a full-screen blocker over Back and Settings. A first launch now
 asks for an account or an explicit offline choice instead of auto-seeding
-samples; display choices persist on the device, search matches tags and
-highlights matches, and the optional welcome tour is created only when the
-owner asks for it. A phone can start a note from a floating button on the list
-instead of opening the sidebar.
+samples; display choices persist on the device, search matches tags,
+highlights matches on the result cards and opens a hit at the match, and the
+optional welcome tour is created only when the owner asks for it. A phone can
+start a note from a floating button on the list instead of opening the
+sidebar.
 A 100 KB note opens in a median under 50 ms in the web UI and typing drops no
 frames; Linux desktop cold start is 555 ms warm. The installer budget now
 measures the `.deb` (9.9 MB), not the self-contained AppImage. The free Worker
@@ -41,6 +42,20 @@ scrolls, and no light row is left below the app when the keyboard opens.
 
 ## Shipped
 
+- `notes-app`: **search highlights stay on the result cards, and a hit opens at
+  the match**. Opening a result no longer opens or prefills Find, focuses the
+  Find box or selects text in the editor; `<mark>` runs render only on a card's
+  title, snippet and matching tags. A hit still lands on the first matching
+  body text (the whole phrase when present, else the first query term) with a
+  collapsed caret about a third from the top; a tag-only hit opens at the top.
+  The editor is not focused, so a phone keyboard stays closed and focus stays
+  out of the text. Opening any note now also resets the textarea's
+  scroll, which removed a stale offset that could hide the next note's tag
+  chips. Ctrl F remains the deliberate Find action.
+  `scripts/web-a11y.mjs` replaces the prefill check with three checks: Find
+  closed with no selection, a long note scrolled to its match, and a phone tap
+  that leaves focus out of the editor; the flow passes 63/63 with no console
+  errors. Chromium release build.
 - `notes-app`: **tag chips fold away while the note body scrolls**. The chip
   row sits above the scrolling body, so on a phone it kept taking a line from
   the text. It now collapses over 160 ms once the body passes 24 px (a
@@ -267,15 +282,17 @@ scrolls, and no light row is left below the app when the keyboard opens.
   the credential form, changes both username and password, signs out, signs in
   with the new pair and confirms the note is still there. The CI web job
   installs `worker-build` and runs it after the backup round trip.
-- `scripts/web-a11y.mjs`: 61-check P8 accessibility, onboarding and phone-layout
+- `scripts/web-a11y.mjs`: 63-check P8 accessibility, onboarding and phone-layout
   flow. It runs axe-core's WCAG 2.0, 2.1 and 2.2 A/AA rules on notes, history,
   the command palette, shortcuts, trash, Settings, Login and the mobile layout,
   each in light and dark themes. The same run checks first launch opens the
   welcome Login with no back button, offline starts with no samples, the
   welcome tour creates three cards, Ctrl K focuses search, Ctrl P opens the
-  palette, a search match gets a `<mark>`, a hit prefills Find, and a tag-only
-  hit keeps Find closed. It checks note-list Arrow/Home/Enter handling, keeps
-  Tab and Shift+Tab inside the three modal dialogs, checks focus return after
+  palette, a search match gets a `<mark>`, opening a hit leaves Find closed and
+  selects no text, a long hit scrolls to its match, a tag-only hit keeps Find
+  closed, and a phone tap on a hit keeps focus out of the editor. It checks
+  note-list Arrow/Home/Enter handling, keeps Tab and Shift+Tab inside the
+  three modal dialogs, checks focus return after
   closing history, the palette or the shortcut sheet, Settings' back button and
   Login's first field. At 390, 360 and 320 px it adds an image data-URL note,
   asserts no horizontal list or document overflow, that the 320 px editor
@@ -639,7 +656,7 @@ scrolls, and no light row is left below the app when the keyboard opens.
 | CI | Run 39622631498 on ce65296: all eight jobs green (gates, wasm, server, Windows, Android, desktop, OPFS, web); GitHub Actions briefly left the run `in_progress` during its 2026-10-21 partial outage after every job had passed |
 | P8 backup restore (Playwright) | 18/18 checks: fresh-profile export/import of a notebook, pinned tagged note and trashed note; text, tag, pin, trash, attachment row, decoded WebP, history peer label and idempotent second import; no console errors |
 | P8 wipe and sign-in (Playwright + local Worker) | 19/19 checks: three timed rejected logins (browser Argon2id median 162 ms), derived login key, account setup, first sync, image attachment, OPFS/localStorage/cookie/cache wipe, note gone, sign in, attachment download without a crash, note body/tag/pin/image, history labelled as the other device, no duplicate, no console errors |
-| P8 accessibility, onboarding and search (Playwright + axe-core) | 61/61 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; first launch shows welcome Login with no back button, offline starts empty, optional tour adds three cards, Ctrl K focuses search, Ctrl P opens the palette, a search mark renders, a hit prefills Find, tag-only matches keep Find closed; note-list Arrow/Home/Enter, Tab and Shift+Tab stay inside the three dialogs, focus return after overlays, Settings/Login/dialog autofocus; image title and no list overflow at 390/360/320; card titles keep a full line at 360×420 and compact rows at 1024×420; 320 px header, scrollable toolbar and reachable Quote; colour sheet inside the viewport; the floating new-note button hidden at 1400 px and opening the editor at 390 px; tag chips fold away while the note body scrolls and return at the top; one-tap Back and phone Settings/navigation; no console errors |
+| P8 accessibility, onboarding and search (Playwright + axe-core) | 63/63 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; first launch shows welcome Login with no back button, offline starts empty, optional tour adds three cards, Ctrl K focuses search, Ctrl P opens the palette, a search mark renders, opening a hit leaves Find closed with no selection and a long hit scrolls to its match, a phone tap on a hit keeps focus out of the editor, tag-only matches keep Find closed; note-list Arrow/Home/Enter, Tab and Shift+Tab stay inside the three dialogs, focus return after overlays, Settings/Login/dialog autofocus; image title and no list overflow at 390/360/320; card titles keep a full line at 360×420 and compact rows at 1024×420; 320 px header, scrollable toolbar and reachable Quote; colour sheet inside the viewport; the floating new-note button hidden at 1400 px and opening the editor at 390 px; tag chips fold away while the note body scrolls and return at the top; one-tap Back and phone Settings/navigation; no console errors |
 | P8 local preferences and restart (Playwright) | 15/15 checks: browser storage, note with image and history survive restart, dark theme and list layout survive restart, second tab blocked by the store lock, no console errors |
 | P8 phone sign-in (one-off Playwright, 360 px touch + local Worker) | New note saved, derived login key, account setup, status `Synced`, synced note in the list, no list overflow, Settings round trip, navigation drawer, one-tap Back with the colour menu open; no console errors |
 | Web login preview | Rebuilt release at 2026-10-21: the Worker origin is read-only with no URL input, the offline action is visible, and the screen has no horizontal overflow or console errors at 1400 px and 390 px |
