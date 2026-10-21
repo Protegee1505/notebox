@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Notebox">
+  <rect width="512" height="512" rx="108" fill="#2c6b55" />
+  <circle cx="396" cy="116" r="28" fill="#b97a36" />
+  <text x="256" y="344" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="232" font-weight="700" letter-spacing="-18" fill="#fffdf7">nb</text>
+</svg>
