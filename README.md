@@ -32,7 +32,10 @@ over the first.
 The web build is also an installable PWA. A manifest, icons and a service worker
 precache the hashed app shell, so it opens offline after the first visit. New
 deployments wait until the user chooses Reload from the update banner; the old
-worker never swaps under an open editor. A remote deploy and the S3 CPU
+worker never swaps under an open editor. Phase 8's accessibility, 100 KB note
+and Linux cold-start budgets pass, and a local-Worker wipe/sign-in drill returns
+every note and its history; the same drill against a deployed Worker is the
+last P8 step. A remote deploy and the S3 CPU
 measurement wait for `wrangler login`, and Android runtime testing still needs
 an emulator. The tag-triggered release workflow builds Linux, Windows, Android
 and web artifacts; the first release also needs the owner's Android signing
