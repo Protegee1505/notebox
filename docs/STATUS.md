@@ -53,7 +53,9 @@ the login screen still offers offline use and a different server.
   bundles receive the `NBX_SERVER_URL` repository variable. The Android job is
   skipped unless `RELEASE_ANDROID=true`, and `publish` uses `always()` with a
   failure guard so a skipped Android job no longer blocks a Windows/Linux/web
-  release. Release notes list Android only when an APK is present.
+  release. Release notes list Android only when an APK is present. The
+  checkout-free publish job also sets `GH_REPO`, which `gh release create`
+  needs to resolve the repository.
 - `notes-app`: restore from backup. Settings and the command palette open a zip
   picker, validate the archive before changing anything, and show note,
   notebook and attachment counts plus whether the archive carries history.
