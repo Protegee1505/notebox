@@ -14,6 +14,80 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icon-192.png" type="image/png" sizes="192x192" />
     <link rel="apple-touch-icon" href="/icon-192.png" />
+    <style>
+      /* This panel must work even when the app did not finish booting. */
+      #notebox-crash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: grid;
+        place-items: center;
+        padding: 1rem;
+        background: var(--bg, Canvas);
+        color: var(--text, CanvasText);
+        font-family: var(--font-sans, system-ui, sans-serif);
+      }
+      #notebox-crash[hidden] {
+        display: none;
+      }
+      #notebox-crash .crash-card {
+        width: min(30rem, 100%);
+        padding: 1.5rem;
+        border: 1px solid var(--border, ButtonBorder);
+        border-radius: var(--radius, 0.75rem);
+        background: var(--surface, Canvas);
+        box-shadow: var(--shadow, none);
+      }
+      #notebox-crash h1 {
+        margin: 0 0 0.5rem;
+        font-family: var(--font-display, Georgia, serif);
+        font-size: 1.35rem;
+      }
+      #notebox-crash p {
+        margin: 0 0 0.75rem;
+        line-height: 1.5;
+      }
+      #notebox-crash .crash-detail {
+        color: var(--muted, GrayText);
+        font-family: var(--font-mono, monospace);
+        font-size: 0.75rem;
+        overflow-wrap: anywhere;
+      }
+      #notebox-crash button {
+        min-height: 2.4rem;
+        padding: 0 0.9rem;
+        border: 1px solid var(--border, ButtonBorder);
+        border-radius: var(--radius-sm, 0.5rem);
+        background: var(--surface-2, ButtonFace);
+        color: var(--text, ButtonText);
+        font: inherit;
+      }
+    </style>
+    <script>
+      // A wasm panic leaves the last painted screen in place, which looks like
+      // buttons that do nothing. Replace it with a reload prompt instead.
+      (() => {
+        const looksFatal = (value) => {
+          const text = String(value?.message || value || "");
+          return /wasm|unreachable|panicked at|RuntimeError/i.test(text);
+        };
+        const show = (value) => {
+          const panel = document.getElementById("notebox-crash");
+          if (!panel || !panel.hidden) return;
+          const detail = document.getElementById("notebox-crash-detail");
+          if (detail) detail.textContent = value ? String(value).slice(0, 300) : "";
+          panel.hidden = false;
+        };
+        window.addEventListener("error", (event) => {
+          if (looksFatal(event.error) || looksFatal(event.message)) {
+            show(event.error || event.message);
+          }
+        });
+        window.addEventListener("unhandledrejection", (event) => {
+          if (looksFatal(event.reason)) show(event.reason);
+        });
+      })();
+    </script>
     <script>
       // The web build is a PWA: index.html owns registration and the update
       // lifecycle, while Rust mirrors `noteboxPwa.ready` into the app banner.
@@ -81,6 +155,14 @@
   </head>
   <body>
     <div id="main"></div>
+    <div id="notebox-crash" hidden>
+      <div class="crash-card" role="alert">
+        <h1>Notebox stopped</h1>
+        <p>Your saved notes are intact. Reload to open them again.</p>
+        <p id="notebox-crash-detail" class="crash-detail"></p>
+        <button type="button" onclick="location.reload()">Reload</button>
+      </div>
+    </div>
     <noscript>Notebox needs JavaScript and WebAssembly to open your notes.</noscript>
   </body>
 </html>
