@@ -102,7 +102,8 @@ pub fn EditorPane() -> Element {
                         span { "New note" }
                     }
                     div { class: "shortcut-strip",
-                        span { kbd { class: "key-hint", "Ctrl K" } " Palette" }
+                        span { kbd { class: "key-hint", "Ctrl K" } " Search" }
+                        span { kbd { class: "key-hint", "Ctrl P" } " Palette" }
                         span { kbd { class: "key-hint", "Ctrl F" } " Find" }
                         span { kbd { class: "key-hint", "Ctrl E" } " Preview" }
                     }
@@ -618,6 +619,22 @@ pub fn EditorPane() -> Element {
                                 }
                             }
                         },
+                    }
+                    button {
+                        class: "icon-button small",
+                        r#type: "button",
+                        aria_label: "Add tag",
+                        title: "Add tag",
+                        disabled: tag_draft.read().trim().is_empty(),
+                        onclick: {
+                            let context = context.clone();
+                            move |_| {
+                                let tag = tag_draft.read().clone();
+                                tag_draft.set(String::new());
+                                context.add_tag(tag);
+                            }
+                        },
+                        Icon { name: "check" }
                     }
                 }
                 div { class: "status-counts",

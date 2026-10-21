@@ -210,11 +210,41 @@ try {
   }
 
   // ---- Notes, both themes, and the list's keyboard contract. ----
+  const viewportMeta = await page.evaluate(
+    () => document.querySelector('meta[name="viewport"]')?.content ?? "",
+  );
+  results.push(
+    check(
+      "viewport asks the keyboard to shrink the layout",
+      viewportMeta.includes("interactive-widget=resizes-content"),
+      viewportMeta,
+    ),
+  );
+
   await setTheme(page, "light");
   await audit("notes, light");
 
   await setTheme(page, "dark");
   await audit("notes, dark");
+
+  // A soft keyboard exposes whatever page area sits below the app. html, body
+  // and the static crash panel carry the app's theme, not the light default.
+  const darkCanvas = await page.evaluate(() => ({
+    attribute: document.documentElement.getAttribute("data-theme"),
+    html: getComputedStyle(document.documentElement).backgroundColor,
+    body: getComputedStyle(document.body).backgroundColor,
+    app: getComputedStyle(document.getElementById("app-root")).backgroundColor,
+  }));
+  results.push(
+    check(
+      "the document canvas follows the dark theme",
+      darkCanvas.attribute === "dark" &&
+        darkCanvas.html === darkCanvas.app &&
+        darkCanvas.body === darkCanvas.app &&
+        darkCanvas.app === "rgb(21, 24, 21)",
+      JSON.stringify(darkCanvas),
+    ),
+  );
 
   await setTheme(page, "light");
   const cards = page.locator(".note-card");
@@ -614,6 +644,95 @@ try {
           quoteBox.x + quoteBox.width <= 321,
       ),
       JSON.stringify(quoteBox),
+    ),
+  );
+
+  // A soft keyboard shrinks the visible area without shrinking dvh on every
+  // browser, so the shell follows --app-height: the app, its footer and the
+  // tag field must stay inside the shrunken viewport with no page scroll.
+  const keyboardShell = await page.evaluate(async () => {
+    const root = document.documentElement;
+    const previous = root.style.getPropertyValue("--app-height");
+    root.style.setProperty("--app-height", "320px");
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve)),
+    );
+    const app = document.getElementById("app-root").getBoundingClientRect();
+    const footer = document
+      .querySelector(".editor-status")
+      .getBoundingClientRect();
+    // Fixed elements (the off-canvas sidebar, the scrim) are anchored to the
+    // viewport and never extend the scrollable page, so their children are
+    // excluded from "how far down does the document actually reach".
+    const fixedNested = (element) => {
+      for (
+        let node = element;
+        node && node !== document.body;
+        node = node.parentElement
+      ) {
+        if (getComputedStyle(node).position === "fixed") return true;
+      }
+      return false;
+    };
+    const state = {
+      height: Math.round(app.height),
+      bottom: Math.round(app.bottom),
+      footerBottom: Math.round(footer.bottom),
+      bodyScrollHeight: document.body.scrollHeight,
+      deepest: Math.round(
+        Math.max(
+          0,
+          ...[...document.body.querySelectorAll("*")]
+            .filter((element) => !fixedNested(element))
+            .map((element) => element.getBoundingClientRect().bottom),
+        ),
+      ),
+      background: getComputedStyle(document.documentElement).backgroundColor,
+    };
+    if (previous) root.style.setProperty("--app-height", previous);
+    else root.style.removeProperty("--app-height");
+    return state;
+  });
+  results.push(
+    check(
+      "a keyboard-sized viewport keeps the app and its tag field on screen",
+      keyboardShell.height === 320 &&
+        keyboardShell.bottom <= 321 &&
+        keyboardShell.footerBottom <= 321 &&
+        keyboardShell.bodyScrollHeight <= 321 &&
+        keyboardShell.deepest <= 321 &&
+        keyboardShell.background !== "rgb(255, 255, 255)",
+      JSON.stringify(keyboardShell),
+    ),
+  );
+
+  const tagEntry = page.locator(".tag-entry");
+  const entryBox = await tagEntry.boundingBox();
+  results.push(
+    check(
+      "a phone editor offers the add-tag field",
+      (await tagEntry.isVisible()) &&
+        Boolean(
+          entryBox && entryBox.x >= -1 && entryBox.x + entryBox.width <= 321,
+        ),
+      JSON.stringify(entryBox),
+    ),
+  );
+
+  await page.locator(".tag-input").fill("phone-tag");
+  await settle(page, 150);
+  await page.getByRole("button", { name: "Add tag" }).click();
+  await page
+    .locator(".editor-tag", { hasText: "phone-tag" })
+    .waitFor({ timeout: 5_000 });
+  results.push(check("the add-tag button tags the note on a phone", true));
+
+  await page.getByRole("button", { name: "Remove tag phone-tag" }).click();
+  await settle(page, 150);
+  results.push(
+    check(
+      "the tag chip removes the tag again",
+      (await page.locator(".editor-tag", { hasText: "phone-tag" }).count()) === 0,
     ),
   );
 

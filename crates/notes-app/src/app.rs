@@ -20,6 +20,18 @@ pub fn App() -> Element {
     let context = use_hook(AppContext::new);
     use_context_provider(|| context.clone());
 
+    // html, body and the static crash panel paint with the same tokens as the
+    // app, so an area the virtual keyboard exposes below the app is themed
+    // instead of showing the light default.
+    let theme_context = context.clone();
+    let theme_attr = use_memo(move || theme_context.state.read().theme.attr());
+    use_effect(move || {
+        let _ = document::eval(&format!(
+            "document.documentElement.setAttribute('data-theme', '{}');",
+            theme_attr()
+        ));
+    });
+
     #[cfg(target_arch = "wasm32")]
     use_hook({
         let context = context.clone();
@@ -182,6 +194,10 @@ fn handle_shortcut(context: &AppContext, event: &KeyboardEvent) {
     match key {
         Key::Character(value) => match value.to_lowercase().as_str() {
             "k" => {
+                event.prevent_default();
+                context.focus_search();
+            }
+            "p" => {
                 event.prevent_default();
                 if context.state.peek().palette_open {
                     context.close_palette();

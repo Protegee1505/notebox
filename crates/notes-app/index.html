@@ -3,7 +3,10 @@
   <head>
     <title>{app_title}</title>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, interactive-widget=resizes-content"
+    />
     <meta name="description" content="Local-first notes with history and offline sync." />
     <meta name="application-name" content="Notebox" />
     <meta name="theme-color" content="#f3f0e7" media="(prefers-color-scheme: light)" />
@@ -86,6 +89,30 @@
         window.addEventListener("unhandledrejection", (event) => {
           if (looksFatal(event.reason)) show(event.reason);
         });
+      })();
+    </script>
+    <script>
+      // A soft keyboard shrinks the visual viewport, and on some browsers it
+      // does not shrink dvh at all. The shell follows --app-height so it ends
+      // where the visible area ends: no page area is left below the app for
+      // the keyboard to expose. A zoomed page keeps the dvh fallback.
+      (() => {
+        const root = document.documentElement;
+        const apply = () => {
+          const viewport = window.visualViewport;
+          if (!viewport || viewport.scale !== 1) {
+            root.style.removeProperty("--app-height");
+            return;
+          }
+          root.style.setProperty(
+            "--app-height",
+            `${Math.round(viewport.height)}px`,
+          );
+        };
+        apply();
+        window.addEventListener("resize", apply);
+        window.addEventListener("orientationchange", apply);
+        window.visualViewport?.addEventListener("resize", apply);
       })();
     </script>
     <script>

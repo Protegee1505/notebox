@@ -82,6 +82,7 @@
   --tone-edge: var(--border);
 }
 
+:root[data-theme="dark"],
 .app[data-theme="dark"] {
   color-scheme: dark;
   --bg: #151815;
@@ -123,6 +124,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
+  :root[data-theme="system"],
   .app[data-theme="system"] {
     color-scheme: dark;
     --bg: #151815;
@@ -172,7 +174,17 @@ html,
 body {
   margin: 0;
   padding: 0;
-  height: 100%;
+}
+
+/* The document must never be taller than the visible area: every pane scrolls
+   inside itself, and a page scroll would let the keyboard expose a gap below
+   the app. The canvas behind it follows the theme. */
+html {
+  background: var(--bg);
+}
+
+body {
+  min-height: var(--app-height, 100dvh);
 }
 
 body {
@@ -215,7 +227,7 @@ kbd {
 }
 
 .app {
-  min-height: 100dvh;
+  min-height: var(--app-height, 100dvh);
   background: var(--bg);
   background-image: var(--grain);
   background-attachment: fixed;
@@ -602,7 +614,7 @@ kbd {
 .workspace {
   display: grid;
   grid-template-columns: var(--sidebar-w) var(--list-w) minmax(0, 1fr);
-  height: calc(100dvh - var(--topbar-h));
+  height: calc(var(--app-height, 100dvh) - var(--topbar-h));
   min-height: 0;
 }
 
@@ -1043,6 +1055,14 @@ kbd {
   font-size: var(--text-xs);
 }
 
+.search-mark {
+  padding: 0 0.08em;
+  border-radius: 0.2em;
+  background: var(--primary-soft);
+  color: inherit;
+  font: inherit;
+}
+
 .note-title {
   margin: 0;
   overflow: hidden;
@@ -1185,6 +1205,13 @@ kbd {
   line-height: 1.55;
 }
 
+.empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+}
+
 /* ---------- editor ---------- */
 
 .editor-pane {
@@ -1309,6 +1336,21 @@ kbd {
 .icon-button.small {
   width: 1.7rem;
   height: 1.7rem;
+}
+
+.icon-button:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.icon-button:disabled:hover {
+  background: transparent;
+  color: var(--muted);
+}
+
+/* The add-tag control brightens once there is a tag to add. */
+.editor-status .icon-button:not(:disabled) {
+  color: var(--primary);
 }
 
 .icon-button.small .icon {
@@ -1751,6 +1793,7 @@ kbd {
   display: flex;
   align-items: center;
   gap: 0.4rem;
+  min-width: 0;
   margin-left: auto;
   overflow: hidden;
   white-space: nowrap;
@@ -2882,7 +2925,7 @@ kbd {
 .login-screen {
   display: grid;
   grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
-  min-height: 100dvh;
+  min-height: var(--app-height, 100dvh);
   background: var(--surface);
 }
 
@@ -3340,7 +3383,7 @@ kbd {
 .fatal-screen {
   display: grid;
   place-items: center;
-  min-height: calc(100dvh - var(--topbar-h));
+  min-height: calc(var(--app-height, 100dvh) - var(--topbar-h));
   padding: var(--space-5);
 }
 
@@ -3637,9 +3680,14 @@ kbd {
   }
 
   .status-words,
-  .status-words-sep,
-  .tag-entry {
+  .status-words-sep {
     display: none;
+  }
+
+  /* A phone has no other way to add a tag, so the field stays and takes the
+     room the word count gave up. */
+  .tag-input {
+    width: 6rem;
   }
 
   .settings-pane {
@@ -3663,7 +3711,7 @@ kbd {
   }
 
   .login-panel {
-    min-height: 100dvh;
+    min-height: var(--app-height, 100dvh);
     padding: var(--space-6) var(--space-4);
   }
 
