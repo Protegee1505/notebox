@@ -9,19 +9,18 @@ compatibility_date = "2026-09-01"
 command = "cd crates/notes-server && worker-build --release"
 
 # One D1 database for notes/updates, a second for attachment chunks.
-# Replace the placeholder ids with the real ones from `wrangler d1 create`
-# before the first remote deploy. Local development ignores the ids, but they
-# must differ or wrangler treats both bindings as one database.
+# These are the production APAC databases; local development ignores the ids,
+# but they must differ or wrangler treats both bindings as one database.
 [[d1_databases]]
 binding = "DB_SYNC"
 database_name = "notebox-sync"
-database_id = "00000000-0000-0000-0000-000000000001"
+database_id = "6d10cb85-f679-4607-8e1c-e997464fbf20"
 migrations_dir = "migrations/sync"
 
 [[d1_databases]]
 binding = "DB_BLOBS"
 database_name = "notebox-blobs"
-database_id = "00000000-0000-0000-0000-000000000002"
+database_id = "83a461ef-c826-4d3c-909c-1daf1c1dd7d2"
 migrations_dir = "migrations/blobs"
 
 # The one-time setup endpoint is enabled only when this secret exists:

@@ -11,8 +11,10 @@ passes, including note-list arrow keys, Tab trapped inside dialogs and focus
 return after closing a panel.
 A 100 KB note opens in a median under 50 ms in the web UI and typing drops no
 frames; Linux desktop cold start is 555 ms warm. The installer budget now
-measures the `.deb` (9.9 MB), not the self-contained AppImage. The rest of P8 —
-the same drill against a deployed Worker — remains. The
+measures the `.deb` (9.9 MB), not the self-contained AppImage. The free Worker
+is deployed and a fresh browser signed in and synced; the full wipe/pull/history
+drill against the deployed Worker, plus the Windows and Android runtime checks,
+remain. The
 running app can sign in,
 restore a session, sync notes and attachments, show status, list and revoke
 devices, and keep a conflict copy. The web build is served by the Worker and
@@ -38,6 +40,14 @@ the login screen still offers offline use and a different server.
   must be at least 12 characters, setup errors are returned as typed sync
   errors, the temporary setup device is revoked, and the output tells the owner
   to delete `SETUP_TOKEN`.
+- Deployment: the free Worker is live at
+  `https://notebox.nbx-7207a015.workers.dev`. Both APAC D1 databases
+  (`notebox-sync` and `notebox-blobs`) have schema v1 applied, the one-time
+  `SETUP_TOKEN` secret was removed after the single account was created, and the
+  `NBX_SERVER_URL` repository variable points at the Worker. A fresh headless
+  Chromium context signed in, reached "Synced" and wrote welcome-note updates;
+  the verification devices were revoked. The owner still signs in on their own
+  browser with the credentials saved outside the repository.
 - `notes-store`: stable welcome ids. `NewNote` accepts an optional fixed
   `NoteId`, and `create_notebook_with_id` creates a notebook with a supplied
   id. The three welcome notes and two notebooks use fixed UUIDs, so a fresh
@@ -439,11 +449,13 @@ the login screen still offers offline use and a different server.
 | Check | Result |
 | --- | --- |
 | Native tests | 217 passed, 1 skipped (the ignored Worker client e2e) |
-| CI | Run 39556401276 on 373d9a8: all eight jobs green (gates, wasm, server, Windows, Android, desktop, OPFS, web) |
+| CI | Run 39557002822 on c91fe0c: all eight jobs green (gates, wasm, server, Windows, Android, desktop, OPFS, web) |
 | P8 backup restore (Playwright) | 18/18 checks: fresh-profile export/import of a notebook, pinned tagged note and trashed note; text, tag, pin, trash, attachment row, decoded WebP, history peer label and idempotent second import; no console errors |
 | P8 wipe and sign-in (Playwright + local Worker) | 11/11 checks: derived login key, account setup, first sync, OPFS/localStorage/cookie/cache wipe, note gone, sign in, note body/tag/pin, history labelled as the other device, no duplicate, no console errors |
 | P8 accessibility (Playwright + axe-core) | 30/30 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; note-list Arrow/Home/Enter, Tab and Shift+Tab stay inside the three dialogs, focus return after overlays, Settings/Login/dialog autofocus; no console errors |
 | Web login preview | Rebuilt release at 2026-10-21: the Worker origin is read-only with no URL input, the offline action is visible, and the screen has no horizontal overflow or console errors at 1400 px and 390 px |
+| Live Worker deployment | `https://notebox.nbx-7207a015.workers.dev` serves the release build; `/version.json` reports 0.1.0 / c91fe0c. A fresh Chromium context signed in, reached "Synced", wrote welcome-note updates to D1 and showed no console errors; both verification devices were revoked |
+| Remote D1 migrations | `notebox-sync` and `notebox-blobs` each applied `0001_init.sql`; `wrangler d1 migrations list --remote` reports no pending migrations |
 | P8 large note (web UI) | 102,415 B note: open median 11.5–42.9 ms across four runs (individual opens up to 57.7 ms); 120 typed characters, input-to-frame p95 8.4–9.0 ms, max 10.9–22.0 ms, none over 34 ms; text survives a reload; web cold start 786–1010 ms |
 | P8 desktop cold start (Linux release) | warm median 555 ms over 5 runs (547–587 ms), budget 600 ms; first run 628 ms with sample seeding, 2,170 ms when WebKit's cache is cold; Xvfb with isolated XDG directories |
 | P8 backup archive | v2 manifest plus one full Loro snapshot per note; v1 archives still read; restore over newer local edits keeps both timelines |
@@ -490,10 +502,11 @@ the login screen still offers offline use and a different server.
 
 ## Blocked
 
-- **Cloudflare**: no `wrangler login` on this machine. S3 needs a deployed
-  Worker for the 10 ms CPU check; the P2 remote migrations, `SETUP_TOKEN`
-  secret and deploy are blocked for the same reason. The exact commands are in
-  README, "Deploying the free Worker".
+- **Owner sign-in**: the Worker, both D1 databases and the single account exist,
+  the setup secret is gone and `NBX_SERVER_URL` is set. The owner still has to
+  save the generated username and passphrase outside the repository and sign in
+  at the live URL; native Windows/Linux login and sync still need a live run.
+  There is no password reset.
 - **Android runtime**: no `/dev/kvm` and no Android SDK, so S2/S5 cannot be run
   on a device or emulator locally, and the P4/P6 Android screenshot, camera and
   boot checks are still missing. The local `aarch64-linux-android` check also
@@ -507,13 +520,14 @@ the login screen still offers offline use and a different server.
   `ANDROID_KEY_PASSWORD`. The first `v*` tag will also exercise the clean-runner
   Linux and Windows install smoke jobs. The desktop update-available notice is
   not implemented; only the web build has one.
-- **P8 account drill**: the wipe, sign-in and history pull now passes against
-  `wrangler dev --local`, including an OPFS and session wipe. The same drill
-  against a deployed Worker still waits on a Cloudflare login and deploy. A
-  wiped device still seeds the welcome set before sign-in, but the fixed sample
-  ids make it merge with the account's copies instead of adding duplicates. If
-  the account had trashed those samples, a fresh device can still push their
-  metadata again; decide whether to seed only after offline mode is chosen.
+- **P8 account drill**: the wipe, sign-in and history pull passes against
+  `wrangler dev --local`, including an OPFS and session wipe. The deployed Worker
+  now accepts a fresh browser sign-in and first sync; the full wipe/pull/history
+  drill against the deployed Worker still needs a run. A wiped device still
+  seeds the welcome set before sign-in, but the fixed sample ids make it merge
+  with the account's copies instead of adding duplicates. If the account had
+  trashed those samples, a fresh device can still push their metadata again;
+  decide whether to seed only after offline mode is chosen.
 - **Cold starts and large notes**: Linux desktop cold start is 555 ms warm
   (median of five), under the 600 ms budget; the first run seeds sample notes
   and takes 628 ms, or 2,170 ms with a cold WebKit cache. A 102,415-byte note
@@ -523,31 +537,31 @@ the login screen still offers offline use and a different server.
   (9.9 MB); the 89.6 MB AppImage is an optional self-contained fallback under
   ADR-0015.
 - **Human cross-device acceptance**: the app-side account, sync loop and
-  browser transport are wired, and a two-device browser run passes the P7
-  login, device, conflict and sign-out checks. The human P5/P6/P7 check across
-  a desktop and a phone still waits on a deployed Worker and an Android
-  runtime. The native desktop path is compile-checked and shares the engine
-  tests, but this slice did not drive its login/sync threads through the UI
-  against a live Worker.
+  browser transport are wired, a two-device browser run passes the P7 login,
+  device, conflict and sign-out checks, and the deployed Worker now accepts a
+  live browser sign-in. The human P5/P6/P7 check across a desktop and a phone
+  still waits on an Android runtime and a live native login. The native desktop
+  path is compile-checked and shares the engine tests, but this slice did not
+  drive its login/sync threads through the UI against a live Worker.
 ## Next
 
 1. P8 finish. Accessibility, the 100 KB note, the Linux cold-start budget and
    the installer decision (ADR-0015) pass, and so does the local-Worker
-   wipe/sign-in/history drill. Close P8 with the same drill against a deployed
-   Worker once one exists. Repeat the open-note and cold-start measurements on
-   Windows and Android when those runtimes are available.
-2. Personal release execution: deploy the Worker, create the account with
-   `scripts/create-account`, delete `SETUP_TOKEN`, set the `NBX_SERVER_URL`
-   repository variable and push a `v0.1.0` tag. Verify login and sync on a
-   Windows install, a Linux install and the deployed web app. The welcome-note
-   merge and the unknown-username backoff change need this live check.
+   wipe/sign-in/history drill. The deployed Worker has passed a fresh sign-in
+   and first sync; close P8 with the full wipe/pull/history drill against it.
+   Repeat the open-note and cold-start measurements on Windows and Android when
+   those runtimes are available.
+2. Personal release execution: the Worker is deployed, the account is created,
+   `SETUP_TOKEN` is deleted and `NBX_SERVER_URL` is set. Push a `v0.1.0` tag and
+   watch the first release workflow, then verify login and sync on a Windows
+   install, a Linux install and the deployed web app. The welcome-note merge and
+   the unknown-username backoff change need this live check.
 3. P7 release execution for Android when wanted: create and back up the
    keystore, set the four repository secrets, set `RELEASE_ANDROID=true`, and
    publish a tagged release. Then add the desktop update-available notice (the
    web banner is done) and a fresh-machine README check. Do not publish an
    unsigned APK.
-4. S3 after `wrangler login`: deploy the Worker with the P7 assets, create the
-   account, measure request CPU with `wrangler tail` and write
+4. S3: measure request CPU on the deployed Worker with `wrangler tail` and write
    `docs/adr/0003-worker-free-tier.md`. Then run the human P5/P6/P7 acceptance
    on a desktop and a phone, including a photo, a version restore and an
    installed PWA update.
