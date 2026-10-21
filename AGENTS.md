@@ -20,7 +20,10 @@ Read PLAN.md first, then docs/STATUS.md.
 3. Edit only the crates you own. For anything else, add a request to docs/STATUS.md and stop.
 4. Run every gate below. Do not say done until all pass.
 5. Update docs/STATUS.md: shipped, measurements, blocked, next.
-6. If a result contradicts PLAN.md, write an ADR in docs/adr/ and stop.
+6. If the change affects the web app or Worker and is meant to be live, merge it,
+   wait for CI, then run `./scripts/deploy-web.sh --if-needed` (see Deploy).
+   Ask the owner first for auth, sync protocol or schema changes.
+7. If a result contradicts PLAN.md, write an ADR in docs/adr/ and stop.
 
 ## Gates
 - cargo fmt --all --check
@@ -31,8 +34,30 @@ Read PLAN.md first, then docs/STATUS.md.
 
 ## Commands
 - dx serve --web | dx serve --desktop | dx serve --android
-- npx wrangler dev --local | npx wrangler deploy
+- npx wrangler dev --local | ./scripts/deploy-web.sh
 - npx wrangler d1 migrations apply <db> --local | --remote
+
+## Deploy
+The live web app and the Worker ship together. Use the guarded script; never run
+`npx wrangler deploy` directly, because it uploads whatever is in
+`target/dx/...` and can publish a stale UI.
+
+- `./scripts/deploy-web.sh --check` reports the live build, the committed diff
+  since it, CI status and remote migration state. It changes nothing.
+- `./scripts/deploy-web.sh --if-needed` deploys only when `origin/main` has
+  runtime changes; it is a no-op for docs/CI/tooling-only commits and when live
+  already matches.
+- Deploy after a web or Worker change is merged and CI is green. Do not deploy
+  docs, CI, test-only or unfinished phase work.
+- Auth/session, sync protocol or D1 schema changes: ask the owner before
+  deploying. If migrations are pending, apply them to both databases with
+  `npx wrangler d1 migrations apply <db> --remote`, then rerun. Never edit an
+  applied migration.
+- The script refuses a dirty tree, a HEAD that is not `origin/main`, a missing
+  or red CI run, and pending migrations. It builds with `NBX_BUILD_ID` and
+  `NBX_GIT_SHA`, deploys, and verifies `/version.json`.
+- If verification fails: `npx wrangler rollback`, then report the live build and
+  what failed.
 
 ## Style
 - Small commits, one concern each.

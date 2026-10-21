@@ -263,7 +263,23 @@ if you installed Rust with rustup). They download no account resources.
 
 ## Deploying the free Worker
 
-These steps need the owner's Cloudflare login; agents cannot run them.
+The web app and the sync API are one Worker, so one deploy publishes both. The
+routine path is a guarded script:
+
+```bash
+./scripts/deploy-web.sh --check      # report only
+./scripts/deploy-web.sh --if-needed  # deploy only if main has runtime changes
+```
+
+It refuses a dirty tree, a HEAD that is not the tip of `origin/main`, a missing
+or failed CI run, and pending D1 migrations. It builds the web release with
+`NBX_BUILD_ID` and `NBX_GIT_SHA`, deploys, and checks that `/version.json`
+reports the commit. `--wait` waits for a running CI job; `--dry-run` builds
+without uploading. The script adds `~/.cargo/bin` to `PATH` itself, so `dx`
+0.7.10 and `worker-build` 0.8.7 do not need to be on the agent's PATH.
+
+The one-time setup still needs the owner's Cloudflare login. Once `wrangler` is
+logged in, agents can run the routine deploy script:
 
 ```bash
 npx wrangler login
@@ -273,16 +289,21 @@ npx wrangler d1 create notebox-blobs    # copy the database_id
 npx wrangler d1 migrations apply notebox-sync --remote
 npx wrangler d1 migrations apply notebox-blobs --remote
 npx wrangler secret put SETUP_TOKEN     # generate a long random value
+./scripts/deploy-web.sh
+```
+
+The Worker serves the built web app through `[assets]` in `wrangler.toml`, so
+open the deployed URL itself rather than a separate static host. `web-build.sh`
+writes the service worker, manifest, icons and `_headers` that make the app
+installable and offline-ready. On a fork without a GitHub Actions CI run, use
+the two underlying commands directly:
+
+```bash
 NBX_BUILD_ID="$(git rev-parse --short HEAD)" \
   NBX_GIT_SHA="$(git rev-parse HEAD)" \
   ./scripts/web-build.sh
 npx wrangler deploy
 ```
-
-The Worker serves the built web app through `[assets]` in `wrangler.toml`, so
-open the deployed URL itself rather than a separate static host. Run
-`web-build.sh` before every deploy: it writes the service worker, manifest,
-icons and `_headers` that make the app installable and offline-ready.
 
 After deploying, create the single account while `SETUP_TOKEN` still exists:
 
@@ -377,8 +398,9 @@ git push origin v0.1.0
 ```
 
 Windows installers are not code-signed, so SmartScreen may warn; there is no
-paid certificate in this project. The Worker deploy remains manual: the release
-web `.zip` is a tested artifact, not an automatic deploy.
+paid certificate in this project. The Worker deploy remains an explicit step:
+`./scripts/deploy-web.sh` for this deployment. The release web `.zip` is a
+tested artifact, not an automatic deploy.
 
 ## Free-tier rule
 

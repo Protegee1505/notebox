@@ -48,6 +48,14 @@ the login screen still offers offline use and a different server.
   Chromium context signed in, reached "Synced" and wrote welcome-note updates;
   the verification devices were revoked. The owner still signs in on their own
   browser with the credentials saved outside the repository.
+- `scripts/deploy-web.sh`: guarded web deploy for agents. `--check` reports the
+  live build, the committed diff since it, CI and remote migration state without
+  changing anything; `--if-needed` is a no-op when live already matches
+  `origin/main` or only docs/CI/tooling changed. A deploy requires a clean tip
+  of `origin/main`, a green CI run and no pending D1 migrations, builds with the
+  commit stamp, deploys with a version message, verifies `/version.json` and
+  prints the rollback command. `AGENTS.md` now points agents at the script
+  instead of raw `wrangler deploy`.
 - `notes-store`: stable welcome ids. `NewNote` accepts an optional fixed
   `NoteId`, and `create_notebook_with_id` creates a notebook with a supplied
   id. The three welcome notes and two notebooks use fixed UUIDs, so a fresh
@@ -455,6 +463,7 @@ the login screen still offers offline use and a different server.
 | P8 accessibility (Playwright + axe-core) | 30/30 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; note-list Arrow/Home/Enter, Tab and Shift+Tab stay inside the three dialogs, focus return after overlays, Settings/Login/dialog autofocus; no console errors |
 | Web login preview | Rebuilt release at 2026-10-21: the Worker origin is read-only with no URL input, the offline action is visible, and the screen has no horizontal overflow or console errors at 1400 px and 390 px |
 | Live Worker deployment | `https://notebox.nbx-7207a015.workers.dev` serves the release build; `/version.json` reports 0.1.0 / c91fe0c. A fresh Chromium context signed in, reached "Synced", wrote welcome-note updates to D1 and showed no console errors; both verification devices were revoked |
+| Deploy guard | `./scripts/deploy-web.sh --check` reports live 0.1.0 / c91fe0c, a green CI run for `main`, no pending migrations on either D1 database, and blocks on a dirty tree before any build |
 | Remote D1 migrations | `notebox-sync` and `notebox-blobs` each applied `0001_init.sql`; `wrangler d1 migrations list --remote` reports no pending migrations |
 | P8 large note (web UI) | 102,415 B note: open median 11.5–42.9 ms across four runs (individual opens up to 57.7 ms); 120 typed characters, input-to-frame p95 8.4–9.0 ms, max 10.9–22.0 ms, none over 34 ms; text survives a reload; web cold start 786–1010 ms |
 | P8 desktop cold start (Linux release) | warm median 555 ms over 5 runs (547–587 ms), budget 600 ms; first run 628 ms with sample seeding, 2,170 ms when WebKit's cache is cold; Xvfb with isolated XDG directories |
@@ -549,8 +558,9 @@ the login screen still offers offline use and a different server.
    the installer decision (ADR-0015) pass, and so does the local-Worker
    wipe/sign-in/history drill. The deployed Worker has passed a fresh sign-in
    and first sync; close P8 with the full wipe/pull/history drill against it.
-   Repeat the open-note and cold-start measurements on Windows and Android when
-   those runtimes are available.
+   Run `./scripts/deploy-web.sh --if-needed` after the next web merge so the
+   drill runs against the recorded commit. Repeat the open-note and cold-start
+   measurements on Windows and Android when those runtimes are available.
 2. Personal release execution: the Worker is deployed, the account is created,
    `SETUP_TOKEN` is deleted and `NBX_SERVER_URL` is set. Push a `v0.1.0` tag and
    watch the first release workflow, then verify login and sync on a Windows
