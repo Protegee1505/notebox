@@ -83,6 +83,17 @@ pub fn App() -> Element {
                     "setTimeout(() => document.getElementById('app-root')?.focus(), 0);",
                 );
             },
+            onclick: {
+                let context = context.clone();
+                move |_| {
+                    // A click anywhere outside the colour menu dismisses it
+                    // and still reaches the control under the finger. There is
+                    // no full-screen backdrop that could swallow the tap.
+                    if context.state.peek().color_open {
+                        context.state.write_unchecked().color_open = false;
+                    }
+                }
+            },
             onkeydown: {
                 let context = context.clone();
                 move |event| handle_shortcut(&context, &event)

@@ -940,7 +940,9 @@ kbd {
 }
 
 .note-list {
+  min-width: 0;
   min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   padding: 0 var(--space-4) var(--space-6);
   scrollbar-gutter: stable;
@@ -948,7 +950,7 @@ kbd {
 
 .note-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(13rem, 100%), 1fr));
   gap: var(--space-3);
   align-content: start;
 }
@@ -957,6 +959,7 @@ kbd {
   display: flex;
   flex-direction: column;
   gap: 0.45rem;
+  min-width: 0;
   min-height: 10rem;
   padding: var(--space-3) 0.9rem var(--space-2);
   border: 1px solid var(--tone-edge);
@@ -977,6 +980,14 @@ kbd {
   outline-offset: 2px;
 }
 
+@media (hover: none) {
+  /* A tap should not leave a lifted card behind on a touch screen. */
+  .note-card:hover {
+    transform: none;
+    box-shadow: var(--shadow-sm);
+  }
+}
+
 .note-card.is-selected {
   border-color: var(--primary);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 30%, transparent);
@@ -991,7 +1002,16 @@ kbd {
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-2);
+  min-width: 0;
   min-height: 1rem;
+}
+
+.note-tags {
+  min-width: 0;
+}
+
+.note-tag {
+  overflow-wrap: anywhere;
 }
 
 .pin-mark {
@@ -1027,6 +1047,7 @@ kbd {
   font-weight: 600;
   letter-spacing: -0.015em;
   line-height: 1.25;
+  overflow-wrap: anywhere;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -1038,6 +1059,7 @@ kbd {
   font-size: var(--text-sm);
   line-height: 1.55;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   display: -webkit-box;
   -webkit-line-clamp: 4;
   -webkit-box-orient: vertical;
@@ -1217,6 +1239,7 @@ kbd {
 }
 
 .save-state {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
@@ -1292,13 +1315,6 @@ kbd {
 
 .menu-anchor {
   position: relative;
-}
-
-.popover-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 35;
-  background: transparent;
 }
 
 .color-popover {
@@ -3385,9 +3401,41 @@ kbd {
     align-items: flex-start;
   }
 
+  /* With the sidebar off-canvas the editor can be as narrow as a phone.
+     Keep the header on one line and let the save state be its dot; its text
+     stays in the accessibility tree. */
+  .editor-header {
+    gap: var(--space-1);
+  }
+
+  .editor-where {
+    gap: var(--space-1);
+  }
+
+  .notebook-select {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 8rem;
+  }
+
+  .editor-actions {
+    gap: 0;
+  }
+
+  .save-state .save-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
   .editor-toolbar {
     flex-wrap: wrap;
-    overflow-x: hidden;
     row-gap: 0.15rem;
   }
 
@@ -3461,6 +3509,8 @@ kbd {
   .topbar {
     gap: var(--space-2);
     padding: 0 var(--space-3);
+    background: var(--surface);
+    backdrop-filter: none;
   }
 
   .brand-name,
@@ -3477,8 +3527,8 @@ kbd {
   }
 
   .avatar {
-    width: 1.9rem;
-    height: 1.9rem;
+    width: 2.1rem;
+    height: 2.1rem;
   }
 
   .search-field {
@@ -3494,7 +3544,7 @@ kbd {
   }
 
   .note-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .note-card {
@@ -3506,8 +3556,9 @@ kbd {
   }
 
   .editor-toolbar {
-    flex-wrap: wrap;
-    overflow-x: hidden;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
     padding: 0.3rem var(--space-2);
   }
 
@@ -3625,11 +3676,31 @@ kbd {
   }
 
   .notebook-select {
-    max-width: 8rem;
+    max-width: 7.5rem;
+    padding-right: 1.4rem;
   }
 
   .save-state {
-    max-width: 7rem;
+    max-width: none;
+  }
+
+  /* A fixed sheet keeps the menu inside the viewport even when the header is
+     tight. Tapping anywhere else closes it without swallowing the tap. */
+  .color-popover {
+    position: fixed;
+    top: auto;
+    right: var(--space-3);
+    bottom: var(--space-4);
+    left: var(--space-3);
+    z-index: 70;
+    width: auto;
+    grid-template-columns: repeat(4, 1fr);
+    justify-items: center;
+  }
+
+  .color-swatch {
+    width: 2.2rem;
+    height: 2.2rem;
   }
 }
 

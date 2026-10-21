@@ -13,7 +13,7 @@ use std::rc::Rc;
 #[cfg(target_arch = "wasm32")]
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
-use notes_core::{Note, NoteVersion};
+use notes_core::{plain_line, Note, NoteVersion};
 use notes_proto::{NoteId, Notebook, NotebookId};
 use notes_store::{
     Attachment, ImportReport, NewNote, NoteQuery, NoteStore, NoteSummary, NoteView, SearchQuery,
@@ -897,10 +897,7 @@ impl AppContext {
                 state.saved_text = text;
                 state.dirty = false;
                 state.saved_at = saved_at;
-                state.find_open = false;
-                state.find_query.clear();
-                state.find_index = 0;
-                state.color_open = false;
+                hide_editor_overlays(&mut state);
                 state.undo.clear();
                 state.redo.clear();
                 state.last_undo = None;
@@ -1558,6 +1555,7 @@ impl AppContext {
         state.redo.clear();
         state.mobile_list = true;
         hide_history(&mut state);
+        hide_editor_overlays(&mut state);
     }
 
     fn mutate_selected(&self, edit: impl FnOnce(&Note) -> Result<bool, notes_core::NoteError>) {
@@ -1655,6 +1653,7 @@ impl AppContext {
         state.shortcuts_open = false;
         state.sidebar_open = false;
         hide_history(&mut state);
+        hide_editor_overlays(&mut state);
         if screen == Screen::Notes {
             state.mobile_list = state.selected.is_none();
         }
@@ -2373,6 +2372,7 @@ impl AppContext {
             state.sync.confirm_revoke = None;
             state.screen = Screen::Notes;
             state.mobile_list = state.selected.is_none();
+            hide_editor_overlays(&mut state);
         }
         self.toast_success(format!("Connected as {}", success.account.username));
         // Do not show “Synced” before anything has been synced. Starting the
@@ -2408,6 +2408,7 @@ impl AppContext {
             state.sync.status = SyncStatus::Local;
             state.screen = Screen::Notes;
             state.mobile_list = state.selected.is_none();
+            hide_editor_overlays(&mut state);
         }
         self.toast_info("Your notes stay on this device.");
     }
@@ -2882,7 +2883,7 @@ impl AppContext {
         let meta = store.note_summary(&original).ok();
         let original_title = meta
             .as_ref()
-            .map(|summary| summary.title.trim().to_string())
+            .map(|summary| plain_line(&summary.title))
             .filter(|title| !title.is_empty())
             .unwrap_or_else(|| "untitled note".to_string());
         let body = format!("Conflict copy of {original_title}\n\n{text}");
@@ -3529,6 +3530,16 @@ fn attachment_set_changed(draft: &str, attachments: &[Attachment]) -> bool {
             .any(|reference| !attachments.iter().any(|item| item.hash == reference.hash))
 }
 
+/// Close overlays that belong to the open editor. They must not survive a
+/// screen change or a login, where the user sees no menu but every tap would
+/// still land on its backdrop.
+fn hide_editor_overlays(state: &mut AppState) {
+    state.color_open = false;
+    state.find_open = false;
+    state.find_query.clear();
+    state.find_index = 0;
+}
+
 /// Clear the history panel when the note or the list changes underneath it.
 ///
 /// Separate from [`AppContext::close_history`] so callers already holding the
@@ -3614,11 +3625,15 @@ pub const COLORS: [(&str, &str); 7] = [
 ];
 
 /// Title for a note, with the placeholder the list uses.
+///
+/// Summaries are cached in the store and may have been written by a build
+/// that kept an image data URL in the title, so sanitise on display too.
 pub fn note_title(note: &NoteSummary) -> String {
-    if note.title.trim().is_empty() {
+    let title = plain_line(&note.title);
+    if title.trim().is_empty() {
         "Untitled note".to_string()
     } else {
-        note.title.clone()
+        title
     }
 }
 
@@ -3635,10 +3650,11 @@ pub fn edited_label(updated_at: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        attachment_label, attachment_set_changed, find_match_count, restore_summary, tone_class,
-        word_count, PendingRestore,
+        attachment_label, attachment_set_changed, find_match_count, note_title, restore_summary,
+        tone_class, word_count, PendingRestore,
     };
-    use notes_store::{Attachment, ImportReport};
+    use notes_proto::NoteId;
+    use notes_store::{Attachment, ImportReport, NoteSummary};
     use std::rc::Rc;
 
     fn attachment(hash: &str) -> Attachment {
@@ -3651,6 +3667,24 @@ mod tests {
             uploaded: false,
             created_at: 1_000,
         }
+    }
+
+    #[test]
+    fn cached_image_titles_are_sanitised_on_display() {
+        let note = NoteSummary {
+            id: NoteId::new(),
+            title: format!("![image](data:image/png;base64,{})", "A".repeat(500)),
+            preview: String::new(),
+            notebook_id: None,
+            tags: Vec::new(),
+            pinned: false,
+            archived: false,
+            color: None,
+            created_at: 0,
+            updated_at: 0,
+            trashed_at: None,
+        };
+        assert_eq!(note_title(&note), "image");
     }
 
     #[test]

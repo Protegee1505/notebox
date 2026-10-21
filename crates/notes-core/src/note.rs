@@ -337,7 +337,10 @@ impl Note {
 
     /// Title: the first non-empty line, without leading heading markers.
     ///
-    /// Empty for an empty note; the UI shows a translated placeholder there.
+    /// Markdown images become their alt text, so a pasted screenshot does not
+    /// turn its data URL into a card-width title. Empty for an empty note or
+    /// a first line that is only an image without alt text; the UI shows a
+    /// translated placeholder there.
     pub fn title(&self) -> String {
         let text = self.text();
         for line in text.lines() {
@@ -351,7 +354,11 @@ impl Note {
             } else {
                 without_heading
             };
-            return truncate_chars(title, TITLE_MAX_CHARS);
+            let title = strip_images(title);
+            if title.is_empty() {
+                return String::new();
+            }
+            return truncate_chars(&title, TITLE_MAX_CHARS);
         }
         String::new()
     }
@@ -480,6 +487,16 @@ fn strip_line_markers(line: &str) -> &str {
     line.trim_start_matches('#').trim()
 }
 
+/// Plain text for a one-line label, with Markdown images replaced by their
+/// alt text and whitespace collapsed.
+///
+/// Stored summary titles are written by older builds too, so the UI calls
+/// this when it renders them. It keeps old image notes from displaying a
+/// data URL after the title rule changes.
+pub fn plain_line(line: &str) -> String {
+    strip_images(line)
+}
+
 /// Replace Markdown images with their alt text so a card never shows a long
 /// attachment URL. The note body remains the source of truth; this only
 /// affects the plain-text preview.
@@ -530,6 +547,18 @@ mod tests {
         let title = note(&long).title();
         assert_eq!(title.chars().count(), TITLE_MAX_CHARS + 1);
         assert!(title.ends_with('…'));
+    }
+
+    #[test]
+    fn title_replaces_images_with_their_alt_text() {
+        let data_url = format!("![image](data:image/png;base64,{})", "A".repeat(500));
+        assert_eq!(note(&data_url).title(), "image");
+    }
+
+    #[test]
+    fn title_of_an_image_without_alt_text_is_empty() {
+        let data_url = format!("![](data:image/png;base64,{})", "A".repeat(500));
+        assert_eq!(note(&data_url).title(), "");
     }
 
     #[test]

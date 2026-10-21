@@ -34,7 +34,7 @@ pub use export::{
 pub use history::NoteVersion;
 pub use markdown::{render_markdown, render_markdown_with_images};
 pub use note::{
-    normalize_tags, Note, NoteMeta, META_CONTAINER, PREVIEW_MAX_CHARS, TITLE_MAX_CHARS,
+    normalize_tags, plain_line, Note, NoteMeta, META_CONTAINER, PREVIEW_MAX_CHARS, TITLE_MAX_CHARS,
 };
 pub use text::{apply_replacement, diff_replacement, TextReplacement};
 pub use version::{decode_version_vector, encode_version_vector};

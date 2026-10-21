@@ -414,6 +414,184 @@ try {
   await settle(page);
   await audit("settings, mobile dark");
 
+  // ---- Phone regression: long image titles, narrow chrome, one-tap Back. ----
+  await page.getByRole("button", { name: "Back to notes" }).click();
+  await page.locator("#note-editor").waitFor();
+  await page.getByRole("button", { name: "Back to notes" }).click();
+  await page.locator(".workspace.show-list").waitFor();
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.locator(".sidebar.is-open").waitFor();
+  await page.locator(".new-note-button").click();
+  await page.locator("#note-editor").waitFor();
+  const imageNote = `![image](data:image/png;base64,${"A".repeat(600)})`;
+  await page.locator("#note-editor").fill(imageNote);
+  await settle(page, 1200);
+  await page.getByRole("button", { name: "Back to notes" }).click();
+  await page.locator(".workspace.show-list").waitFor();
+  await settle(page, 250);
+
+  const imageTitle = page
+    .locator(".note-card .note-title")
+    .filter({ hasText: "image" })
+    .first();
+  const shownTitle = (await imageTitle.textContent())?.trim() ?? "";
+  results.push(
+    check(
+      "image note shows a short title, not its data URL",
+      shownTitle.length > 0 &&
+        shownTitle.length < 40 &&
+        !shownTitle.includes("data:image"),
+      shownTitle,
+    ),
+  );
+
+  for (const width of [390, 360, 320]) {
+    await page.setViewportSize({ width, height: 780 });
+    await settle(page, 300);
+    const layout = await page.evaluate(() => {
+      const list = document.querySelector(".note-list");
+      const cards = [...document.querySelectorAll(".note-card")];
+      return {
+        documentWidth: document.documentElement.scrollWidth,
+        viewport: window.innerWidth,
+        listWidth: list?.clientWidth ?? 0,
+        listScrollWidth: list?.scrollWidth ?? 0,
+        listRight: list ? Math.ceil(list.getBoundingClientRect().right) : 0,
+        cardRights: cards.map((card) =>
+          Math.ceil(card.getBoundingClientRect().right),
+        ),
+      };
+    });
+    results.push(
+      check(
+        `note cards fit a ${width}px phone list`,
+        layout.viewport === width &&
+          layout.documentWidth <= width + 1 &&
+          layout.listScrollWidth <= layout.listWidth + 1 &&
+          layout.cardRights.every((right) => right <= layout.listRight + 1),
+        JSON.stringify(layout),
+      ),
+    );
+  }
+
+  const imageCard = page
+    .locator(".note-card")
+    .filter({ has: page.locator(".note-title", { hasText: /^image$/ }) })
+    .first();
+  await imageCard.click();
+  await page.locator("#note-editor").waitFor();
+  await settle(page, 250);
+
+  const chrome = await page.evaluate(() => {
+    const box = (element) => {
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return { left: rect.left, right: rect.right, width: rect.width };
+    };
+    const header = document.querySelector(".editor-header");
+    const toolbar = document.querySelector(".editor-toolbar");
+    const quote = [...toolbar.querySelectorAll("button")].find(
+      (button) => button.getAttribute("aria-label") === "Quote",
+    );
+    return {
+      viewport: window.innerWidth,
+      headerWidth: header.clientWidth,
+      headerScrollWidth: header.scrollWidth,
+      back: box(document.querySelector(".back-button")),
+      actions: box(document.querySelector(".editor-actions")),
+      save: box(document.querySelector(".save-state")),
+      toolbarWidth: toolbar.clientWidth,
+      toolbarScrollWidth: toolbar.scrollWidth,
+      quote: box(quote),
+    };
+  });
+  results.push(
+    check(
+      "editor header fits a 320px phone",
+      chrome.viewport === 320 &&
+        chrome.headerScrollWidth <= chrome.headerWidth + 1 &&
+        chrome.back?.left >= 0 &&
+        chrome.actions?.right <= chrome.viewport + 1 &&
+        chrome.save?.right <= chrome.viewport + 1,
+      JSON.stringify(chrome),
+    ),
+  );
+  results.push(
+    check(
+      "formatting toolbar scrolls instead of hiding controls",
+      chrome.toolbarScrollWidth > chrome.toolbarWidth &&
+        (chrome.quote?.width ?? 0) > 0,
+      JSON.stringify({
+        client: chrome.toolbarWidth,
+        scroll: chrome.toolbarScrollWidth,
+        quote: chrome.quote,
+      }),
+    ),
+  );
+
+  const quote = page.getByRole("button", { name: "Quote" });
+  await quote.scrollIntoViewIfNeeded();
+  const quoteBox = await quote.boundingBox();
+  results.push(
+    check(
+      "Quote button is reachable at 320px",
+      Boolean(
+        quoteBox &&
+          quoteBox.x >= -1 &&
+          quoteBox.x + quoteBox.width <= 321,
+      ),
+      JSON.stringify(quoteBox),
+    ),
+  );
+
+  await page.getByRole("button", { name: "Note colour" }).click();
+  await page.locator(".color-popover").waitFor();
+  const menuBox = await page.locator(".color-popover").boundingBox();
+  results.push(
+    check(
+      "colour menu stays inside a 320px viewport",
+      Boolean(
+        menuBox &&
+          menuBox.x >= 0 &&
+          menuBox.x + menuBox.width <= 321 &&
+          menuBox.y >= 0 &&
+          menuBox.y + menuBox.height <= 781,
+      ),
+      JSON.stringify(menuBox),
+    ),
+  );
+
+  const backButton = page.getByRole("button", { name: "Back to notes" });
+  const backBox = await backButton.boundingBox();
+  if (backBox) {
+    await page.mouse.click(
+      backBox.x + backBox.width / 2,
+      backBox.y + backBox.height / 2,
+    );
+    await settle(page, 350);
+  }
+  const workspaceClass =
+    (await page.locator(".workspace").getAttribute("class")) ?? "";
+  results.push(
+    check(
+      "one tap on Back leaves the editor with the colour menu open",
+      workspaceClass.includes("show-list"),
+      workspaceClass,
+    ),
+  );
+
+  await page.getByRole("button", { name: "Open settings" }).click();
+  await page.getByRole("heading", { name: "Local data" }).waitFor();
+  await page.getByRole("button", { name: "Back to notes" }).click();
+  await page.locator("#note-editor").waitFor();
+  await page.getByRole("button", { name: "Back to notes" }).click();
+  await page.locator(".workspace.show-list").waitFor();
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.locator(".sidebar.is-open").waitFor();
+  results.push(check("phone Settings and navigation open", true));
+  await page.locator(".scrim").click();
+  await settle(page, 200);
+
   await page.screenshot({ path: path.join(tmpdir(), "notebox-a11y.png") });
 } catch (error) {
   results.push(check("accessibility run completed", false, String(error)));

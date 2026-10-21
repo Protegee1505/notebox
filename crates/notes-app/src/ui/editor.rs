@@ -128,7 +128,11 @@ pub fn EditorPane() -> Element {
         .as_ref()
         .map(note_title)
         .unwrap_or_else(|| "Untitled note".to_string());
-    let edited = edited_label(saved_at);
+    let save_label = if dirty {
+        "Unsaved".to_string()
+    } else {
+        edited_label(saved_at)
+    };
     let tone = tone_class(if note_color.is_empty() {
         None
     } else {
@@ -208,13 +212,13 @@ pub fn EditorPane() -> Element {
                             option { key: "{notebook.id}", value: "{notebook.id}", "{notebook.name}" }
                         }
                     }
-                    span { class: "save-state",
+                    span { class: "save-state", title: "{save_label}",
                         if dirty {
-                            span { class: "save-dot is-dirty" }
-                            "Unsaved"
+                            span { class: "save-dot is-dirty", aria_hidden: "true" }
+                            span { class: "save-label", "{save_label}" }
                         } else {
-                            span { class: "save-dot" }
-                            "{edited}"
+                            span { class: "save-dot", aria_hidden: "true" }
+                            span { class: "save-label", "{save_label}" }
                         }
                     }
                 }
@@ -269,7 +273,8 @@ pub fn EditorPane() -> Element {
                             title: "Note colour",
                             onclick: {
                                 let context = context.clone();
-                                move |_| {
+                                move |event| {
+                                    event.stop_propagation();
                                     let open = context.state.peek().color_open;
                                     context.state.write_unchecked().color_open = !open;
                                 }
@@ -278,13 +283,10 @@ pub fn EditorPane() -> Element {
                         }
                         if color_open {
                             div {
-                                class: "popover-backdrop",
-                                onclick: {
-                                    let context = context.clone();
-                                    move |_| context.state.write_unchecked().color_open = false
-                                }
-                            }
-                            div { class: "color-popover", role: "menu", aria_label: "Note colour",
+                                class: "color-popover",
+                                role: "menu",
+                                aria_label: "Note colour",
+                                onclick: move |event| event.stop_propagation(),
                                 for (value, label) in COLORS {
                                     button {
                                         key: "{value}",
