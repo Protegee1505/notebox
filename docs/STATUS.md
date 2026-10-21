@@ -33,6 +33,16 @@ the login screen still offers offline use and a different server.
 
 ## Shipped
 
+- `notes-app`: **fix the sync crash that froze the phone**. The first sync that
+  downloaded an image attachment panicked in `load_attachments` with
+  `AlreadyBorrowed`: `if let Some(id) = self.state.peek().selected` kept the
+  read guard alive across `load_attachments`'s write guard. The selected id is
+  now copied out before the call, and the same guard ordering is fixed in the
+  `open_history` "no note" branch. Reproduced by replaying the live account's
+  55-update log and 39 KB WebP into a local Worker and a debug wasm build:
+  before the fix the panel showed `RuntimeError: unreachable` right after
+  `GET /v1/blob/...`; after it the sync completed with the panel hidden and no
+  console errors.
 - `notes-core` and `notes-app`: **phone title, layout and tap fixes**.
   `Note::title()` replaces Markdown images with their alt text, and the UI also
   sanitises cached summary titles on display and in conflict copies, so notes
@@ -602,14 +612,16 @@ the login screen still offers offline use and a different server.
   with the account's copies instead of adding duplicates. If the account had
   trashed those samples, a fresh device can still push their metadata again;
   decide whether to seed only after offline mode is chosen.
-- **Owner phone freeze retest**: the image-title overflow and the one-tap
-  colour-backdrop blocker are fixed and verified at 320–390 px, but the total
-  dead-tap freeze on the owner's Brave Android device was not reproduced in
-  headless Chromium with a 360 px touch viewport. The local-Worker sign-in and
-  sync path stayed interactive. Retest the deployed build on the phone; if the
-  freeze returns, the new panic panel or the remote `chrome://inspect` console
-  should show whether a wasm panic or another overlay is responsible. Whether
-  Chrome on the same phone behaves differently is still open.
+- **Owner phone freeze retest**: the total dead-tap freeze was a wasm panic,
+  not the image-title overflow or the colour backdrop. The first signed-in sync
+  that downloaded an image attachment hit `AlreadyBorrowed` in
+  `load_attachments` (see Shipped) and trapped the wasm instance; the new panic
+  panel showed `RuntimeError: unreachable`. The guard ordering is fixed and the
+  failure was reproduced and re-tested locally with the live account data. The
+  fix still needs the deployed build checked on the owner's Brave Android
+  device. The OPFS image and the server both keep the notes; if the interrupted
+  run did not persist its pull or attachment, the next boot repeats that pull
+  and download under the fixed code.
 - **Cold starts and large notes**: Linux desktop cold start is 555 ms warm
   (median of five), under the 600 ms budget; the first run seeds sample notes
   and takes 628 ms, or 2,170 ms with a cold WebKit cache. A 102,415-byte note

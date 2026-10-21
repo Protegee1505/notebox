@@ -5,15 +5,16 @@
 // It boots `wrangler dev --local` with both D1 databases on a throwaway
 // persistence directory, serves the release web build, and drives Chromium:
 //
-// 1. Create a tagged, pinned note.
+// 1. Create a tagged, pinned note and attach a small image.
 // 2. Sign in. Time three rejected attempts to record the browser's Argon2id
 //    login key, capture the key from the first request, create the one account
 //    with the setup token, then sign in for real and wait for the first sync.
 // 3. Close the browser, delete the OPFS database, localStorage, cookies and
 //    service-worker caches. The next launch is a wiped device.
 // 4. Confirm the note is gone, sign in again with the same password, and
-//    find the note, its tag, its pin and a history version produced on the
-//    other device.
+//    find the note, its tag, its pin, its image and a history version produced
+//    on the other device. The first attachment download must not crash the
+//    wasm build.
 //
 //   PLAYWRIGHT_MODULES=/path/to/node_modules \
 //   node scripts/web-wipe-login.mjs
@@ -44,6 +45,9 @@ const marker = `Wipe-${Date.now()}`;
 const title = `${marker} note`;
 const body = `${title}\n\nThis note and its history must survive a wipe.`;
 const tag = "wipe-tag";
+// A valid 1x1 PNG; the app re-encodes it as WebP before syncing.
+const DOT_PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 const failureShot = path.join(tmpdir(), "notebox-web-wipe-failure.png");
 
 const env = {
@@ -288,6 +292,22 @@ try {
   );
   await page.waitForTimeout(800);
 
+  // Attach a real image, so the second device downloads an attachment on its
+  // first sync. That download used to trap the wasm build in load_attachments.
+  await page.getByLabel("Image attachments").setInputFiles({
+    name: "dot.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(DOT_PNG, "base64"),
+  });
+  await page.locator(".attachment-row").first().waitFor({ timeout: 60_000 });
+  await page.waitForFunction(
+    () => !document.querySelector(".attachment-working"),
+    null,
+    { timeout: 60_000 },
+  );
+  await page.waitForTimeout(800);
+  results.push(check("the first device attached an image", true));
+
   await openLogin(page);
   allowedAuthFailures = 3;
   // Three wrong-account attempts: the account does not exist yet, so the
@@ -359,6 +379,15 @@ try {
   await page.getByRole("button", { name: "Connect" }).click();
   await waitForMarker(page);
   await waitForSynced(page);
+  await page.waitForTimeout(1500);
+  const crash = page.locator("#notebox-crash");
+  results.push(
+    check(
+      "the first attachment download did not crash the app",
+      !(await crash.isVisible()),
+      (await crash.innerText()).slice(0, 120),
+    ),
+  );
   results.push(check("signing in pulled the note back", true));
   results.push(
     check(
@@ -381,6 +410,16 @@ try {
     check(
       "the tag came back",
       (await page.locator(".editor-tag", { hasText: tag }).count()) === 1,
+    ),
+  );
+  await page.locator(".attachment-row").first().waitFor({ timeout: 30_000 });
+  const attachmentText = await page.locator(".attachment-strip").innerText();
+  results.push(
+    check(
+      "the image attachment came back with its bytes",
+      !attachmentText.includes("not downloaded") &&
+        !attachmentText.includes("Waiting"),
+      attachmentText.slice(0, 120),
     ),
   );
   results.push(

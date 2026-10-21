@@ -1710,7 +1710,10 @@ impl AppContext {
         // Capture the text box first: the panel shows saved versions, not a
         // draft that only exists in the DOM.
         self.save_now();
-        let Some(note_id) = self.state.peek().selected else {
+        // Copy the id out of the guard first: `toast_info` writes the signal,
+        // and an `if let`/`let else` on `peek()` would still hold the read.
+        let selected = self.state.peek().selected;
+        let Some(note_id) = selected else {
             self.toast_info("Open a note to see its history");
             return;
         };
@@ -2765,11 +2768,17 @@ impl AppContext {
         // flight. Its merged body is newer than what the editor read.
         self.refresh_selected_after_run(base_id, report.finished_at);
         if report.attachments.downloaded > 0 {
-            if let Some(id) = self.state.peek().selected {
+            // Drop the read guard before `load_attachments` takes the write
+            // guard. An `if let` on `peek()` keeps its temporary alive through
+            // the body, which panicked the wasm build (AlreadyBorrowed) after
+            // the first attachment download.
+            let selected = self.state.peek().selected;
+            if let Some(id) = selected {
                 self.load_attachments(id);
             }
         }
-        if self.state.peek().history_open && report.outcome.pulled > 0 {
+        let history_open = self.state.peek().history_open;
+        if history_open && report.outcome.pulled > 0 {
             self.open_history();
         }
     }
