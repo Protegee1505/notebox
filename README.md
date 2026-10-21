@@ -234,13 +234,14 @@ manifest, so a running dev server can 404 the newly hashed files.
 Create the local account once, while the dev setup token is present:
 
 ```bash
-NBX_SETUP_TOKEN=local-dev-token ./scripts/create-account \
+./scripts/create-account \
   --server http://127.0.0.1:8787 --username alice
 ```
 
-The script asks for the passphrase twice and never prints it. It removes its
-temporary setup device, so the account starts clean. There is no in-app sign-up;
-this is also the command for a deployed self-hosted Worker.
+Enter `local-dev-token` at the setup-token prompt. The script asks for the
+passphrase twice and never prints either secret. It removes its temporary setup
+device, so the account starts clean. There is no in-app sign-up; this is also
+the command for a deployed self-hosted Worker.
 
 Run the full HTTP test, including setup, login backoff, sync pagination,
 attachment chunks and device revocation, against a throwaway local Worker:
@@ -286,15 +287,20 @@ icons and `_headers` that make the app installable and offline-ready.
 After deploying, create the single account while `SETUP_TOKEN` still exists:
 
 ```bash
-NBX_SETUP_TOKEN="the value you just set" ./scripts/create-account \
+./scripts/create-account \
   --server https://notebox.<your-subdomain>.workers.dev --username alice
 npx wrangler secret delete SETUP_TOKEN
 ```
 
-The second command closes setup permanently: `POST /v1/auth/setup` then answers
-`503`, and only the existing account can sign in. There is no in-app sign-up
-and no second account. For personal installers, set the URL as a repository
-variable before tagging:
+The script prompts for the setup token and passphrase without echo, so neither
+secret enters your shell history. The second command closes setup permanently:
+`POST /v1/auth/setup` then answers `503`, and only the existing account can sign
+in. There is no in-app sign-up and no second account. Use a username you do not
+publish: an unknown username no longer counts toward the login backoff, but
+someone who knows the real one can still trigger the account-wide delay with
+wrong keys.
+
+For personal installers, set the URL as a repository variable before tagging:
 
 ```bash
 gh variable set NBX_SERVER_URL \

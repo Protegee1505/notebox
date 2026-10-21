@@ -3,13 +3,13 @@
 //! Run it once after deploying, while `SETUP_TOKEN` still exists:
 //!
 //! ```text
-//! NBX_SETUP_TOKEN=... cargo run -p notes-sync --example create_account -- \
+//! cargo run -p notes-sync --example create_account -- \
 //!     --server https://notebox.example.workers.dev --username alice
 //! ```
 //!
-//! The setup token is the short-lived secret set with
-//! `npx wrangler secret put SETUP_TOKEN`. Delete that secret after the account
-//! exists; the server then refuses every later setup attempt.
+//! The setup token is prompted without echo. It is the short-lived secret set
+//! with `npx wrangler secret put SETUP_TOKEN`; delete that secret after the
+//! account exists, and the server then refuses every later setup attempt.
 
 use std::env;
 use std::error::Error;

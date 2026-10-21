@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Create the single account on a Notebox Worker.
 #
-#   NBX_SETUP_TOKEN=... ./scripts/create-account \
+#   ./scripts/create-account \
 #     --server https://notebox.example.workers.dev --username alice
 #
-# Delete SETUP_TOKEN with `npx wrangler secret delete SETUP_TOKEN` afterwards.
+# The setup token and passphrase are prompted without echo. Delete SETUP_TOKEN
+# with `npx wrangler secret delete SETUP_TOKEN` afterwards.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
