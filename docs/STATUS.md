@@ -8,7 +8,10 @@ so a fresh device gets the version timeline back. P1 archives still import. A
 wiped browser profile also signs in to a local Worker and pulls its note, tag,
 pin and history back. An accessibility audit of every main screen and theme
 passes, including note-list arrow keys, Tab trapped inside dialogs and focus
-return after closing a panel.
+return after closing a panel. The phone note list now keeps a pasted image title
+inside the viewport, the editor header fits and the toolbar scrolls at 320 px,
+and the colour menu no longer puts a full-screen blocker over Back and
+Settings.
 A 100 KB note opens in a median under 50 ms in the web UI and typing drops no
 frames; Linux desktop cold start is 555 ms warm. The installer budget now
 measures the `.deb` (9.9 MB), not the self-contained AppImage. The free Worker
@@ -30,6 +33,21 @@ the login screen still offers offline use and a different server.
 
 ## Shipped
 
+- `notes-core` and `notes-app`: **phone title, layout and tap fixes**.
+  `Note::title()` replaces Markdown images with their alt text, and the UI also
+  sanitises cached summary titles on display and in conflict copies, so notes
+  written by older builds stop showing a data URL. Cards use
+  `minmax(0, 1fr)`, `min-width: 0` and `overflow-wrap: anywhere`; the phone
+  editor keeps a dot-only save state, the notebook name fits and the formatting
+  toolbar scrolls horizontally instead of clipping its last controls. The
+  colour menu is a fixed bottom sheet with no backdrop: a root click closes it
+  and the same tap reaches Back or Settings, and screen, sign-in and
+  local-session transitions clear it and the find bar. `index.html` adds a
+  static wasm-panic
+  panel with a Reload button so a crashed app does not look like dead controls.
+  A 360 px touch probe against `wrangler dev --local` signed in, reached
+  `Synced`, showed the note without horizontal overflow, and kept Back,
+  Settings and the navigation drawer responsive.
 - `docs/adr/0003-worker-free-tier.md`, `scripts/s3-probe.mjs`,
   `scripts/s3-analytics.mjs` and `docs/measurements/`: **S3 evidence**. The
   seven-day production window before the probe held 156 invocations, all
@@ -142,14 +160,19 @@ the login screen still offers offline use and a different server.
   opens the credential form, changes both username and password, signs out,
   signs in with the new pair and confirms the note is still there. The CI web
   job installs `worker-build` and runs it after the backup round trip.
-- `scripts/web-a11y.mjs`: 30-check P8 accessibility flow. It runs axe-core's
-  WCAG 2.0, 2.1 and 2.2 A/AA rules on notes, history, the command palette,
-  shortcuts, trash, Settings, Login and the mobile layout, each in light and
-  dark themes. The same run checks note-list Arrow/Home/Enter handling, keeps
-  Tab and Shift+Tab inside the three modal dialogs, checks focus return after
-  closing history, the palette or the shortcut sheet, Settings' back button and
-  Login's first field. The CI web job installs `axe-core` and runs it after the
-  backup round trip.
+- `scripts/web-a11y.mjs`: 40-check P8 accessibility and phone-layout flow. It
+  runs axe-core's WCAG 2.0, 2.1 and 2.2 A/AA rules on notes, history, the
+  command palette, shortcuts, trash, Settings, Login and the mobile layout,
+  each in light and dark themes. The same run checks note-list Arrow/Home/Enter
+  handling, keeps Tab and Shift+Tab inside the three modal dialogs, checks
+  focus return after closing history, the palette or the shortcut sheet,
+  Settings' back button and Login's first field. At 390, 360 and 320 px it adds
+  an image data-URL note, asserts no horizontal list or document overflow, that
+  the 320 px editor header fits with a reachable Quote button and a scrollable
+  toolbar, that the colour sheet stays in the viewport, that one tap on Back
+  leaves the editor with the colour menu open, and that Settings and the
+  navigation drawer still open. The CI web job installs `axe-core` and runs it
+  after the backup round trip.
 - `notes-app`: accessibility pass. Muted text now meets 4.5:1 on every surface,
   the note list is a labelled listbox with arrow-key focus, the editor is a
   `main` landmark, icon-only file inputs have labels, tag remove and restore
@@ -496,11 +519,12 @@ the login screen still offers offline use and a different server.
 | S3 tail probe | 100 requests at 1/s: 100/100 tail events, 0 failures, CPU min 0 / p50 1 / p95 2 / max 2 ms; login 401 `invalid_credentials`, devices and sync 401 `unauthorized`; no 1102 or 5xx |
 | S3 Argon2id | desktop release 38.2 ms median (20 runs, max 92.1 ms); Chromium release build 119 ms median (178/119/116 ms, includes local Worker round trip); phone not measured |
 | S3 free limits | re-read 2026-10-21: 100,000 requests/day, 10 ms CPU, 50 subrequests, 50 D1 queries, 2 MB rows, 10 D1 databases; 2 databases in use |
-| Native tests | 225 passed, 1 skipped (the ignored Worker client e2e) |
+| Native tests | 226 passed, 1 skipped (the ignored Worker client e2e) |
 | CI | Run 39570584938 on e9c8e82: all eight jobs green (gates, wasm, server, Windows, Android, desktop, OPFS, web) |
 | P8 backup restore (Playwright) | 18/18 checks: fresh-profile export/import of a notebook, pinned tagged note and trashed note; text, tag, pin, trash, attachment row, decoded WebP, history peer label and idempotent second import; no console errors |
 | P8 wipe and sign-in (Playwright + local Worker) | 16/16 checks: three timed rejected logins (browser Argon2id median 119 ms), derived login key, account setup, first sync, OPFS/localStorage/cookie/cache wipe, note gone, sign in, note body/tag/pin, history labelled as the other device, no duplicate, no console errors |
-| P8 accessibility (Playwright + axe-core) | 30/30 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; note-list Arrow/Home/Enter, Tab and Shift+Tab stay inside the three dialogs, focus return after overlays, Settings/Login/dialog autofocus; no console errors |
+| P8 accessibility and phone layout (Playwright + axe-core) | 40/40 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; note-list Arrow/Home/Enter, Tab and Shift+Tab stay inside the three dialogs, focus return after overlays, Settings/Login/dialog autofocus; image title and no list overflow at 390/360/320; 320 px header, scrollable toolbar and reachable Quote; colour sheet inside the viewport; one-tap Back and phone Settings/navigation; no console errors |
+| P8 phone sign-in (one-off Playwright, 360 px touch + local Worker) | New note saved, derived login key, account setup, status `Synced`, synced note in the list, no list overflow, Settings round trip, navigation drawer, one-tap Back with the colour menu open; no console errors |
 | Web login preview | Rebuilt release at 2026-10-21: the Worker origin is read-only with no URL input, the offline action is visible, and the screen has no horizontal overflow or console errors at 1400 px and 390 px |
 | Live Worker deployment | `https://notebox.nbx-7207a015.workers.dev` serves the release build; `/version.json` reports 0.1.0 / e9c8e82. A fresh Chromium context signed in, reached "Synced", wrote welcome-note updates to D1 and showed no console errors; both verification devices were revoked |
 | Deploy guard | `./scripts/deploy-web.sh --check` reports live 0.1.0 / e9c8e82, a green CI run for `main`, no pending migrations on either D1 database, and blocks on a dirty tree before any build |
@@ -578,6 +602,14 @@ the login screen still offers offline use and a different server.
   with the account's copies instead of adding duplicates. If the account had
   trashed those samples, a fresh device can still push their metadata again;
   decide whether to seed only after offline mode is chosen.
+- **Owner phone freeze retest**: the image-title overflow and the one-tap
+  colour-backdrop blocker are fixed and verified at 320–390 px, but the total
+  dead-tap freeze on the owner's Brave Android device was not reproduced in
+  headless Chromium with a 360 px touch viewport. The local-Worker sign-in and
+  sync path stayed interactive. Retest the deployed build on the phone; if the
+  freeze returns, the new panic panel or the remote `chrome://inspect` console
+  should show whether a wasm panic or another overlay is responsible. Whether
+  Chrome on the same phone behaves differently is still open.
 - **Cold starts and large notes**: Linux desktop cold start is 555 ms warm
   (median of five), under the 600 ms budget; the first run seeds sample notes
   and takes 628 ms, or 2,170 ms with a cold WebKit cache. A 102,415-byte note
