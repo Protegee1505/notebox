@@ -43,12 +43,19 @@ The boot hook runs `scripts/cloudshell-bootstrap.sh`; non-interactive agent
 shells use `~/.config/notebox/bash-env.sh` through `BASH_ENV`.
 
 - Check: `./scripts/cloudshell-bootstrap.sh --status`.
-- Restore by hand: `./scripts/cloudshell-bootstrap.sh --force`.
+- Restore by hand: `./scripts/cloudshell-bootstrap.sh --force`. It refuses when
+  `cargo`, `rustc`, `dx`, `nextest` or `worker-build` is running; pass
+  `--allow-running` only when you intentionally stop a build first.
 - Save seeds only after the gates and `./scripts/web-build.sh`, with no build
   running: `./scripts/cloudshell-seed.sh save --all`.
+- `./scripts/cloudshell-seed.sh status` marks a seed `current` or
+  `stale: ...`; save again after a `Cargo.lock`, toolchain or dx change.
 - Keep 1200 MiB free on `/home`; `scripts/budget-check` keeps a 512 MiB hard
   floor. If space is tight, `./scripts/cloudshell-seed.sh prune --target`
   removes the target seed first.
+- The boot hook writes start/finish lines with the boot id to
+  `~/.cache/notebox-build/boot.log`. A missing start line means the hook did
+  not run; the `BASH_ENV` path still repairs on the first shell.
 - The web build needs system `clang` for SQLite wasm. It is not in the seed;
   `scripts/web-build.sh` installs it on demand when non-interactive `sudo` is
   available.

@@ -215,7 +215,7 @@ toolchain and Cargo target seeds before the first build:
 
 ```bash
 ./scripts/cloudshell-bootstrap.sh --status
-./scripts/cloudshell-bootstrap.sh --force
+./scripts/cloudshell-bootstrap.sh --force   # refuses while a build is running
 ```
 
 The boot hook and non-interactive `BASH_ENV` normally run the bootstrap for

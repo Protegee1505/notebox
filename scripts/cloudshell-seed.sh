@@ -61,11 +61,11 @@ file_mb() {
 }
 
 is_busy() {
-  pgrep -u "$(id -u)" -x cargo >/dev/null 2>&1 ||
-    pgrep -u "$(id -u)" -x rustc >/dev/null 2>&1 ||
-    pgrep -u "$(id -u)" -x dx >/dev/null 2>&1 ||
-    pgrep -u "$(id -u)" -x worker-build >/dev/null 2>&1 ||
-    pgrep -u "$(id -u)" -x cargo-nextest >/dev/null 2>&1
+  local proc
+  for proc in cargo rustc dx cargo-nextest worker-build wasm-bindgen wasm-opt esbuild; do
+    pgrep -u "$(id -u)" -x "$proc" >/dev/null 2>&1 && return 0
+  done
+  return 1
 }
 
 require_idle() {
@@ -254,6 +254,38 @@ save_target() {
   log "target seed: $(file_mb "$TARGET") MiB (${content}); home free $(free_mb) MiB"
 }
 
+manifest_get() {
+  local file="$1" key="$2"
+  [ -f "$file" ] || return 1
+  sed -n "s/^${key}=//p" "$file" | head -1
+}
+
+seed_state() {
+  local archive="$1"
+  local manifest="$archive.manifest"
+  local want_rustc want_lock want_tc
+  if [ ! -f "$manifest" ]; then
+    echo "no manifest"
+    return
+  fi
+  want_rustc="$(manifest_get "$manifest" rustc || true)"
+  want_lock="$(manifest_get "$manifest" lock || true)"
+  want_tc="$(manifest_get "$manifest" toolchain || true)"
+  if [ -z "$want_rustc" ] || [ -z "$want_lock" ] || [ -z "$want_tc" ]; then
+    echo "no fingerprint"
+    return
+  fi
+  if [ "$want_rustc" != "$(rustc -V 2>/dev/null || true)" ]; then
+    echo "stale: rustc changed"
+  elif [ "$want_lock" != "$(sha256sum "$ROOT/Cargo.lock" | awk '{print $1}')" ]; then
+    echo "stale: Cargo.lock changed"
+  elif [ "$want_tc" != "$(sha256sum "$ROOT/rust-toolchain.toml" | awk '{print $1}')" ]; then
+    echo "stale: rust-toolchain.toml changed"
+  else
+    echo "current"
+  fi
+}
+
 verify_seed() {
   local archive="$1" sidecar="$2" label="$3"
   if [ ! -f "$archive" ]; then
@@ -277,9 +309,11 @@ show_status() {
   printf 'home free: %s MiB\n' "$(free_mb)"
   for f in "$BASE" "$TARGET"; do
     if [ -f "$f" ]; then
-      printf '%s: %s MiB' "$(basename "$f")" "$(file_mb "$f")"
-      [ -f "$f.manifest" ] && printf ' (%s)' "$(sed -n 's/^content=//p' "$f.manifest" | head -1)"
-      printf '\n'
+      local content state
+      content="$(manifest_get "$f.manifest" content || true)"
+      state="$(seed_state "$f")"
+      printf '%s: %s MiB (%s, %s)\n' \
+        "$(basename "$f")" "$(file_mb "$f")" "${content:-unknown}" "$state"
     else
       printf '%s: missing\n' "$(basename "$f")"
     fi

@@ -2,6 +2,7 @@
 # Restore the ephemeral build tree after a Cloud Shell restart.
 #
 #   scripts/cloudshell-bootstrap.sh [--wait] [--boot] [--force] [--quiet]
+#   scripts/cloudshell-bootstrap.sh --force [--allow-running]
 #   scripts/cloudshell-bootstrap.sh --status
 #
 # The live tree lives in /tmp/opencode (or NOTEBOX_BUILD_HOME). The persistent
@@ -34,6 +35,7 @@ force=0
 quiet=0
 install=1
 status_mode=0
+allow_running=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -43,6 +45,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --force)
       force=1
+      shift
+      ;;
+    --allow-running)
+      allow_running=1
       shift
       ;;
     --quiet)
@@ -58,7 +64,7 @@ while [ "$#" -gt 0 ]; do
       shift
       ;;
     -h|--help)
-      sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -117,6 +123,14 @@ layout_ok() {
     [ -d "$STORE/notebox-target" ]
 }
 
+is_busy() {
+  local proc
+  for proc in cargo rustc dx cargo-nextest worker-build wasm-bindgen wasm-opt esbuild; do
+    pgrep -u "$(id -u)" -x "$proc" >/dev/null 2>&1 && return 0
+  done
+  return 1
+}
+
 show_status() {
   printf 'store: %s\nseed:  %s\n' "$STORE" "$SEED"
   printf 'home free: %s MiB\n' "$(free_mb)"
@@ -135,11 +149,7 @@ show_status() {
   if [ -d "$STORE/notebox-target" ]; then
     printf 'live target: %s\n' "$(du -sh "$STORE/notebox-target" 2>/dev/null | awk '{print $1}')"
   fi
-  if pgrep -u "$(id -u)" -x cargo >/dev/null 2>&1 ||
-     pgrep -u "$(id -u)" -x rustc >/dev/null 2>&1 ||
-     pgrep -u "$(id -u)" -x dx >/dev/null 2>&1 ||
-     pgrep -u "$(id -u)" -x cargo-nextest >/dev/null 2>&1 ||
-     pgrep -u "$(id -u)" -x worker-build >/dev/null 2>&1; then
+  if is_busy; then
     printf 'build: running\n'
   else
     printf 'build: idle\n'
@@ -173,6 +183,10 @@ if ! flock -n 9; then
     done
   fi
   flock -w "$WAIT_SECONDS" 9 || die "timed out waiting for another bootstrap"
+fi
+
+if [ "$force" -eq 1 ] && [ "$allow_running" -eq 0 ] && is_busy; then
+  die "a cargo/rustc/dx build is running; stop it first or pass --allow-running"
 fi
 
 if [ "$force" -eq 1 ]; then

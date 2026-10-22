@@ -45,13 +45,18 @@ Both have a `.sha256` sidecar and a `.manifest` fingerprint. Measured on
 2026-10-22: the base archive is **460 MiB** and the full target archive is
 **1000 MiB** (6046 MiB uncompressed). The base seed deliberately leaves out
 `cargo/registry/src`, Rust docs, rustup downloads, `npm/_npx` and
-`npm/_logs`; Cargo and `npx` refill those on demand. With both seeds,
-`/home` kept **1860 MiB** free.
+`npm/_logs`; Cargo and `npx` refill those on demand. Playwright browsers are
+not in either seed; the first browser suite after a restart downloads them
+into `/tmp/opencode/pw-browsers`. With both seeds, `/home` kept **1860 MiB**
+free.
 
 ## Restore flow
 
 On boot, `/home/kinfuny/.customize_environment` runs
-`scripts/cloudshell-bootstrap.sh --boot --quiet`. The script:
+`scripts/cloudshell-bootstrap.sh --boot --quiet`. It first appends a
+`boot-hook start` line with the boot id to `~/.cache/notebox-build/boot.log`,
+then writes a `boot-hook finish` line with the exit code and ready state. The
+script:
 
 1. repairs the symlinks in `$HOME` before any tool can write to `/home`;
 2. drops `target.tar.xz` first if `/home` free space is below
@@ -62,6 +67,10 @@ On boot, `/home/kinfuny/.customize_environment` runs
 4. verifies the target seed's rustc, `Cargo.lock` and `rust-toolchain.toml`
    fingerprint before using it;
 5. writes `/tmp/opencode/.notebox-ready`.
+
+The start line is the proof that the boot path ran; the `BASH_ENV` path is a
+fallback for a first shell when it did not. A controlled reboot after changing
+the hook is the only way to test the boot path itself.
 
 The same script is available from a shell. Non-interactive agent shells get it
 through `BASH_ENV=~/.config/notebox/bash-env.sh`, and interactive shells source
@@ -82,7 +91,8 @@ back to about 20s.
 
 ```bash
 ./scripts/cloudshell-bootstrap.sh --status
-./scripts/cloudshell-bootstrap.sh --force   # re-extract both seeds
+./scripts/cloudshell-bootstrap.sh --force   # re-extract both seeds; refuses during a build
+./scripts/cloudshell-bootstrap.sh --force --allow-running  # deliberate override
 ```
 
 A missing or corrupt base seed is not fatal. The bootstrap removes it and falls
@@ -109,6 +119,7 @@ scripts/budget-check
 ./scripts/cloudshell-seed.sh save --target  # after a green build
 ./scripts/cloudshell-seed.sh save --all     # both
 ./scripts/cloudshell-seed.sh verify
+./scripts/cloudshell-seed.sh status         # current or stale: rustc/Cargo.lock/toolchain
 ```
 
 The web release build needs `clang` for the bundled SQLite wasm build. It is a
@@ -143,6 +154,9 @@ If `/tmp/opencode` was cleared and the boot hook did not run:
 ```bash
 ./scripts/cloudshell-bootstrap.sh --force
 ```
+
+The force path refuses while a build is running. Stop the build first; use
+`--allow-running` only when replacing the target is intentional.
 
 If the base seed is corrupt, the bootstrap removes it and reinstalls the
 toolchain. If only the target seed is corrupt, it is removed and the first
