@@ -454,6 +454,13 @@ try {
   const refsBefore = (after.match(/attachments\//g) ?? []).length;
   await page.locator("#gallery-delete").click();
   await page.locator(".gallery-confirm").waitFor({ timeout: 5_000 });
+  // The confirmation moves focus to Cancel on the next frame; wait for that,
+  // or a fast runner reads the Delete button still.
+  await page.waitForFunction(
+    () => document.activeElement?.id === "gallery-delete-cancel",
+    null,
+    { timeout: 5_000 },
+  );
   const confirmFocus = await page.evaluate(() => document.activeElement?.id);
   results.push(
     check(
