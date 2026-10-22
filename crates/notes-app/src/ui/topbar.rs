@@ -121,25 +121,20 @@ pub fn TopBar() -> Element {
                     aria_label: "Toggle theme",
                     title: match theme {
                         Theme::Light => "Switch to dark",
-                        _ => "Switch to light",
+                        Theme::Dark => "Switch to light",
+                        Theme::System => "Switch theme",
                     },
                     onclick: {
                         let context = context.clone();
                         move |_| context.toggle_theme()
                     },
-                    Icon { name: match theme { Theme::Light => "moon", _ => "sun" } }
+                    Icon { name: match theme {
+                        Theme::Light => "moon",
+                        Theme::Dark => "sun",
+                        Theme::System => "monitor",
+                    } }
                 }
-                button {
-                    class: "avatar",
-                    r#type: "button",
-                    aria_label: "Open settings",
-                    title: "Settings",
-                    onclick: {
-                        let context = context.clone();
-                        move |_| context.open_settings()
-                    },
-                    "{initial}"
-                }
+                span { class: "avatar", aria_hidden: "true", "{initial}" }
             }
         }
     }

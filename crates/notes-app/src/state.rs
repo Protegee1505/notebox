@@ -30,6 +30,7 @@ use web_time::Instant;
 use crate::images;
 use crate::markdown_ops::{self, Mark};
 use crate::media;
+use crate::prefs::{SavedScreen, SavedView};
 use crate::storage::{self, Persistence, StorageInfo};
 use crate::sync::{self, Due, OpenNotePlan, SyncFailure, SyncReport, SyncStatus, SyncUi};
 use crate::time::{now, relative_time};
@@ -339,6 +340,10 @@ pub struct AppState {
     pub new_notebook: Option<String>,
     /// "Empty trash" requires a second click.
     pub confirm_empty_trash: bool,
+    /// Ask before moving the open note to the trash.
+    pub confirm_delete: bool,
+    /// Open note waiting for the delete confirmation.
+    pub pending_delete: Option<NoteId>,
     /// Backup chosen from Settings and waiting for confirmation.
     pub pending_restore: Option<PendingRestore>,
     /// Latest toast.
@@ -439,6 +444,8 @@ impl AppState {
             history_error: None,
             new_notebook: None,
             confirm_empty_trash: false,
+            confirm_delete: preferences.confirm_delete,
+            pending_delete: None,
             pending_restore: None,
             toast: None,
             undo: Vec::new(),
@@ -641,7 +648,7 @@ impl AppContext {
         let Some(store) = self.store() else {
             return;
         };
-        self.reload();
+        let preferences = crate::prefs::load();
         let has_notes = match store.list_notes(&NoteQuery {
             view: NoteView::All,
             limit: 1,
@@ -656,6 +663,14 @@ impl AppContext {
         let current_offline = self.state.peek().offline;
         let start = startup_choice(sync::load_account().is_some(), current_offline, has_notes);
         let first_run = start.login_first_run;
+
+        // Apply the saved list slice before the first reload, so the sidebar
+        // and the note list agree from the first frame.
+        if !first_run {
+            self.state.write_unchecked().view = preferences.last_view.into();
+        }
+        self.reload();
+
         {
             let mut state = self.state.write_unchecked();
             state.offline = start.offline;
@@ -673,11 +688,27 @@ impl AppContext {
         if start.offline != current_offline {
             self.save_preferences();
         }
-        if !start.login_first_run {
+        if !first_run {
+            let saved = preferences
+                .last_note
+                .filter(|id| store.note_summary(id).is_ok());
             let first = self.state.peek().notes.first().map(|note| note.id);
-            if let Some(id) = first {
+            if let Some(id) = saved.or(first) {
                 self.select_note(id);
             }
+            {
+                let mut state = self.state.write_unchecked();
+                state.screen = Screen::from(preferences.last_screen);
+                state.mobile_list = preferences.mobile_list;
+                state.browsing = preferences.browsing;
+                if state.selected.is_none() {
+                    state.mobile_list = true;
+                    state.browsing = false;
+                }
+            }
+            // Normalize the file after a fallback (missing note, deleted view)
+            // so the next launch starts from what is on screen now.
+            self.save_preferences();
         }
     }
 
@@ -964,6 +995,7 @@ impl AppContext {
             hide_history(&mut state);
         }
         self.reload();
+        self.save_preferences();
     }
 
     /// Filter the list to one notebook, or clear the filter.
@@ -977,6 +1009,7 @@ impl AppContext {
             hide_history(&mut state);
         }
         self.reload();
+        self.save_preferences();
     }
 
     /// Filter the list to one tag, or clear the filter.
@@ -990,6 +1023,7 @@ impl AppContext {
             hide_history(&mut state);
         }
         self.reload();
+        self.save_preferences();
     }
 
     /// Open a note in the editor, saving the current one first.
@@ -1032,6 +1066,7 @@ impl AppContext {
         if opened {
             self.load_attachments(id);
             self.reset_editor_scroll();
+            self.save_preferences();
         }
     }
 
@@ -1664,17 +1699,48 @@ impl AppContext {
         self.mutate_selected(move |note| note.remove_tag(&tag));
     }
 
-    /// Move the open note to the trash and show the next note.
+    /// Move the open note to the trash, asking first when the preference is on.
     pub fn trash_selected(&self) {
-        self.save_now();
         let Some(id) = self.state.peek().selected else {
             return;
         };
+        if self.state.peek().confirm_delete {
+            if self.state.peek().pending_delete == Some(id) {
+                return;
+            }
+            self.state.write_unchecked().pending_delete = Some(id);
+            self.focus_delete_cancel();
+            return;
+        }
+        self.trash_note(id);
+    }
+
+    /// Confirm the pending move to the trash.
+    pub fn confirm_trash(&self) {
+        let id = self
+            .state
+            .peek()
+            .pending_delete
+            .or(self.state.peek().selected);
+        if let Some(id) = id {
+            self.trash_note(id);
+        }
+    }
+
+    /// Dismiss the delete confirmation and return focus to the trash button.
+    pub fn cancel_trash(&self) {
+        self.state.write_unchecked().pending_delete = None;
+        self.focus_trash_button();
+    }
+
+    fn trash_note(&self, id: NoteId) {
+        self.save_now();
         let Some(store) = self.store() else {
             return;
         };
         match store.trash_note(&id, now()) {
             Ok(true) => {
+                self.state.write_unchecked().pending_delete = None;
                 self.reload();
                 let next = self.state.peek().notes.first().map(|note| note.id);
                 match next {
@@ -1683,9 +1749,35 @@ impl AppContext {
                 }
                 self.toast_info("Moved to trash");
             }
-            Ok(false) => self.toast_info("Note is already in the trash"),
+            Ok(false) => {
+                self.state.write_unchecked().pending_delete = None;
+                self.toast_info("Note is already in the trash");
+            }
             Err(error) => self.toast_danger(format!("Could not move the note: {error}")),
         }
+    }
+
+    fn focus_delete_cancel(&self) {
+        let _ = document::eval(
+            "setTimeout(() => document.getElementById('confirm-trash-cancel')?.focus(), 30);",
+        );
+    }
+
+    fn focus_trash_button(&self) {
+        let _ =
+            document::eval("setTimeout(() => document.getElementById('trash-note')?.focus(), 30);");
+    }
+
+    /// Turn the delete confirmation on or off.
+    pub fn set_confirm_delete(&self, enabled: bool) {
+        {
+            let mut state = self.state.write_unchecked();
+            state.confirm_delete = enabled;
+            if !enabled {
+                state.pending_delete = None;
+            }
+        }
+        self.save_preferences();
     }
 
     /// Bring a trashed note back.
@@ -1753,17 +1845,20 @@ impl AppContext {
     }
 
     fn clear_selection(&self) {
-        let mut state = self.state.write_unchecked();
-        state.selected = None;
-        state.draft.clear();
-        state.saved_text.clear();
-        state.dirty = false;
-        state.undo.clear();
-        state.redo.clear();
-        state.mobile_list = true;
-        state.attachments_open = false;
-        hide_history(&mut state);
-        hide_editor_overlays(&mut state);
+        {
+            let mut state = self.state.write_unchecked();
+            state.selected = None;
+            state.draft.clear();
+            state.saved_text.clear();
+            state.dirty = false;
+            state.undo.clear();
+            state.redo.clear();
+            state.mobile_list = true;
+            state.attachments_open = false;
+            hide_history(&mut state);
+            hide_editor_overlays(&mut state);
+        }
+        self.save_preferences();
     }
 
     fn mutate_selected(&self, edit: impl FnOnce(&Note) -> Result<bool, notes_core::NoteError>) {
@@ -1853,25 +1948,29 @@ impl AppContext {
         if screen == Screen::Login && self.runtime.borrow().client.is_some() {
             self.toast_info("Sign out first to use another account.");
             self.state.write_unchecked().screen = Screen::Settings;
+            self.save_preferences();
             return;
         }
-        let mut state = self.state.write_unchecked();
-        state.screen = screen;
-        state.palette_open = false;
-        state.shortcuts_open = false;
-        state.sidebar_open = false;
-        hide_history(&mut state);
-        hide_editor_overlays(&mut state);
-        if screen == Screen::Notes {
-            state.mobile_list = state.browsing || state.selected.is_none();
+        {
+            let mut state = self.state.write_unchecked();
+            state.screen = screen;
+            state.palette_open = false;
+            state.shortcuts_open = false;
+            state.sidebar_open = false;
+            hide_history(&mut state);
+            hide_editor_overlays(&mut state);
+            if screen == Screen::Notes {
+                state.mobile_list = state.browsing || state.selected.is_none();
+            }
+            if screen == Screen::Login {
+                state.login.error = None;
+                state.login_first_run = false;
+            }
+            if screen == Screen::Notes {
+                state.login_first_run = false;
+            }
         }
-        if screen == Screen::Login {
-            state.login.error = None;
-            state.login_first_run = false;
-        }
-        if screen == Screen::Notes {
-            state.login_first_run = false;
-        }
+        self.save_preferences();
     }
 
     /// Leave the editor for the notes gallery.
@@ -1890,6 +1989,7 @@ impl AppContext {
             hide_editor_overlays(&mut state);
         }
         self.reload();
+        self.save_preferences();
     }
 
     /// Show or hide the open note's attachment strip. It starts closed so a
@@ -1906,15 +2006,25 @@ impl AppContext {
     }
 
     /// Cycle the topbar theme button.
+    ///
+    /// `System` must resolve the operating-system preference first. Picking
+    /// `Light` unconditionally made the first click a no-op on a light system.
     pub fn toggle_theme(&self) {
-        let next = match self.state.peek().theme {
-            Theme::System | Theme::Dark => Theme::Light,
-            Theme::Light => Theme::Dark,
-        };
-        {
-            self.state.write_unchecked().theme = next;
+        let current = self.state.peek().theme;
+        if current == Theme::System {
+            let context = self.clone();
+            spawn(async move {
+                let system_dark = document::eval(
+                    "return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);",
+                )
+                .join::<bool>()
+                .await
+                .unwrap_or(false);
+                context.set_theme(next_theme(Theme::System, system_dark));
+            });
+            return;
         }
-        self.save_preferences();
+        self.set_theme(next_theme(current, false));
     }
 
     /// Pick a specific theme.
@@ -1945,16 +2055,42 @@ impl AppContext {
         self.save_preferences();
     }
 
-    /// Write the local display and onboarding choices.
+    /// Write the local display, onboarding and last-screen choices.
     fn save_preferences(&self) {
-        let (theme, layout, offline) = {
+        let (
+            theme,
+            layout,
+            offline,
+            last_note,
+            last_screen,
+            last_view,
+            mobile_list,
+            browsing,
+            confirm_delete,
+        ) = {
             let state = self.state.read();
-            (state.theme, state.layout, state.offline)
+            (
+                state.theme,
+                state.layout,
+                state.offline,
+                state.selected,
+                SavedScreen::from(state.screen),
+                SavedView::from(state.view),
+                state.mobile_list,
+                state.browsing,
+                state.confirm_delete,
+            )
         };
         let preferences = crate::prefs::Preferences {
             theme,
             layout,
             offline,
+            last_note,
+            last_screen,
+            last_view,
+            mobile_list,
+            browsing,
+            confirm_delete,
         };
         if let Err(error) = crate::prefs::save(&preferences) {
             self.toast_danger(format!("Could not save preferences: {error}"));
@@ -2183,28 +2319,33 @@ impl AppContext {
 
     /// Close overlays, or leave the editor on a phone.
     pub fn escape(&self) {
-        let mut state = self.state.write_unchecked();
-        if state.palette_open {
-            state.palette_open = false;
-        } else if state.shortcuts_open {
-            state.shortcuts_open = false;
-        } else if state.find_open {
-            state.find_open = false;
-        } else if state.sidebar_open {
-            state.sidebar_open = false;
-        } else if state.color_open {
-            state.color_open = false;
-        } else if state.history_open {
-            hide_history(&mut state);
-        } else if state.screen == Screen::Login && state.login_first_run {
-            // The first launch needs an account or an explicit offline choice.
-        } else if state.screen == Screen::Settings || state.screen == Screen::Login {
-            state.screen = Screen::Notes;
-            state.login_first_run = false;
-            state.mobile_list = state.browsing || state.selected.is_none();
-        } else if !state.mobile_list {
-            state.mobile_list = true;
+        {
+            let mut state = self.state.write_unchecked();
+            if state.pending_delete.is_some() {
+                state.pending_delete = None;
+            } else if state.palette_open {
+                state.palette_open = false;
+            } else if state.shortcuts_open {
+                state.shortcuts_open = false;
+            } else if state.find_open {
+                state.find_open = false;
+            } else if state.sidebar_open {
+                state.sidebar_open = false;
+            } else if state.color_open {
+                state.color_open = false;
+            } else if state.history_open {
+                hide_history(&mut state);
+            } else if state.screen == Screen::Login && state.login_first_run {
+                // The first launch needs an account or an explicit offline choice.
+            } else if state.screen == Screen::Settings || state.screen == Screen::Login {
+                state.screen = Screen::Notes;
+                state.login_first_run = false;
+                state.mobile_list = state.browsing || state.selected.is_none();
+            } else if !state.mobile_list {
+                state.mobile_list = true;
+            }
         }
+        self.save_preferences();
     }
 
     /// Open the command palette.
@@ -2970,13 +3111,18 @@ impl AppContext {
         }
     }
 
-    /// PLAN.md's loop: start, three seconds after an edit, every minute while
-    /// visible, and on focus. Never while hidden or dirty.
+    /// The client loop: start, three seconds after an edit, every ten seconds
+    /// while visible, and on focus or returning to the foreground. Never while
+    /// hidden or dirty.
     fn maybe_sync(&self) {
         let visible = sync::document_visible();
         let focused = sync::document_focused();
         let (connected, busy, last_attempt, failures, retry_after, stopped, focus) = {
             let mut runtime = self.runtime.borrow_mut();
+            if visible && !runtime.was_visible {
+                runtime.focus_pending = true;
+            }
+            runtime.was_visible = visible;
             if focused && !runtime.was_focused {
                 runtime.focus_pending = true;
             }
@@ -3852,6 +3998,7 @@ fn hide_editor_overlays(state: &mut AppState) {
     state.find_open = false;
     state.find_query.clear();
     state.find_index = 0;
+    state.pending_delete = None;
 }
 
 /// Clear the history panel when the note or the list changes underneath it.
@@ -3968,6 +4115,19 @@ struct StartupChoice {
     login_first_run: bool,
 }
 
+/// The next theme for a single toggle click.
+///
+/// Explicit themes swap; `System` moves to the opposite of the theme the OS is
+/// currently showing, so the first click is always visible.
+fn next_theme(current: Theme, system_dark: bool) -> Theme {
+    match current {
+        Theme::System if system_dark => Theme::Light,
+        Theme::System => Theme::Dark,
+        Theme::Dark => Theme::Light,
+        Theme::Light => Theme::Dark,
+    }
+}
+
 fn startup_choice(account_saved: bool, offline: bool, has_notes: bool) -> StartupChoice {
     // Notes written before the offline flag existed belong to the local user.
     // Mark them offline so a later launch does not ask for an account.
@@ -4036,8 +4196,8 @@ fn create_tour_note(
 #[cfg(test)]
 mod tests {
     use super::{
-        attachment_label, attachment_set_changed, best_body_term, find_match_count, note_title,
-        restore_summary, startup_choice, tone_class, word_count, PendingRestore,
+        attachment_label, attachment_set_changed, best_body_term, find_match_count, next_theme,
+        note_title, restore_summary, startup_choice, tone_class, word_count, PendingRestore,
     };
     use notes_proto::NoteId;
     use notes_store::{Attachment, ImportReport, NoteSummary};
@@ -4142,6 +4302,16 @@ mod tests {
         );
         assert_eq!(best_body_term("Only a book tag", "books"), None);
         assert_eq!(best_body_term("anything", "#Books"), None);
+    }
+
+    #[test]
+    fn a_system_theme_click_always_changes_the_visible_theme() {
+        use crate::state::Theme;
+
+        assert_eq!(next_theme(Theme::System, true), Theme::Light);
+        assert_eq!(next_theme(Theme::System, false), Theme::Dark);
+        assert_eq!(next_theme(Theme::Light, false), Theme::Dark);
+        assert_eq!(next_theme(Theme::Dark, false), Theme::Light);
     }
 
     #[test]

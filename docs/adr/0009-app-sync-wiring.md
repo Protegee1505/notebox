@@ -3,7 +3,8 @@
 - **Status:** accepted
 - **Date:** 2026-10-20
 - **Update:** ADR-0010 adds browser persistence; the web build no longer ends
-  a reload with only an in-memory store.
+  a reload with only an in-memory store. ADR-0020 shortens the visible poll to
+  10 seconds and wakes on returning to the foreground.
 - **Phase:** P7 app sync wiring (packaging remains P7)
 - **Owner:** app + sync
 
@@ -64,10 +65,11 @@ reload, or if a sync request stalls the editor.
    assuming a partial pull did or did not land. The conflict message is raised
    after the run summary, so the copy is not hidden by a later toast. A
    successful copy also asks for a follow-up run after the five second floor,
-   so it reaches the Worker before the minute timer.
+   so it reaches the Worker before the next idle poll.
 5. **Schedule and status.** `is_due` implements PLAN's loop: on start, on
-   focus, three seconds after the last save, and every 60 seconds while
-   visible. A 5 second floor collapses boot/focus/save into one request;
+   focus or returning to the foreground, three seconds after the last save,
+   and every 10 seconds while visible (ADR-0020). A 5 second floor collapses
+   boot/focus/save into one request;
    failures use the engine's exponential backoff and the server's
    `retry-after`; a hidden page and a dirty editor never run. Login starts the
    first sync immediately instead of showing "Synced" before a run. The top
@@ -95,7 +97,7 @@ reload, or if a sync request stalls the editor.
   stays local, login reopens) and a two-device conflict flow of 13 checks
   with a third puller (delayed sync, edit during the run, conflict toast,
   merged original, `conflict`-tagged copy holding the typed text, follow-up
-  sync before the minute timer, copy visible on the third device), with no
+  sync before the next idle poll, copy visible on the third device), with no
   application console errors. The browser run is what found the cancelled
   `spawn` task.
 - `node scripts/web-budget.mjs`: 1,786,340 B brotli (1.70 MiB) against the

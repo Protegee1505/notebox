@@ -203,11 +203,13 @@ pub struct Runtime {
     /// A permanent failure stopped automatic retries; a manual Sync now
     /// clears it.
     pub stopped: bool,
-    /// A run was requested outside the timer (boot, focus or a preserved
-    /// conflict).
+    /// A run was requested outside the timer (boot, focus, returning to the
+    /// foreground or a preserved conflict).
     pub focus_pending: bool,
     /// Whether the window had focus on the previous tick.
     pub was_focused: bool,
+    /// Whether the page was visible on the previous tick.
+    pub was_visible: bool,
     /// Open note and its body when the run started.
     pub open_base: Option<(NoteId, String)>,
     /// A save held back while the run is in flight.
@@ -278,9 +280,10 @@ impl Due {
 
 /// Whether a run should start now.
 ///
-/// The rules are PLAN.md's loop: on start, three seconds after the last edit,
-/// every sixty seconds while visible, and on focus. A dirty editor waits for
-/// autosave; a hidden page never runs; failures back off.
+/// The rules are the client loop: on start, three seconds after the last edit,
+/// every ten seconds while visible, and on focus or returning to the
+/// foreground. A dirty editor waits for autosave; a hidden page never runs;
+/// failures back off.
 pub fn is_due(now: i64, due: &Due) -> bool {
     if !due.connected || due.busy || !due.visible || due.dirty || due.stopped {
         return false;
@@ -292,10 +295,17 @@ pub fn is_due(now: i64, due: &Due) -> bool {
         let wait = backoff_seconds(due.failures, due.retry_after);
         return now >= due.last_attempt + wait;
     }
-    if due.focus || due.last_synced == 0 {
+    // An edit that has been saved but not sent still waits for the quiet gap,
+    // even when the idle interval has already elapsed. This keeps a burst of
+    // typing to one request instead of letting the ten-second poll overtake
+    // the three-second debounce.
+    if due.last_saved > due.last_synced {
+        if now - due.last_saved < EDIT_DEBOUNCE_SECS {
+            return false;
+        }
         return true;
     }
-    if due.last_saved > due.last_synced && now - due.last_saved >= EDIT_DEBOUNCE_SECS {
+    if due.focus || due.last_synced == 0 {
         return true;
     }
     now - due.last_synced >= SYNC_INTERVAL_SECS
@@ -796,6 +806,7 @@ mod tests {
     fn a_fresh_account_syncs_on_first_tick() {
         let due = Due {
             last_synced: 0,
+            last_saved: 0,
             ..Due::connected()
         };
         assert!(is_due(1_001, &due));
@@ -814,14 +825,14 @@ mod tests {
     }
 
     #[test]
-    fn the_minute_timer_covers_an_idle_app() {
+    fn the_idle_timer_keeps_a_visible_device_fresh() {
         let due = Due {
             last_synced: 1_000,
             last_saved: 1_000,
             ..Due::connected()
         };
-        assert!(!is_due(1_030, &due));
-        assert!(is_due(1_060, &due));
+        assert!(!is_due(1_009, &due));
+        assert!(is_due(1_010, &due));
     }
 
     #[test]

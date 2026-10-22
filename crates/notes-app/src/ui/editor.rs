@@ -133,6 +133,7 @@ pub fn EditorPane() -> Element {
     } else {
         String::new()
     };
+    let pending_delete = state.pending_delete == Some(id);
     drop(state);
 
     let tag_count = tags.len();
@@ -350,15 +351,48 @@ pub fn EditorPane() -> Element {
                         }
                     } else {
                         button {
+                            id: "trash-note",
                             class: "icon-button danger-hover",
                             r#type: "button",
                             aria_label: "Move note to trash",
+                            aria_expanded: if pending_delete { "true" } else { "false" },
+                            aria_controls: "delete-confirm",
                             title: "Move to trash",
                             onclick: {
                                 let context = context.clone();
                                 move |_| context.trash_selected()
                             },
                             Icon { name: "trash" }
+                        }
+                    }
+                }
+            }
+
+            if pending_delete {
+                div {
+                    id: "delete-confirm",
+                    class: "delete-confirm",
+                    role: "alert",
+                    p { "Move this note to the trash? You can restore it later." }
+                    div { class: "delete-confirm-actions",
+                        button {
+                            id: "confirm-trash-cancel",
+                            class: "secondary-button",
+                            r#type: "button",
+                            onclick: {
+                                let context = context.clone();
+                                move |_| context.cancel_trash()
+                            },
+                            "Cancel"
+                        }
+                        button {
+                            class: "danger-button",
+                            r#type: "button",
+                            onclick: {
+                                let context = context.clone();
+                                move |_| context.confirm_trash()
+                            },
+                            "Move to trash"
                         }
                     }
                 }

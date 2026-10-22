@@ -54,7 +54,7 @@ class Workload:
     photos_downloaded: int = 15
     average_photo_bytes: int = 400 * 1024
     average_update_bytes: int = 250
-    poll_seconds: int = 60
+    poll_seconds: int = 10
     touch_seconds: int = 300
 
 

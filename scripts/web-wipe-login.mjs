@@ -9,11 +9,13 @@
 // 2. Sign in. Time three rejected attempts to record the browser's Argon2id
 //    login key, capture the key from the first request, create the one account
 //    with the setup token, then sign in for real and wait for the first sync.
-// 3. Close the browser, delete the OPFS database, localStorage, cookies and
+// 3. Open a second browser profile, sign in to the same account, append a line
+//    to the note, and wait for the first window to show it without a reload.
+// 4. Close the browser, delete the OPFS database, localStorage, cookies and
 //    service-worker caches. The next launch is a wiped device.
-// 4. Confirm the note is gone, sign in again with the same password, and
-//    find the note, its tag, its pin, its image and a history version produced
-//    on the other device. The first attachment download must not crash the
+// 5. Confirm the note is gone, sign in again with the same password, and
+//    find the note, its tag, its pin, its image and history versions produced
+//    on the other devices. The first attachment download must not crash the
 //    wasm build.
 //
 //   PLAYWRIGHT_MODULES=/path/to/node_modules \
@@ -60,6 +62,8 @@ let serverOutput = "";
 let browser;
 let profile;
 let context;
+let secondProfile;
+let secondContext;
 let persist;
 // The first three sign-ins are attempted before the account exists so the test
 // can time the derived login key. Chrome logs each expected 401.
@@ -357,6 +361,75 @@ try {
   await waitForSynced(page);
   results.push(check("first device reached the Worker", true));
 
+  // ---- A second live device edits the note; the first must update itself. ----
+  await page.locator(".sidebar-nav .nav-row", { hasText: "Notes" }).click();
+  await page.locator(".note-card", { hasText: title }).first().click();
+  await page.waitForFunction(
+    (expected) => document.getElementById("note-editor")?.value.includes(expected),
+    title,
+    { timeout: 30_000 },
+  );
+
+  secondProfile = await mkdtemp(path.join(tmpdir(), "notebox-wipe-profile-b-"));
+  secondContext = await browser.launchPersistentContext(secondProfile, {
+    headless: true,
+    viewport: { width: 1400, height: 900 },
+  });
+  const otherPage = secondContext.pages()[0] ?? (await secondContext.newPage());
+  watch(otherPage, errors);
+  await otherPage.goto(BASE, { waitUntil: "networkidle" });
+  await otherPage
+    .getByRole("heading", { name: "Welcome to Notebox" })
+    .waitFor({ timeout: 60_000 });
+  await fillLogin(otherPage, USERNAME, PASSWORD);
+  await otherPage.getByRole("button", { name: "Connect" }).click();
+  await waitForMarker(otherPage);
+  await waitForSynced(otherPage);
+  await otherPage.locator(".note-card", { hasText: title }).first().click();
+  await otherPage.locator("#note-editor").waitFor();
+
+  const pushed = otherPage.waitForResponse(
+    (response) => {
+      if (
+        response.request().method() !== "POST" ||
+        !response.url().endsWith("/v1/sync")
+      ) {
+        return false;
+      }
+      try {
+        return (
+          (response.request().postDataJSON()?.payload?.updates?.length ?? 0) > 0
+        );
+      } catch {
+        return false;
+      }
+    },
+    { timeout: 60_000 },
+  );
+  const current = await otherPage.locator("#note-editor").inputValue();
+  await otherPage
+    .locator("#note-editor")
+    .fill(`${current}\n\nEdited on the other device.`);
+  await otherPage.waitForFunction(
+    () => !document.querySelector(".save-state")?.textContent?.includes("Unsaved"),
+    null,
+    { timeout: 30_000 },
+  );
+  await pushed;
+  await page.waitForFunction(
+    (expected) => document.getElementById("note-editor")?.value.includes(expected),
+    "Edited on the other device.",
+    { timeout: 45_000 },
+  );
+  results.push(
+    check("a change from another device appears without a reload", true),
+  );
+
+  await secondContext.close();
+  secondContext = undefined;
+  await rm(secondProfile, { recursive: true, force: true });
+  secondProfile = undefined;
+
   // ---- Wipe the local database and the saved session. ----
   await context.close();
   context = undefined;
@@ -509,8 +582,10 @@ try {
   results.push(
     check("no console errors", errors.length === 0, errors.slice(0, 5).join(" | ")),
   );
+  if (secondContext) await secondContext.close().catch(() => {});
   if (context) await context.close().catch(() => {});
   await stopWorker().catch(() => {});
+  if (secondProfile) await rm(secondProfile, { recursive: true, force: true });
   if (profile) await rm(profile, { recursive: true, force: true });
   if (persist) await rm(persist, { recursive: true, force: true });
   console.log(JSON.stringify({ results, errors }, null, 2));

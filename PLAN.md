@@ -103,7 +103,7 @@ update_log(seq INTEGER PRIMARY KEY AUTOINCREMENT, note_id, blob, device_id, crea
 
 The wire format is JSON with base64 blobs: easy to debug with curl, and cheap enough at this volume. Every payload sits in an envelope with a version field, so end-to-end encryption can be added later without a migration.
 
-**Client sync loop.** Run on start, on window focus, 3 seconds after the last edit, and every 60 seconds while visible; never while hidden. Push each changed note's updates since its last pushed version, pull pages until `more` is false, import every update into the local document (importing twice is harmless), then save the cursor in the same transaction. There is no conflict screen: concurrent edits merge.
+**Client sync loop.** Run on start, on window focus or returning to the foreground, 3 seconds after the last edit, and every 10 seconds while visible; never while hidden (ADR-0020). Push each changed note's updates since its last pushed version, pull pages until `more` is false, import every update into the local document (importing twice is harmless), then save the cursor in the same transaction. There is no conflict screen: concurrent edits merge.
 
 **History.** Turn on Loro's change timestamps. A version is a group of changes with no gap over 5 minutes from one device. The history view lists versions, shows a diff against the current text (`similar` crate), and previews any version read-only. Restore writes the old text as a new edit, so history only ever grows. Trash keeps notes until you empty it.
 

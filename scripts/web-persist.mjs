@@ -4,8 +4,10 @@
 //
 // Serves the release web build, drives a persistent Chromium profile, creates
 // a local-only note with an image, closes the browser, and reopens the same
-// profile. A second tab open at the same time must show the "already open"
-// screen rather than writing a competing image.
+// profile. The note and the last screen must come back by themselves. A second
+// tab open at the same time must show the "already open" screen rather than
+// writing a competing image. The final pass turns delete confirmation off and
+// checks that the trash action no longer asks.
 //
 //   PLAYWRIGHT_MODULES=/path/to/node_modules \
 //   node scripts/web-persist.mjs [dist-dir]
@@ -117,6 +119,7 @@ function check(name, ok, detail = "") {
 async function openApp(browser, profile, url, errors) {
   const context = await browser.launchPersistentContext(profile, {
     headless: true,
+    colorScheme: "light",
     viewport: { width: 1400, height: 900 },
   });
   const page = context.pages()[0] ?? (await context.newPage());
@@ -230,9 +233,23 @@ try {
   );
 
   // Display choices are local preferences, not note data. A reload must keep
-  // them, and they must never appear in the synced note itself.
+  // them, and they must never appear in the synced note itself. The first click
+  // must resolve System against the light OS and land on dark, not no-op.
+  const systemTheme = await page.locator("#app-root").getAttribute("data-theme");
   await page.getByRole("button", { name: "Toggle theme" }).click();
-  await page.getByRole("button", { name: "Toggle theme" }).click();
+  await page.waitForFunction(
+    () => document.getElementById("app-root")?.getAttribute("data-theme") === "dark",
+    null,
+    { timeout: 10_000 },
+  );
+  const firstClickTheme = await page.locator("#app-root").getAttribute("data-theme");
+  results.push(
+    check(
+      "one theme click leaves System for the opposite theme",
+      systemTheme === "system" && firstClickTheme === "dark",
+      `${systemTheme} -> ${firstClickTheme}`,
+    ),
+  );
   await page.getByRole("button", { name: "List view" }).click();
   await page.waitForTimeout(300);
 
@@ -276,9 +293,19 @@ try {
     title,
     { timeout: 60_000 },
   );
-  await page.locator(".note-card", { hasText: title }).first().click();
-  await page.waitForTimeout(800);
+  await page.waitForFunction(
+    (expected) => document.getElementById("note-editor")?.value.includes(expected),
+    title,
+    { timeout: 30_000 },
+  );
   const after = await page.locator("#note-editor").inputValue();
+  results.push(
+    check(
+      "the last note reopens without choosing it again",
+      after.includes(title),
+      after.slice(0, 120),
+    ),
+  );
   results.push(
     check(
       "note text survived the restart",
@@ -346,6 +373,53 @@ try {
     ),
   );
   await page.screenshot({ path: path.join(tmpdir(), "notebox-web-persist.png") });
+
+  // Leave Settings open; the next launch must return to it, then Back must
+  // reveal the note that was open before the restart.
+  await page.locator(".nav-row", { hasText: "Settings" }).click();
+  await page.getByRole("heading", { name: "Local data" }).waitFor();
+  await context.close();
+  context = undefined;
+
+  ({ context, page } = await openApp(browser, profile, url, errors));
+  await page.locator(".settings-pane").waitFor({ timeout: 60_000 });
+  results.push(check("the last screen reopens on restart", true));
+  await page.getByRole("button", { name: "Back to notes" }).click();
+  await page.waitForFunction(
+    (expected) => document.getElementById("note-editor")?.value.includes(expected),
+    title,
+    { timeout: 30_000 },
+  );
+  const finalDraft = await page.locator("#note-editor").inputValue();
+  results.push(
+    check(
+      "Back from the restored Settings opens the restored note",
+      finalDraft.includes(title),
+      finalDraft.slice(0, 120),
+    ),
+  );
+
+  // The opt-out must remove the prompt, not only persist a pressed button.
+  await page.locator(".nav-row", { hasText: "Settings" }).click();
+  await page.getByRole("heading", { name: "Local data" }).waitFor();
+  await page
+    .getByRole("group", { name: "Confirm before moving notes to trash" })
+    .getByRole("button", { name: "Off" })
+    .click();
+  await page.waitForTimeout(200);
+  await page.getByRole("button", { name: "Back to notes" }).click();
+  await page.locator("#note-editor").waitFor();
+  await page.getByRole("button", { name: "Move note to trash" }).click();
+  await page.locator(".toast", { hasText: "Moved to trash" }).waitFor();
+  const prompts = await page.locator("#delete-confirm").count();
+  results.push(
+    check(
+      "turning delete confirmation off skips the prompt",
+      prompts === 0,
+      `${prompts} prompt(s)`,
+    ),
+  );
+
   await context.close();
   context = undefined;
   server.close();

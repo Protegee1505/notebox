@@ -22,6 +22,7 @@ pub fn SettingsPane() -> Element {
     let tag_count = state.tags.len();
     let storage = state.storage.clone();
     let confirm_empty = state.confirm_empty_trash;
+    let confirm_delete = state.confirm_delete;
     let pending_restore = state.pending_restore.clone();
     let username = state.profile.username.clone();
     let sync_connected = state.profile.sync_connected;
@@ -361,6 +362,24 @@ pub fn SettingsPane() -> Element {
                                     if option == Layout::Grid { Icon { name: "grid" } }
                                     if option == Layout::List { Icon { name: "list" } }
                                     span { "{option.label()}" }
+                                }
+                            }
+                        }
+                    }
+                    div { class: "setting-row",
+                        span { class: "setting-label", "Confirm before deleting" }
+                        div { class: "segmented", role: "group", aria_label: "Confirm before moving notes to trash",
+                            for option in [true, false] {
+                                button {
+                                    key: "{option}",
+                                    class: if confirm_delete == option { "segmented-option is-active" } else { "segmented-option" },
+                                    r#type: "button",
+                                    aria_pressed: if confirm_delete == option { "true" } else { "false" },
+                                    onclick: {
+                                        let context = context.clone();
+                                        move |_| context.set_confirm_delete(option)
+                                    },
+                                    span { if option { "On" } else { "Off" } }
                                 }
                             }
                         }

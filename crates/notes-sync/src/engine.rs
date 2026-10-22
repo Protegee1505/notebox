@@ -35,7 +35,11 @@ use crate::{SyncError, SyncSession, SyncTransport, TokenStore};
 use uuid::Uuid;
 
 /// How often a visible app syncs on its own.
-pub const SYNC_INTERVAL_SECS: i64 = 60;
+///
+/// Ten seconds keeps a second device fresh without exceeding the project's
+/// 10% share of the Workers free request budget. Hidden pages never poll, and
+/// returning to the foreground asks for an immediate run.
+pub const SYNC_INTERVAL_SECS: i64 = 10;
 
 /// Quiet time after the last edit before a push, so typing does not sync on
 /// every keystroke.

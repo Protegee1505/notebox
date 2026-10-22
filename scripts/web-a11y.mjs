@@ -5,6 +5,9 @@
 // axe-core on every main screen in light and dark themes. It also checks the
 // keyboard path: note-list arrow keys, Tab trapped inside each dialog, focus
 // return after closing a panel, and autofocus on Settings, Login and dialogs.
+// The feature checks cover the static avatar, the unclipped selected-card ring,
+// the default trash confirmation, switching off that confirmation, and the
+// first topbar theme click while the choice is System.
 //
 //   PLAYWRIGHT_MODULES=/path/to/node_modules \
 //   node scripts/web-a11y.mjs [dist-dir]
@@ -423,6 +426,54 @@ try {
   );
   results.push(check("Enter selects the focused note", selected));
 
+  await page.locator(".note-list").evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  await settle(page, 100);
+  const ring = await page.evaluate(() => {
+    const list = document.querySelector(".note-list");
+    const card = document.querySelector(".note-card.is-selected");
+    if (!list || !card) return null;
+    const listBox = list.getBoundingClientRect();
+    const cardBox = card.getBoundingClientRect();
+    return {
+      gap: Math.round((cardBox.top - listBox.top) * 10) / 10,
+      paddingTop: getComputedStyle(list).paddingTop,
+      scrollTop: list.scrollTop,
+    };
+  });
+  results.push(
+    check(
+      "the selected card ring is not clipped at the top",
+      Boolean(ring && ring.scrollTop === 0 && ring.gap >= 4),
+      JSON.stringify(ring),
+    ),
+  );
+
+  const avatar = await page.evaluate(() => {
+    const badge = document.querySelector(".topbar .avatar");
+    return badge
+      ? {
+          tag: badge.tagName,
+          role: badge.getAttribute("role"),
+          tabIndex: badge.getAttribute("tabindex"),
+          hidden: badge.getAttribute("aria-hidden"),
+        }
+      : null;
+  });
+  const avatarShortcut = await page.getByRole("button", { name: "Open settings" }).count();
+  results.push(
+    check(
+      "the avatar is a static, non-interactive badge",
+      avatar?.tag === "SPAN" &&
+        avatar.role === null &&
+        avatar.tabIndex === null &&
+        avatar.hidden === "true" &&
+        avatarShortcut === 0,
+      JSON.stringify({ avatar, avatarShortcut }),
+    ),
+  );
+
   // ---- History panel, both themes, and focus return. ----
   await page.getByRole("button", { name: "Note history" }).click();
   await page.locator(".history-panel").waitFor({ timeout: 10_000 });
@@ -532,9 +583,39 @@ try {
     { timeout: 10_000 },
   );
 
-  // ---- Trash view, both themes. ----
+  // ---- Trash view, both themes, and the delete confirmation. ----
   await setTheme(page, "light");
-  await page.getByRole("button", { name: "Move note to trash" }).click();
+  const trashButton = page.getByRole("button", { name: "Move note to trash" });
+  await trashButton.click();
+  await page.locator("#delete-confirm").waitFor({ timeout: 10_000 });
+  await page.waitForFunction(
+    () => document.activeElement?.id === "confirm-trash-cancel",
+    null,
+    { timeout: 10_000 },
+  );
+  const prematureTrash = page.locator(".toast", { hasText: "Moved to trash" });
+  results.push(
+    check(
+      "trashing asks first and focuses Cancel",
+      (await trashButton.getAttribute("aria-expanded")) === "true" &&
+        (await prematureTrash.count()) === 0,
+    ),
+  );
+  await page.locator("#confirm-trash-cancel").click();
+  await page.locator("#delete-confirm").waitFor({ state: "detached" });
+  await page.waitForFunction(
+    () => document.activeElement?.id === "trash-note",
+    null,
+    { timeout: 10_000 },
+  );
+  results.push(check("Cancel keeps the note and returns focus to trash", true));
+
+  await trashButton.click();
+  await page.locator("#delete-confirm").waitFor({ timeout: 10_000 });
+  await page
+    .locator("#delete-confirm")
+    .getByRole("button", { name: "Move to trash" })
+    .click();
   await page.locator(".toast", { hasText: "Moved to trash" }).waitFor();
   await page.locator(".sidebar-nav .nav-row", { hasText: "Trash" }).click();
   await page.locator(".note-card").first().waitFor();
@@ -554,6 +635,47 @@ try {
     () => document.activeElement?.getAttribute("aria-label") === "Back to notes",
   );
   results.push(check("Settings focuses its back button", settingsFocus));
+
+  const themeGroup = page.getByRole("group", { name: "Theme" });
+  await themeGroup.getByRole("button", { name: "System" }).click();
+  await settle(page);
+  const systemTheme = await page.locator("#app-root").getAttribute("data-theme");
+  await page.getByRole("button", { name: "Toggle theme" }).click();
+  await page.waitForFunction(
+    () => document.getElementById("app-root")?.getAttribute("data-theme") === "dark",
+    null,
+    { timeout: 10_000 },
+  );
+  const toggledTheme = await page.locator("#app-root").getAttribute("data-theme");
+  results.push(
+    check(
+      "one topbar click switches away from System",
+      systemTheme === "system" && toggledTheme === "dark",
+      `${systemTheme} -> ${toggledTheme}`,
+    ),
+  );
+  await themeGroup.getByRole("button", { name: "Light" }).click();
+  await settle(page);
+
+  const deleteGroup = page.getByRole("group", {
+    name: "Confirm before moving notes to trash",
+  });
+  await deleteGroup.getByRole("button", { name: "Off" }).click();
+  await settle(page);
+  const offPressed =
+    (await deleteGroup.getByRole("button", { name: "Off" }).getAttribute("aria-pressed")) ===
+    "true";
+  await deleteGroup.getByRole("button", { name: "On" }).click();
+  await settle(page);
+  const onPressed =
+    (await deleteGroup.getByRole("button", { name: "On" }).getAttribute("aria-pressed")) ===
+    "true";
+  results.push(
+    check(
+      "delete confirmation can be switched off and back on",
+      offPressed && onPressed,
+    ),
+  );
   await audit("settings, light");
 
   await setTheme(page, "dark");
@@ -1051,7 +1173,9 @@ try {
     ),
   );
 
-  await page.getByRole("button", { name: "Open settings" }).click();
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.locator(".sidebar.is-open").waitFor();
+  await page.locator(".nav-row", { hasText: "Settings" }).click();
   await page.getByRole("heading", { name: "Local data" }).waitFor();
   await page.getByRole("button", { name: "Back to notes" }).click();
   await page.locator(".workspace.show-list").waitFor();

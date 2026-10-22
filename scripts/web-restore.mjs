@@ -233,6 +233,11 @@ try {
   await page.locator("#note-editor").fill(`${trashedTitle}\n\nKept in the trash.`);
   await page.waitForTimeout(800);
   await page.getByRole("button", { name: "Move note to trash" }).click();
+  await page.locator("#delete-confirm").waitFor({ timeout: 10_000 });
+  await page
+    .locator("#delete-confirm")
+    .getByRole("button", { name: "Move to trash" })
+    .click();
   await page.locator(".toast", { hasText: "Moved to trash" }).waitFor();
 
   await openSettings(page);
