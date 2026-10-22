@@ -56,6 +56,21 @@ Ctrl+Enter or a footer chip opens them, with a tap-then-chip path on phones.
 
 ## Shipped
 
+- `notes-app`: **Firefox survives opening a Write-mode link**. Ctrl+click,
+  Ctrl+Enter and the footer chip now open a destination by clicking a temporary
+  hidden `<a target="_blank" rel="noopener noreferrer">` instead of calling
+  `window.open` from the Dioxus event. Firefox runs queued microtasks inside
+  `window.open`; the click's pending rerender then re-entered Dioxus while the
+  event dispatch still borrowed its element arena, panicking with `RefCell
+  already borrowed` and showing `RuntimeError: unreachable executed`. The anchor
+  click stays inside the user gesture but does not run the microtask queue, so
+  the popup still opens and the event finishes first. No auth, sync, schema,
+  service-worker or dependency change. Verified with 262 native tests passed and
+  one skipped, `cargo fmt --all --check`, `cargo clippy --workspace --all-targets
+  -- -D warnings`, `cargo deny check`, `scripts/budget-check`, `web-build.sh`,
+  `web-markup.mjs` 20/20, the new Firefox `web-firefox-link.mjs` 4/4 (it fails
+  on the old build with `crash=true` for Ctrl+click and Ctrl+Enter), and
+  `web-budget.mjs` 1.76 MiB brotli. Not deployed yet.
 - `notes-app`, `notes-core`: **Write mode paints links and images and opens
   them**. A Markdown link or image in the source is tinted and underlined in
   the plain textarea (solid primary for links, dashed accent for images), and a

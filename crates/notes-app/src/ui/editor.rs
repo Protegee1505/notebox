@@ -10,7 +10,7 @@ use notes_proto::{NoteId, NotebookId};
 use notes_store::Attachment;
 
 use crate::editor_markup::{self, SegmentKind};
-use crate::links;
+use crate::links::{self, OPEN_URL_JS};
 use crate::markdown_ops::Mark;
 use crate::media::{attachment_kind, format_size};
 use crate::state::{
@@ -749,7 +749,7 @@ pub fn EditorPane() -> Element {
                                      if (!range) return null;\
                                      const url = range[2];\
                                      if (url) {{\
-                                       window.open(url, '_blank', 'noopener,noreferrer');\
+                                       {OPEN_URL_JS}\
                                        return null;\
                                      }}\
                                      return [index, editor.selectionStart];",
@@ -1191,7 +1191,7 @@ fn open_token_at_caret(
          if (index < 0) return null;\
          const url = ranges[index][2];\
          if (url) {{\
-           window.open(url, '_blank', 'noopener,noreferrer');\
+           {OPEN_URL_JS}\
            return null;\
          }}\
          return [index, caret];"

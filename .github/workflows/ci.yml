@@ -162,13 +162,13 @@ jobs:
       - name: Brotli first-load budget
         run: node scripts/web-budget.mjs target/dx/notebox/release/web/public
 
-      - name: Install Playwright Chromium
+      - name: Install Playwright Chromium and Firefox
         run: |
           mkdir -p /tmp/notebox-web
           cd /tmp/notebox-web
           npm init -y >/dev/null
           npm install playwright@1.64.1 axe-core@4.10.2
-          npx playwright install --with-deps chromium
+          npx playwright install --with-deps chromium firefox
 
       - name: Local notes, history and images survive a browser restart
         env:
@@ -179,6 +179,11 @@ jobs:
         env:
           PLAYWRIGHT_MODULES: /tmp/notebox-web/node_modules
         run: node scripts/web-markup.mjs
+
+      - name: Firefox link gestures do not stop the app
+        env:
+          PLAYWRIGHT_MODULES: /tmp/notebox-web/node_modules
+        run: node scripts/web-firefox-link.mjs
 
       - name: Backup export and restore round trip
         env:
