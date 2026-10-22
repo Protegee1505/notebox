@@ -1105,6 +1105,10 @@ try {
       }
       return false;
     };
+    // The highlight mirror duplicates the textarea and is clipped by its
+    // parent. It is aria-hidden decoration, not page content.
+    const inHighlightMirror = (element) =>
+      element.closest(".editor-highlights") !== null;
     const state = {
       height: Math.round(app.height),
       bottom: Math.round(app.bottom),
@@ -1114,7 +1118,10 @@ try {
         Math.max(
           0,
           ...[...document.body.querySelectorAll("*")]
-            .filter((element) => !fixedNested(element))
+            .filter(
+              (element) =>
+                !fixedNested(element) && !inHighlightMirror(element),
+            )
             .map((element) => element.getBoundingClientRect().bottom),
         ),
       ),
