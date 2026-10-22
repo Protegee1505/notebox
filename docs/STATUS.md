@@ -77,7 +77,7 @@ Ctrl+Enter or a footer chip opens them, with a tap-then-chip path on phones.
   token cap, phone tap, 320 px footer); `web-persist.mjs` 32/32,
   `web-a11y.mjs` 78/78, `web-perf.mjs` 7/7 (100 KB note open median 37.4 ms;
   typing p95 9.1 ms, 0 dropped frames) and `web-budget.mjs` 1.76 MiB brotli.
-  Not deployed yet.
+  Deployed as 630704c after green CI run 39795859701.
 - `notes-app`, `notes-core`, `notes-store`, `notes-sync`, `notes-server`:
   **browse, save and delete a note's attachments, and see cloud storage**.
   Clicking a rendered attachment image, pressing Enter or Space on it, or
