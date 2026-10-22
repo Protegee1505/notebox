@@ -3,7 +3,9 @@ use std::sync::Mutex;
 
 use async_trait::async_trait;
 
-use crate::storage::{AccountRow, BlobMetaRow, DeviceRow, NewUpdate, Storage, UpdateRow};
+use crate::storage::{
+    AccountRow, BlobMetaRow, DeviceRow, NewUpdate, Storage, StorageUsageRow, UpdateRow,
+};
 use crate::StorageError;
 
 /// In-memory [`Storage`] used by the handler tests.
@@ -215,5 +217,28 @@ impl Storage for MemoryStorage {
             .blob_chunks
             .get(&(hash.to_string(), index))
             .cloned())
+    }
+
+    async fn storage_usage(&self) -> Result<StorageUsageRow, StorageError> {
+        let state = self.lock();
+        Ok(StorageUsageRow {
+            attachment_bytes: state
+                .blob_meta
+                .values()
+                .fold(0u64, |sum, meta| sum.saturating_add(meta.size)),
+            attachment_count: state.blob_meta.len() as u64,
+            note_bytes: state
+                .updates
+                .iter()
+                .fold(0u64, |sum, row| sum.saturating_add(row.blob.len() as u64)),
+            note_count: state.updates.len() as u64,
+        })
+    }
+
+    async fn delete_blob(&self, hash: &str) -> Result<(), StorageError> {
+        let mut state = self.lock();
+        state.blob_meta.remove(hash);
+        state.blob_chunks.retain(|(stored, _), _| stored != hash);
+        Ok(())
     }
 }

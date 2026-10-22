@@ -78,6 +78,19 @@ pub struct BlobMetaRow {
     pub created_at: i64,
 }
 
+/// Raw storage totals from the two databases.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StorageUsageRow {
+    /// Whole attachment bytes recorded in blob metadata.
+    pub attachment_bytes: u64,
+    /// Number of attachments recorded in blob metadata.
+    pub attachment_count: u64,
+    /// Bytes of encoded updates in the notes database.
+    pub note_bytes: u64,
+    /// Number of update-log rows.
+    pub note_count: u64,
+}
+
 /// Everything the handlers need from durable storage.
 ///
 /// Methods are deliberately small: one handler call maps to a handful of
@@ -151,4 +164,10 @@ pub trait Storage {
 
     /// Read one chunk, if present.
     async fn blob_chunk(&self, hash: &str, index: u32) -> Result<Option<Vec<u8>>, StorageError>;
+
+    /// Sum attachment and note bytes with two aggregate reads.
+    async fn storage_usage(&self) -> Result<StorageUsageRow, StorageError>;
+
+    /// Remove an attachment's metadata and every chunk. Missing is a no-op.
+    async fn delete_blob(&self, hash: &str) -> Result<(), StorageError>;
 }

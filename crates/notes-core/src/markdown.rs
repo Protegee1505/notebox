@@ -7,6 +7,8 @@
 
 use pulldown_cmark::{html, CowStr, Event, Options, Parser, Tag};
 
+use crate::parse_attachment_url;
+
 /// Render a note body to HTML.
 ///
 /// Tables, strikethrough, task lists and footnotes are enabled, matching the
@@ -32,14 +34,34 @@ pub fn render_markdown_with_images(
     options.insert(Options::ENABLE_TASKLISTS);
     options.insert(Options::ENABLE_FOOTNOTES);
 
-    let events = Parser::new_ext(markdown, options).map(|event| neutralize(event, resolve));
+    // An attachment image is rendered through a unique, safe marker. After
+    // pulldown-cmark writes the HTML, the marker becomes the inline data URL
+    // plus the hash the preview click handler needs. Inserting the hash into
+    // the resolver URL would either break the data URL or let a resolver
+    // smuggle attributes into the page.
+    let mut images: Vec<(String, String, String)> = Vec::new();
+    let events =
+        Parser::new_ext(markdown, options).map(|event| neutralize(event, resolve, &mut images));
     let mut out = String::with_capacity(markdown.len() + markdown.len() / 2);
     html::push_html(&mut out, events);
+    for (marker, url, hash) in images {
+        let source = format!("src=\"{marker}\"");
+        let replacement = format!(
+            "src=\"{}\" data-attachment-hash=\"{}\" class=\"attachment-preview-image\" tabindex=\"0\" role=\"button\"",
+            escape_attribute(&url),
+            escape_attribute(&hash)
+        );
+        out = out.replace(&source, &replacement);
+    }
     out
 }
 
 /// Turn anything the HTML renderer would emit verbatim into plain text.
-fn neutralize<'a>(event: Event<'a>, resolve: &dyn Fn(&str) -> Option<String>) -> Event<'a> {
+fn neutralize<'a>(
+    event: Event<'a>,
+    resolve: &dyn Fn(&str) -> Option<String>,
+    images: &mut Vec<(String, String, String)>,
+) -> Event<'a> {
     match event {
         Event::Html(html) => Event::Text(html),
         Event::InlineHtml(html) => Event::Text(html),
@@ -59,15 +81,35 @@ fn neutralize<'a>(event: Event<'a>, resolve: &dyn Fn(&str) -> Option<String>) ->
             dest_url,
             title,
             id,
-        }) => Event::Start(Tag::Image {
-            link_type,
-            dest_url: resolve(&dest_url)
-                .map_or_else(|| safe_url(&dest_url), |url| safe_image_url(&url)),
-            title,
-            id,
-        }),
+        }) => {
+            let destination = match parse_attachment_url(&dest_url) {
+                Some(parsed) => {
+                    let url = resolve(&dest_url)
+                        .map_or_else(|| safe_url(&dest_url), |url| safe_image_url(&url))
+                        .to_string();
+                    let marker = format!("notebox-attachment-preview-{}", images.len());
+                    images.push((marker.clone(), url, parsed.hash.to_ascii_lowercase()));
+                    CowStr::Boxed(marker.into_boxed_str())
+                }
+                None => safe_url(&dest_url),
+            };
+            Event::Start(Tag::Image {
+                link_type,
+                dest_url: destination,
+                title,
+                id,
+            })
+        }
         event => event,
     }
+}
+
+fn escape_attribute(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// Accept only an inline image from the attachment resolver.
@@ -161,25 +203,51 @@ mod tests {
 
     #[test]
     fn attachment_images_can_be_resolved_to_inline_data() {
-        let html = super::render_markdown_with_images("![pic](attachments/abc.webp)", &|url| {
-            assert_eq!(url, "attachments/abc.webp");
+        let hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let markdown = format!("![pic](attachments/{hash}.webp)");
+        let html = super::render_markdown_with_images(&markdown, &|url| {
+            assert_eq!(
+                url,
+                markdown.trim_start_matches("![pic](").trim_end_matches(')')
+            );
+            Some("data:image/webp;base64,AAAA".to_string())
+        });
+        assert!(
+            html.contains("src=\"data:image/webp;base64,AAAA\""),
+            "resolved HTML: {html:?}"
+        );
+    }
+
+    #[test]
+    fn attachment_images_carry_their_hash_for_the_preview() {
+        let hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let markdown = format!("![pic](attachments/{hash}.webp)");
+        let html = super::render_markdown_with_images(&markdown, &|_| {
             Some("data:image/webp;base64,AAAA".to_string())
         });
         assert!(html.contains("src=\"data:image/webp;base64,AAAA\""));
+        assert!(html.contains(&format!("data-attachment-hash=\"{hash}\"")));
+        assert!(html.contains("class=\"attachment-preview-image\""));
+        assert!(html.contains("tabindex=\"0\""));
+        assert!(html.contains("role=\"button\""));
     }
 
     #[test]
     fn a_resolver_cannot_inject_script() {
-        let html = super::render_markdown_with_images("![pic](attachments/abc.webp)", &|_| {
+        let hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let markdown = format!("![pic](attachments/{hash}.webp)");
+        let html = super::render_markdown_with_images(&markdown, &|_| {
             Some("javascript:alert(1)".to_string())
         });
         assert!(!html.contains("javascript:"));
-        assert!(html.contains("src=\"#\""));
+        assert!(html.contains("src=\"#\""), "resolved HTML: {html:?}");
     }
 
     #[test]
     fn unresolved_images_keep_their_relative_path() {
-        let html = super::render_markdown_with_images("![pic](attachments/abc.webp)", &|_| None);
-        assert!(html.contains("src=\"attachments/abc.webp\""));
+        let hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let markdown = format!("![pic](attachments/{hash}.webp)");
+        let html = super::render_markdown_with_images(&markdown, &|_| None);
+        assert!(html.contains(&format!("src=\"attachments/{hash}.webp\"")));
     }
 }

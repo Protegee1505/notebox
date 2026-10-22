@@ -10,7 +10,10 @@ pin and history back. An accessibility audit of every main screen and theme
 passes, including note-list arrow keys, Tab trapped inside dialogs and focus
 return after closing a panel. Image notes now show their first image on cards,
 Back opens a full-width desktop gallery, the Navigator collapses the sidebar,
-and the attachment strip starts closed behind a footer count. The phone note
+and the attachment strip starts closed behind a footer count. A rendered image
+or the footer count now opens a per-note attachment viewer with download,
+remove-from-note and permanent delete; Settings reports local attachment bytes
+and the cloud use of each 500 MB database, refreshed only on demand. The phone note
 list now keeps a pasted image title
 inside the viewport and keeps full title lines when the list scrolls, the
 editor header fits and the toolbar scrolls at 320 px, and the colour menu no
@@ -51,6 +54,36 @@ scrolls, and no light row is left below the app when the keyboard opens.
 
 ## Shipped
 
+- `notes-app`, `notes-core`, `notes-store`, `notes-sync`, `notes-server`:
+  **browse, save and delete a note's attachments, and see cloud storage**.
+  Clicking a rendered attachment image, pressing Enter or Space on it, or
+  pressing the footer attachment count opens a per-note viewer at that image;
+  the strip's **Browse all** opens the first image. The viewer keeps a
+  thumbnail grid, position count, arrows/Home/End, a Tab trap and Escape, and
+  returns focus to the image or footer button that opened it. It can download
+  a file, remove an image reference from the note while another note still
+  links the bytes, and permanently delete the file. Delete asks first with
+  focus on Cancel, rechecks its guards at confirmation, refuses while a sync is
+  running, while another note links the hash, while signed out for a previously
+  uploaded file, or while offline/needs-login; a signed-in delete removes the
+  cloud blob first, marks the local row pending to repair a crash or a lost
+  response, edits the note that started the delete even if another note opens,
+  and only then removes the references, local bytes and row. The last item
+  closes the viewer and returns focus to the app root. There is no tombstone;
+  ADR-0021 records the history and restore caveats.
+  Settings adds local **Images & files** counts/size and, when signed in, two
+  cloud meters for attachments and notes/history against the free 500 MB
+  per-database limit, with remaining bytes and a refresh button. The notes
+  figure is labelled approximate because `update_log` is base64. Usage is
+  fetched on Settings open or Refresh, never polled. The new authenticated
+  `GET /v1/usage` and idempotent `DELETE /v1/blob/{hash}` routes add no D1
+  migration. Verified with 250 native tests passed and one skipped,
+  `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D
+  warnings`, `cargo deny check`, `scripts/budget-check`, `server-e2e.mjs`
+  71/71, `web-persist.mjs` 32/32 (preview and footer entry, download, keyboard
+  navigation, focus return, two-file delete, last-file close),
+  `web-a11y.mjs` 78/78 (320 px viewer fit and WCAG A/AA) and `web-perf.mjs`
+  7/7. The web build is 1.75 MiB brotli. Not deployed yet.
 - `notes-app`: **the avatar is the account control**. The topbar avatar is now
   a real button. It opens an account panel: an anchored popover on desktop and a
   fixed bottom sheet on phones. The panel shows the username or "Local only", a
@@ -737,18 +770,18 @@ scrolls, and no light row is left below the app when the keyboard opens.
 | S3 tail probe | 100 requests at 1/s: 100/100 tail events, 0 failures, CPU min 0 / p50 1 / p95 2 / max 2 ms; login 401 `invalid_credentials`, devices and sync 401 `unauthorized`; no 1102 or 5xx |
 | S3 Argon2id | desktop release 38.2 ms median (20 runs, max 92.1 ms); Chromium release build 119 ms median (178/119/116 ms, includes local Worker round trip); phone not measured |
 | S3 free limits | re-read 2026-10-21: 100,000 requests/day, 10 ms CPU, 50 subrequests, 50 D1 queries, 2 MB rows, 10 D1 databases; 2 databases in use |
-| Native tests | 240 passed, 1 skipped (the ignored Worker client e2e) |
+| Native tests | 250 passed, 1 skipped (the ignored Worker client e2e) |
 | CI | Run 39733053626 on 2582101: all eight jobs green (gates, wasm, server, Windows, Android, desktop, OPFS, web). Run 39727904123 on 71e0b72 was green too; the earlier run 39637535803 on 1e6bfdf was green, though GitHub Actions briefly left it `in_progress` during its 2026-10-21 partial outage after every job had passed |
 | P8 backup restore (Playwright) | 18/18 checks: fresh-profile export/import of a notebook, pinned tagged note and trashed note; text, tag, pin, trash, attachment row, decoded WebP, history peer label and idempotent second import; no console errors |
 | P8 wipe and sign-in (Playwright + local Worker) | 20/20 checks: three timed rejected logins (browser Argon2id median 122 ms), derived login key, account setup, first sync, image attachment, a second live profile appends a line that the first window receives without a reload, OPFS/localStorage/cookie/cache wipe, note gone, sign in, attachment download without a crash, note body/tag/pin/image, history labelled as the other devices, no duplicate, no console errors |
-| P8 accessibility, onboarding and search (Playwright + axe-core) | 76/76 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; first launch shows welcome Login with no back button, offline starts empty, optional tour adds three cards, Ctrl K focuses search, Ctrl P opens the palette, a search mark renders, opening a hit leaves Find closed with no selection and a long hit scrolls to its match, a phone tap on a hit keeps focus out of the editor, tag-only matches keep Find closed; the avatar is a button that opens an account panel, focuses it, closes on Escape with focus back on the avatar, and becomes a fixed in-viewport sheet at 390 px, the selected card ring clears the list top by 8 px, trash asks first and focuses Cancel before Escape/Cancel returns focus to the trash button, one topbar click leaves System for dark, and the delete-confirmation setting toggles off and on; note-list Arrow/Home/Enter, Tab and Shift+Tab stay inside the three dialogs, focus return after overlays, Settings/Login/dialog autofocus; image title and no list overflow at 390/360/320; card titles keep a full line at 360×420 and compact rows at 1024×420; 320 px header, scrollable toolbar and reachable Quote; colour sheet inside the viewport; the floating new-note button hidden at 1400 px and opening the editor at 390 px; tag chips fold away while the note body scrolls and return at the top; one-tap Back and phone Settings/navigation; desktop Back opens a 1160 px gallery, choosing a note returns, and Navigator collapses and restores the sidebar; no console errors |
-| P8 local preferences and restart (Playwright) | 22/22 checks: browser storage, the attachment panel starts closed, the card shows a decoded thumbnail, note with image and history survive restart, the last note and Settings screen return without choosing them, one theme click leaves System, dark theme and list layout survive restart, turning delete confirmation off skips the prompt, second tab blocked by the store lock, no console errors |
+| P8 accessibility, onboarding and search (Playwright + axe-core) | 78/78 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; first launch shows welcome Login with no back button, offline starts empty, optional tour adds three cards, Ctrl K focuses search, Ctrl P opens the palette, a search mark renders, opening a hit leaves Find closed with no selection and a long hit scrolls to its match, a phone tap on a hit keeps focus out of the editor, tag-only matches keep Find closed; the avatar is a button that opens an account panel, focuses it, closes on Escape with focus back on the avatar, and becomes a fixed in-viewport sheet at 390 px, the selected card ring clears the list top by 8 px, trash asks first and focuses Cancel before Escape/Cancel returns focus to the trash button, one topbar click leaves System for dark, and the delete-confirmation setting toggles off and on; note-list Arrow/Home/Enter, Tab and Shift+Tab stay inside the three dialogs, focus return after overlays, Settings/Login/dialog autofocus; image title and no list overflow at 390/360/320; card titles keep a full line at 360×420 and compact rows at 1024×420; 320 px header, scrollable toolbar and reachable Quote; colour sheet inside the viewport; the floating new-note button hidden at 1400 px and opening the editor at 390 px; tag chips fold away while the note body scrolls and return at the top; one-tap Back and phone Settings/navigation; desktop Back opens a 1160 px gallery, choosing a note returns, and Navigator collapses and restores the sidebar; the attachment viewer fits a 320 px phone and passes axe WCAG A/AA on mobile dark; no console errors |
+| P8 local preferences, attachments and restart (Playwright) | 32/32 checks: browser storage, the attachment panel starts closed, the card shows a decoded thumbnail, note with image and history survive restart, the last note and Settings screen return without choosing them, one theme click leaves System, dark theme and list layout survive restart, a rendered image and the footer count open the viewer, arrows step it, Tab stays inside, close returns focus, download saves the selected file, delete confirmation starts on Cancel, one of two files can be removed and the last copy can be permanently deleted, the viewer then closes and focuses the app root, Settings drops the last attachment, turning delete confirmation off skips the prompt, second tab blocked by the store lock, no console errors |
 | P8 phone sign-in (one-off Playwright, 360 px touch + local Worker) | New note saved, derived login key, account setup, status `Synced`, synced note in the list, no list overflow, Settings round trip, navigation drawer, one-tap Back with the colour menu open; no console errors |
 | Web login preview | Rebuilt release at 2026-10-21: the Worker origin is read-only with no URL input, the offline action is visible, and the screen has no horizontal overflow or console errors at 1400 px and 390 px |
 | Live Worker deployment | `https://notebox.nbx-7207a015.workers.dev` serves release 0.1.0 / 2582101; `/version.json` reports the same build. A fresh live Chromium run opened offline, opened the account panel at 1400 px, saw "Sign in to sync" and "Account settings", returned focus to the avatar on Escape, and measured the fixed phone sheet inside 390×844; no console errors. The previous 71e0b72 deploy opened offline, saved a note, reopened Settings and the note after a reload, found the avatar a static `SPAN` with no role or tab stop, moved System to dark, and saw the trash confirmation with focus on Cancel; 7/7 checks. The e11a0f5 deploy opened the 1160 px Back gallery and decoded a card thumbnail; 1e6bfdf carried the search-open change verified by 63/63 local release checks. The ce65296 probe had shown Welcome Login with no back button, then Try it offline opened an empty library with the optional Add welcome tour and no console errors. The earlier 5fae2ef deploy checked the seeded list's title line; the e9c8e82 deploy passed a fresh sign-in and first sync; the 759971a phone probe created a local image note and exercised the colour sheet and one-tap Back |
 | Deploy guard | `./scripts/deploy-web.sh --if-needed` deployed 2582101 after green CI run 39733053626 and verified `/version.json`; the check also reported no pending migrations on either D1 database, `dx` 0.7.10 and `worker-build` 0.8.7. The previous guard deployed 71e0b72 after CI run 39727904123 |
 | Remote D1 migrations | `notebox-sync` and `notebox-blobs` each applied `0001_init.sql`; `wrangler d1 migrations list --remote` reports no pending migrations |
-| P8 large note (web UI) | 102,415 B note: current run open median 9.9 ms (51.8, 8.5, 9.9, 8.7, 54.4 ms); 120 typed characters, input-to-frame p95 9.1 ms, max 13.7 ms, none over 34 ms; text survives a reload; recorded web start 1,195 ms including the offline choice and optional tour; earlier run 786–1010 ms with auto-seeded samples |
+| P8 large note (web UI) | 102,415 B note: final gallery build open median 40.0 ms (45.9, 40.0, 43.7, 36.2, 36.2 ms); 120 typed characters, input-to-frame p95 10.7 ms, max 24.8 ms, none over 34 ms; text survives a reload; web start 1,003 ms including the offline choice; an earlier run opened in a median 9.9 ms with a 1,195 ms start |
 | P8 desktop cold start (Linux release) | warm median 555 ms over 5 runs (547–587 ms), budget 600 ms; earlier first run 628 ms with sample seeding, 2,170 ms when WebKit's cache is cold; not remeasured since automatic seeding was removed; Xvfb with isolated XDG directories |
 | P8 backup archive | v2 manifest plus one full Loro snapshot per note; v1 archives still read; restore over newer local edits keeps both timelines |
 | Search, 10,000 notes | seeded in 14,534 ms; search 4 ms (budget 100 ms), 1 hit |
@@ -764,7 +797,7 @@ scrolls, and no light row is left below the app when the keyboard opens.
 | PWA bundle | 10 precached files; 32,625 bytes of manifest, icons, HTML and worker; pre-cache assets from the Dioxus manifest only |
 | P7 browser persistence (Playwright) | 13/13 checks: Browser storage label, local-only note and PNG, WebP attachment, second-tab lock, browser restart, text/image/history, page-hide save, no console errors |
 | P7 conflict flow (Playwright) | 13/13 checks with two device contexts plus a third puller: delayed sync, edit during the run, conflict toast, merged original, `conflict`-tagged copy holding the typed text, follow-up sync before the next idle poll, copy pulled by another device |
-| Web bundle (release, brotli) | session/theme build 1,815,379 B (1.73 MiB), raw 7,650,474 B, limit 3.00 MiB; e11a0f5 image-card build 1,813,112 B (1.73 MiB), raw 7,638,386 B; P8 backup restore 1,787,615 B (1.70 MiB), raw 7,501,597 B; P7 release build 1,818,284 B (1.73 MiB), raw 7,529,584 B; P7 Dioxus build 1,792,565 B (1.71 MiB), raw 7,489,034 B; P6 manual build 1,955,393 B (1.86 MiB), raw 9,353,273 B; P5 CI was 1,545,831 B |
+| Web bundle (release, brotli) | gallery/usage build 1,836,762 B (1.75 MiB), raw 7,759,467 B, limit 3.00 MiB; session/theme build 1,815,379 B (1.73 MiB), raw 7,650,474 B; e11a0f5 image-card build 1,813,112 B (1.73 MiB), raw 7,638,386 B; P8 backup restore 1,787,615 B (1.70 MiB), raw 7,501,597 B; P7 release build 1,818,284 B (1.73 MiB), raw 7,529,584 B; P7 Dioxus build 1,792,565 B (1.71 MiB), raw 7,489,034 B; P6 manual build 1,955,393 B (1.86 MiB), raw 9,353,273 B; P5 CI was 1,545,831 B |
 | Linux bundles | `notebox_0.1.0_amd64.deb` 9,867,218 B; `notebox_0.1.0_x86_64.AppImage` 89,597,120 B. The `.deb` installed and stayed up for 20 s under Xvfb; the extracted AppImage did the same. Both from `dx bundle` 0.7.10 with the patched lockfile |
 | P5 browser flow (Playwright) | 26/26 checks: autosave, timeline, diff, preview, restore, version retention, trash, confirm, cancel, restore and empty |
 | P5 layout review | 360/900/1400 px, light and dark; no horizontal overflow, no console errors |
@@ -777,7 +810,7 @@ scrolls, and no light row is left below the app when the keyboard opens.
 | Browser DB size | 122,880 B for 1,000 notes; rollback journal, one worker connection |
 | SQLite wasm (release) | 1,783,762 B raw; 510,738 B brotli; 679,936 B gzip |
 | Worker wasm (release, wasm-opt) | 644,372 B raw; 177,142 B brotli; limit 64 MiB |
-| Server end-to-end | 51 checks green against `wrangler dev --local` and local D1, including logout and cookie expiry |
+| Server end-to-end | 71 checks green against `wrangler dev --local` and local D1, including logout, cookie expiry, authenticated usage and idempotent blob deletion |
 | Client sync, in-process | 14 two-client tests on the real handler stack; lost response, dropped request, `429` and corrupt chunks all converge |
 | Client sync, real Worker | 1 test / 24 assertions green through `wrangler dev --local` and D1 in 3.23 s |
 | Argon2id login key | 38.2 ms median over 20 release runs (max 92.1 ms); see the S3 Argon2id row. Debug build 0.61–0.66 s |
@@ -849,6 +882,12 @@ scrolls, and no light row is left below the app when the keyboard opens.
   still waits on an Android runtime and a live native login. The native desktop
   path is compile-checked and shares the engine tests, but this slice did not
   drive its login/sync threads through the UI against a live Worker.
+- **Attachment gallery deployment**: the viewer, download, permanent delete,
+  `GET /v1/usage` and the Settings meters pass the local release checks, but
+  this change is not merged or deployed. After CI is green it needs the owner's
+  separate deployment approval; then verify the viewer, a download, a delete
+  and both cloud meters against the live Worker.
+
 ## Next
 
 1. P8 finish. Accessibility, the 100 KB note, the Linux warm cold-start budget,
@@ -857,7 +896,11 @@ scrolls, and no light row is left below the app when the keyboard opens.
    fresh sign-in and first sync; close P8 with the full wipe/pull/history drill
    against it. Repeat the first-run, open-note and cold-start measurements on
    Windows and Android when those runtimes are available.
-2. Personal release execution: the Worker is deployed, the account is created,
+2. Ship the attachment gallery: review and merge, wait for green CI, then ask
+   the owner before deploying. Verify a rendered preview and the footer count
+   open the viewer live, download a file, delete a throwaway attachment and see
+   both Settings meters; then ask the owner to accept it.
+3. Personal release execution: the Worker is deployed, the account is created,
    `SETUP_TOKEN` is deleted and `NBX_SERVER_URL` is set. **The v0.1.0 tag is
    deliberately not pushed yet**: the first-run, preferences, search,
    shortcut, image-card, desktop-chrome, session-restore, confirm-delete,
@@ -865,17 +908,17 @@ scrolls, and no light row is left below the app when the keyboard opens.
    CI run 39733053626; the owner should accept them. Then bump/confirm the
    version, push the tag, watch the first release workflow, and verify login
    and sync on a Windows install, a Linux install and the deployed web app.
-3. P7 release execution for Android when wanted: create and back up the
+4. P7 release execution for Android when wanted: create and back up the
    keystore, set the four repository secrets, set `RELEASE_ANDROID=true`, and
    publish a tagged release. Do not publish an unsigned APK. Add the desktop
    update-available notice in a later v0.1.1, after the first release; the web
    banner is already done.
-4. Run the human P5/P6/P7 acceptance on a desktop and a phone, including a
+5. Run the human P5/P6/P7 acceptance on a desktop and a phone, including a
    photo, a version restore and an installed PWA update. S3's desktop and
    browser CPU and Argon2 evidence is closed; the phone Argon2 number comes with
    the Android runtime work below.
-5. Run S2/S5/P6/P7 on an Android emulator with `/dev/kvm` (CI or a physical
+6. Run S2/S5/P6/P7 on an Android emulator with `/dev/kvm` (CI or a physical
    device) to close the runtime gap, including Gboard composition, the camera
    picker and the in-app login/sync loop.
-6. Measure an OPFS image write on 1,000 notes and 50 images; if it exceeds
+7. Measure an OPFS image write on 1,000 notes and 50 images; if it exceeds
    roughly 100 ms, schedule the worker-backed `SqliteStore` from ADR-0004.

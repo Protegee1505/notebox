@@ -3,6 +3,7 @@
 use dioxus::prelude::*;
 
 use crate::build_info;
+use crate::media::format_size;
 use crate::state::{AppContext, Layout, Screen, Theme};
 use crate::time::relative_time;
 use crate::ui::icons::Icon;
@@ -21,6 +22,7 @@ pub fn SettingsPane() -> Element {
     let note_count = state.note_count;
     let tag_count = state.tags.len();
     let storage = state.storage.clone();
+    let attachment_usage = state.attachment_usage;
     let confirm_empty = state.confirm_empty_trash;
     let confirm_delete = state.confirm_delete;
     let pending_restore = state.pending_restore.clone();
@@ -42,6 +44,13 @@ pub fn SettingsPane() -> Element {
         .last_synced
         .map(|at| format!("Last synced {}", relative_time(now, at)))
         .unwrap_or_else(|| "Not synced yet".to_string());
+    let cloud_usage = sync.usage;
+    let usage_loading = sync.usage_loading;
+    let usage_error = sync.usage_error.clone();
+    let usage_checked = sync
+        .usage_checked_at
+        .map(|at| format!("Checked {}", relative_time(now, at)))
+        .unwrap_or_else(|| "Not checked yet".to_string());
 
     rsx! {
         main { class: "settings-pane", aria_label: "Settings",
@@ -459,6 +468,8 @@ pub fn SettingsPane() -> Element {
                         div { dt { "Notes" } dd { "{note_count}" } }
                         div { dt { "Notebooks" } dd { "{notebooks.len()}" } }
                         div { dt { "Tags" } dd { "{tag_count}" } }
+                        div { dt { "Images & files" } dd { "{attachment_usage.count}" } }
+                        div { dt { "Attachment size" } dd { "{format_size(attachment_usage.bytes)}" } }
                     }
                     p { class: if storage.temporary { "storage-path is-temporary" } else { "storage-path" },
                         "{storage.detail}"
@@ -556,6 +567,68 @@ pub fn SettingsPane() -> Element {
                     }
                 }
 
+                section { class: "settings-card cloud-card",
+                    div { class: "card-heading",
+                        h2 { "Cloud storage" }
+                        span { class: "muted-label",
+                            if sync_connected { "500 MB per database" } else { "Local only" }
+                        }
+                    }
+                    if !sync_connected {
+                        p { class: "card-note",
+                            "Sign in to see how much of your Worker's free storage the account uses. Images, notes and history all stay readable on this device when you are offline."
+                        }
+                    } else if let Some(usage) = cloud_usage {
+                        UsageMeter {
+                            title: "Images & files",
+                            bytes: usage.attachments.bytes,
+                            count_label: plural_count(usage.attachments.count, "file", "files"),
+                            limit: usage.limit_bytes,
+                            approximate: false,
+                        }
+                        UsageMeter {
+                            title: "Notes & history",
+                            bytes: usage.notes.bytes,
+                            count_label: plural_count(usage.notes.count, "update", "updates"),
+                            limit: usage.limit_bytes,
+                            approximate: true,
+                        }
+                        p { class: "card-note",
+                            "Each database has its own 500 MB on the free plan. The notes figure is approximate because the update log stores base64-encoded history."
+                        }
+                    } else if usage_loading {
+                        div { class: "cloud-checking", role: "status",
+                            span { class: "save-dot is-dirty" }
+                            "Checking cloud storage..."
+                        }
+                    } else {
+                        p { class: "card-note",
+                            "Cloud storage has not been checked yet."
+                        }
+                    }
+                    if let Some(error) = usage_error {
+                        div { class: "form-error", role: "status",
+                            span { "{error}" }
+                        }
+                    }
+                    if sync_connected {
+                        div { class: "button-row cloud-actions",
+                            button {
+                                class: "secondary-button",
+                                r#type: "button",
+                                disabled: usage_loading,
+                                onclick: {
+                                    let context = context.clone();
+                                    move |_| context.refresh_cloud_usage()
+                                },
+                                Icon { name: "refresh" }
+                                span { if usage_loading { "Checking..." } else { "Refresh usage" } }
+                            }
+                            span { class: "muted-label", "{usage_checked}" }
+                        }
+                    }
+                }
+
                 section { class: "settings-card danger-card",
                     div { class: "card-heading",
                         h2 { "Trash" }
@@ -613,4 +686,42 @@ pub fn SettingsPane() -> Element {
             }
         }
     }
+}
+
+#[component]
+fn UsageMeter(
+    title: &'static str,
+    bytes: u64,
+    count_label: String,
+    limit: u64,
+    #[props(default = false)] approximate: bool,
+) -> Element {
+    let remaining = limit.saturating_sub(bytes);
+    rsx! {
+        div { class: "usage-meter",
+            div { class: "usage-meter-head",
+                strong { "{title}" }
+                span { "{format_size(bytes)} of {format_size(limit)}" }
+            }
+            progress {
+                class: "usage-progress",
+                value: "{bytes}",
+                max: "{limit}",
+                aria_label: "{title} storage used",
+            }
+            div { class: "usage-meter-foot",
+                span { "{format_size(remaining)} remaining" }
+                span {
+                    "{count_label}"
+                    if approximate {
+                        " \u{00b7} approximate"
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn plural_count(count: u64, singular: &str, plural: &str) -> String {
+    format!("{count} {}", if count == 1 { singular } else { plural })
 }

@@ -610,6 +610,15 @@ impl NoteStore for SqliteStore {
         Ok(())
     }
 
+    fn mark_attachment_pending(&self, hash: &str) -> Result<(), StoreError> {
+        let conn = self.conn.borrow();
+        conn.execute(
+            "UPDATE attachment SET uploaded_at = NULL WHERE hash = ?1",
+            params![hash.to_ascii_lowercase()],
+        )?;
+        Ok(())
+    }
+
     fn attachment_usage(&self) -> Result<AttachmentUsage, StoreError> {
         let conn = self.conn.borrow();
         let (count, bytes): (i64, i64) = conn.query_row(
@@ -621,6 +630,33 @@ impl NoteStore for SqliteStore {
             count: count.max(0) as u64,
             bytes: bytes.max(0) as u64,
         })
+    }
+
+    fn attachment_note_count(&self, hash: &str) -> Result<u64, StoreError> {
+        let conn = self.conn.borrow();
+        let count: i64 = conn.query_row(
+            "SELECT count(*) FROM note_attachment WHERE hash = ?1",
+            params![hash.to_ascii_lowercase()],
+            |row| row.get(0),
+        )?;
+        Ok(count.max(0) as u64)
+    }
+
+    fn delete_attachment(&self, hash: &str) -> Result<bool, StoreError> {
+        let hash = hash.to_ascii_lowercase();
+        let mut conn = self.connection();
+        let tx = conn.transaction()?;
+        let references: i64 = tx.query_row(
+            "SELECT count(*) FROM note_attachment WHERE hash = ?1",
+            params![hash],
+            |row| row.get(0),
+        )?;
+        if references > 0 {
+            return Ok(false);
+        }
+        let deleted = tx.execute("DELETE FROM attachment WHERE hash = ?1", params![hash])? > 0;
+        tx.commit()?;
+        Ok(deleted)
     }
 
     fn apply_update(&self, id: &NoteId, update: &[u8], at: i64) -> Result<Note, StoreError> {

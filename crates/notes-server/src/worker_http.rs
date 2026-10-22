@@ -61,6 +61,8 @@ pub async fn handle(req: Request, env: Env) -> worker::Result<Response> {
         .post_async("/v1/sync", sync)
         .put_async("/v1/blob/:hash", put_blob)
         .get_async("/v1/blob/:hash", get_blob)
+        .delete_async("/v1/blob/:hash", delete_blob)
+        .get_async("/v1/usage", storage_usage)
         .get_async("/v1/devices", list_devices)
         .delete_async("/v1/devices/:id", revoke_device)
         .run(req, env)
@@ -203,6 +205,36 @@ async fn list_devices(req: Request, ctx: RouteContext<AppState>) -> worker::Resu
     .await;
     match result {
         Ok(devices) => json_response(&envelope(devices), 200),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn delete_blob(req: Request, ctx: RouteContext<AppState>) -> worker::Result<Response> {
+    let result = async {
+        let _device = authenticate(&req, &ctx.data.server).await?;
+        let hash = ctx
+            .param("hash")
+            .cloned()
+            .ok_or_else(|| ServerError::Invalid("missing hash".into()))?;
+        ctx.data.server.delete_blob(&hash).await?;
+        Ok::<_, ServerError>(())
+    }
+    .await;
+    match result {
+        Ok(()) => Response::empty().map(|response| response.with_status(204)),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn storage_usage(req: Request, ctx: RouteContext<AppState>) -> worker::Result<Response> {
+    let result = async {
+        let _device = authenticate(&req, &ctx.data.server).await?;
+        let usage = ctx.data.server.usage().await?;
+        Ok::<_, ServerError>(usage)
+    }
+    .await;
+    match result {
+        Ok(usage) => json_response(&envelope(usage), 200),
         Err(error) => error_response(error),
     }
 }

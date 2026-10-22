@@ -12,7 +12,7 @@ use crate::state::{
     COLORS,
 };
 use crate::ui::icons::Icon;
-use crate::ui::HistoryPanel;
+use crate::ui::{AttachmentGallery, HistoryPanel};
 
 /// A few pixels of scroll keep the row still; roughly one text line hides it.
 const TAG_ROW_SCROLL_THRESHOLD: f64 = 24.0;
@@ -67,6 +67,7 @@ pub fn EditorPane() -> Element {
     let notebooks = state.notebooks.clone();
     let attachments = state.attachments.clone();
     let attachments_open = state.attachments_open;
+    let gallery_open = state.gallery_open;
     let attaching = state.attaching;
     let summary = selected.and_then(|id| state.notes.iter().find(|note| note.id == id).cloned());
     let pinned = summary.as_ref().map(|note| note.pinned).unwrap_or(false);
@@ -606,6 +607,50 @@ pub fn EditorPane() -> Element {
                         class: "editor-preview markdown-body",
                         aria_label: "Rendered note",
                         dangerous_inner_html: "{preview_html}",
+                        onclick: {
+                            let context = context.clone();
+                            move |event| {
+                                let point = event.client_coordinates();
+                                let script = format!(
+                                    "const el = document.elementFromPoint({}, {});\
+                                     return el?.closest('[data-attachment-hash]')?.getAttribute('data-attachment-hash') ?? null;",
+                                    point.x, point.y
+                                );
+                                let eval = document::eval(&script);
+                                let context = context.clone();
+                                spawn(async move {
+                                    if let Ok(Some(hash)) = eval.join::<Option<String>>().await {
+                                        context.open_attachment_gallery(Some(hash));
+                                    }
+                                });
+                            }
+                        },
+                        onkeydown: {
+                            let context = context.clone();
+                            move |event| {
+                                let key = event.key();
+                                let space = matches!(&key, Key::Character(ch) if ch == " ");
+                                if key != Key::Enter && !space {
+                                    return;
+                                }
+                                // The rendered image carries the hash; links do
+                                // not. Enter on a link keeps its normal action,
+                                // while Space on the focused image opens it.
+                                if space {
+                                    event.prevent_default();
+                                }
+                                let eval = document::eval(
+                                    "const el = document.activeElement;\
+                                     return el?.closest('[data-attachment-hash]')?.getAttribute('data-attachment-hash') ?? null;",
+                                );
+                                let context = context.clone();
+                                spawn(async move {
+                                    if let Ok(Some(hash)) = eval.join::<Option<String>>().await {
+                                        context.open_attachment_gallery(Some(hash));
+                                    }
+                                });
+                            }
+                        },
                         onscroll: move |event| {
                             set_tag_row_scroll(
                                 tag_row,
@@ -635,6 +680,17 @@ pub fn EditorPane() -> Element {
                     div { class: "attachment-strip-head",
                         span { class: "attachment-strip-title", "Attachments" }
                         span { class: "attachment-strip-count", "{attachments.len()}" }
+                        button {
+                            id: "attachment-gallery-button",
+                            class: "text-button attachment-browse",
+                            r#type: "button",
+                            onclick: {
+                                let context = context.clone();
+                                move |_| context.open_attachment_gallery(None)
+                            },
+                            Icon { name: "grid" }
+                            span { "Browse all" }
+                        }
                         button {
                             class: "icon-button small attachment-strip-close",
                             r#type: "button",
@@ -728,6 +784,7 @@ pub fn EditorPane() -> Element {
                 }
                 if !attachments.is_empty() {
                     button {
+                        id: "status-attachments-button",
                         class: if attachments_open { "status-attachments is-active" } else { "status-attachments" },
                         r#type: "button",
                         aria_label: "Attachments",
@@ -761,6 +818,10 @@ pub fn EditorPane() -> Element {
 
             if history_open {
                 HistoryPanel {}
+            }
+
+            if gallery_open {
+                AttachmentGallery {}
             }
         }
     }

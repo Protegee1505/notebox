@@ -77,6 +77,8 @@ endpoint, a browser reload would sign itself back in from the cookie.
 | `POST` | `/v1/sync` | `SyncRequest` | `SyncResponse` |
 | `PUT` | `/v1/blob/{hash}` | `BlobChunk` | `BlobStored` |
 | `GET` | `/v1/blob/{hash}?index={n}` | — | `BlobChunk` |
+| `DELETE` | `/v1/blob/{hash}` | — | `204` |
+| `GET` | `/v1/usage` | — | `StorageUsage` |
 | `GET` | `/v1/devices` | — | `DeviceList` |
 | `DELETE` | `/v1/devices/{id}` | — | `204` |
 
@@ -118,6 +120,36 @@ the plain-text health check.
   and costs one row replace.
 - `GET /v1/blob/{hash}?index=0` is the usual way to learn `total`, `mime` and
   `size`; a missing chunk is `404 not_found`.
+- `DELETE /v1/blob/{hash}` removes every chunk and the metadata row for one
+  attachment and answers `204`. Deleting a hash the server does not have is
+  also `204`, so a retried request is safe. There is no server tombstone: a
+  client that still has the bytes and an old note reference may upload them
+  again after a restore.
+- The app asks for confirmation, then deletes the cloud copy before the local
+  row and Markdown references. A failed request leaves the local note alone.
+  Before the request, the app marks its local row unconfirmed, so a device that
+  stops halfway re-uploads the bytes on the next sync instead of leaving a
+  note that points at a missing blob.
+
+## Storage usage
+
+`GET /v1/usage` returns `StorageUsage`:
+
+```json
+{
+  "attachments": { "bytes": 1234567, "count": 18 },
+  "notes": { "bytes": 456789, "count": 321 },
+  "limit_bytes": 500000000
+}
+```
+
+- `attachments` is the sum of `blob_meta.size` and its row count.
+- `notes` is the sum of `length(update_log.blob)` and its row count. The stored
+  Loro updates are base64 in JSON, so the database's real page usage is larger
+  than this figure; the app labels it approximate.
+- `limit_bytes` is the free-plan D1 limit for **one** database. The account has
+  one database for notes and history and one for attachments, so each part has
+  its own 500 MB meter. The endpoint costs two aggregate reads and no writes.
 
 ## Limits and costs
 

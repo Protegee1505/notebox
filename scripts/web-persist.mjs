@@ -55,6 +55,11 @@ const image = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
   "base64",
 );
+// A second, different image gives the attachment gallery two items to move
+// between and one item to delete.
+const secondImage = await readFile(
+  path.join(root, "crates/notes-app/web/icon-192.png"),
+);
 
 const contentTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -197,12 +202,27 @@ try {
   );
   await page.locator(".status-attachments").click();
   await page.locator(".attachment-row").waitFor({ timeout: 30_000 });
+  await page.locator("#note-image-input").setInputFiles({
+    name: "badge.png",
+    mimeType: "image/png",
+    buffer: secondImage,
+  });
+  await page.waitForFunction(
+    () => document.querySelectorAll(".attachment-row").length >= 2,
+    null,
+    { timeout: 30_000 },
+  );
+  await page.waitForFunction(
+    () => (document.getElementById("note-editor")?.value.match(/attachments\//g) ?? []).length >= 2,
+    null,
+    { timeout: 30_000 },
+  );
   await page.waitForFunction(
     () => !document.querySelector(".save-state")?.textContent?.includes("Unsaved"),
     null,
     { timeout: 30_000 },
   );
-  // Let the 700 ms ticker send the image after the note save.
+  // Let the 700 ms ticker send the images after the note save.
   await page.waitForTimeout(1_800);
   const before = await page.locator("#note-editor").inputValue();
   results.push(
@@ -346,8 +366,165 @@ try {
   results.push(
     check(
       "image bytes survived the restart",
-      images >= 1 && src.startsWith("data:image/webp"),
+      images >= 2 && src.startsWith("data:image/webp"),
       `${images} image(s), src starts ${src.slice(0, 24)}`,
+    ),
+  );
+
+  // The rendered image is the viewer's entry point. Clicking it and pressing
+  // Enter both open the same per-note gallery, and closing returns focus to the
+  // image the reader came from.
+  const previewImage = page
+    .locator(".editor-preview img.attachment-preview-image")
+    .first();
+  await previewImage.waitFor({ timeout: 10_000 });
+  const openedHash = await previewImage.getAttribute("data-attachment-hash");
+  await previewImage.click();
+  await page.locator(".attachment-gallery").waitFor({ timeout: 10_000 });
+  const openedAt = await page.locator(".gallery-position").innerText();
+  results.push(
+    check(
+      "a rendered image opens its attachment viewer",
+      openedAt.includes("of 2"),
+      openedAt,
+    ),
+  );
+  await page.keyboard.press("Escape");
+  await page.locator(".attachment-gallery").waitFor({ state: "detached" });
+  await page.waitForFunction(
+    (hash) =>
+      document.activeElement?.getAttribute("data-attachment-hash") === hash,
+    openedHash,
+    { timeout: 5_000 },
+  );
+  results.push(check("closing the viewer returns focus to the image", true));
+
+  await previewImage.focus();
+  await page.keyboard.press("Enter");
+  await page.locator(".attachment-gallery").waitFor({ timeout: 10_000 });
+  await page.keyboard.press("ArrowRight");
+  await page.waitForFunction(
+    () => document.querySelector(".gallery-position")?.textContent?.includes("2 of 2"),
+    null,
+    { timeout: 5_000 },
+  );
+  await page.keyboard.press("Tab");
+  const focusInside = await page.evaluate(() =>
+    Boolean(document.activeElement?.closest(".attachment-gallery")),
+  );
+  results.push(
+    check(
+      "arrow keys step the viewer and Tab stays inside it",
+      focusInside,
+      focusInside ? "focus trapped" : "focus escaped",
+    ),
+  );
+  await page.keyboard.press("Escape");
+  await page.locator(".attachment-gallery").waitFor({ state: "detached" });
+
+  // Browse all reopens the same gallery from the attachment strip. Download
+  // one file, then delete it and check the note reference and local count.
+  if ((await page.locator("#attachment-gallery-button").count()) === 0) {
+    await page.locator(".status-attachments").click();
+  }
+  await page.locator("#attachment-gallery-button").click();
+  await page.locator(".attachment-gallery").waitFor({ timeout: 10_000 });
+  const downloadPromise = page.waitForEvent("download");
+  await page
+    .locator(".gallery-actions")
+    .getByRole("button", { name: "Download" })
+    .click();
+  const download = await downloadPromise;
+  const downloaded = download.suggestedFilename();
+  results.push(
+    check(
+      "download saves the selected attachment",
+      /tiny|badge/.test(downloaded),
+      downloaded,
+    ),
+  );
+
+  const refsBefore = (after.match(/attachments\//g) ?? []).length;
+  await page.locator("#gallery-delete").click();
+  await page.locator(".gallery-confirm").waitFor({ timeout: 5_000 });
+  const confirmFocus = await page.evaluate(() => document.activeElement?.id);
+  results.push(
+    check(
+      "delete confirmation starts on Cancel",
+      confirmFocus === "gallery-delete-cancel",
+      confirmFocus ?? "no focus",
+    ),
+  );
+  await page.keyboard.press("Escape");
+  await page.locator(".gallery-confirm").waitFor({ state: "detached" });
+  await page.waitForFunction(
+    () => document.activeElement?.id === "gallery-delete",
+    null,
+    { timeout: 5_000 },
+  );
+  await page.locator("#gallery-delete").click();
+  await page.getByRole("button", { name: "Delete permanently" }).click();
+  await page.waitForFunction(
+    () => document.querySelector(".gallery-position")?.textContent?.includes("1 of 1"),
+    null,
+    { timeout: 15_000 },
+  );
+  await page.keyboard.press("Escape");
+  await page.locator(".attachment-gallery").waitFor({ state: "detached" });
+  await page.waitForFunction(
+    () => document.activeElement?.id === "status-attachments-button",
+    null,
+    { timeout: 5_000 },
+  );
+  results.push(check("closing the strip-opened viewer restores the footer button", true));
+
+  await page.keyboard.press("Control+e");
+  await page.locator("#note-editor").waitFor({ timeout: 10_000 });
+  const refsAfter = (
+    (await page.locator("#note-editor").inputValue()).match(/attachments\//g) ?? []
+  ).length;
+  results.push(
+    check(
+      "deleting removes one note reference and keeps the rest",
+      refsAfter === refsBefore - 1,
+      `${refsBefore} -> ${refsAfter}`,
+    ),
+  );
+
+  // Delete the last copy. There is no app-wide file library, so Remove from
+  // note is disabled and the viewer must close and hand focus back to the app
+  // root once the footer attachment button disappears with the last file.
+  if ((await page.locator("#attachment-gallery-button").count()) === 0) {
+    await page.locator(".status-attachments").click();
+  }
+  await page.locator("#attachment-gallery-button").click();
+  await page.locator(".attachment-gallery").waitFor({ timeout: 10_000 });
+  const removeLast = page
+    .locator(".gallery-actions")
+    .getByRole("button", { name: "Remove from note" });
+  results.push(
+    check(
+      "the last copy cannot be removed from the note alone",
+      await removeLast.isDisabled(),
+    ),
+  );
+  await page.locator("#gallery-delete").click();
+  await page.locator(".gallery-confirm").waitFor({ timeout: 5_000 });
+  await page.getByRole("button", { name: "Delete permanently" }).click();
+  await page.locator(".attachment-gallery").waitFor({ state: "detached" });
+  await page.waitForFunction(
+    () => document.activeElement?.id === "app-root",
+    null,
+    { timeout: 5_000 },
+  );
+  const refsFinal = (
+    (await page.locator("#note-editor").inputValue()).match(/attachments\//g) ?? []
+  ).length;
+  results.push(
+    check(
+      "deleting the last copy closes the viewer and focuses the app",
+      refsFinal === 0,
+      `${refsFinal} reference(s) left; focus fell back to the app root`,
     ),
   );
 
@@ -369,6 +546,13 @@ try {
       "settings still uses browser storage",
       secondStorage.includes("Browser storage") &&
         !secondStorage.includes("Browser memory"),
+      secondStorage,
+    ),
+  );
+  results.push(
+    check(
+      "settings drops the final deleted attachment from local storage",
+      /Images & files\s+0\b/.test(secondStorage),
       secondStorage,
     ),
   );

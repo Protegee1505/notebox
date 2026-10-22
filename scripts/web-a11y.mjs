@@ -27,6 +27,9 @@ const dist =
   path.join(root, "target/dx/notebox/release/web/public");
 const failureShot = path.join(tmpdir(), "notebox-a11y-failure.png");
 const WCAG_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
+const galleryImage = await readFile(
+  path.join(root, "crates/notes-app/web/icon-192.png"),
+);
 
 const contentTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -335,21 +338,24 @@ try {
   await page.locator("#note-editor").click();
   await page.addScriptTag({ path: axePath });
 
-  async function audit(name) {
-    const violations = await page.evaluate(async (tags) => {
-      const report = await axe.run(document, {
-        runOnly: { type: "tag", values: tags },
-      });
-      return report.violations.map((violation) => ({
-        id: violation.id,
-        impact: violation.impact,
-        help: violation.help,
-        nodes: violation.nodes.map((node) => ({
-          target: node.target,
-          summary: node.failureSummary,
-        })),
-      }));
-    }, WCAG_TAGS);
+  async function audit(name, selector = null) {
+    const violations = await page.evaluate(
+      async ({ tags, selector }) => {
+        const report = await axe.run(selector ?? document, {
+          runOnly: { type: "tag", values: tags },
+        });
+        return report.violations.map((violation) => ({
+          id: violation.id,
+          impact: violation.impact,
+          help: violation.help,
+          nodes: violation.nodes.map((node) => ({
+            target: node.target,
+            summary: node.failureSummary,
+          })),
+        }));
+      },
+      { tags: WCAG_TAGS, selector },
+    );
     if (violations.length > 0) {
       console.log(`\n${name}:`);
       for (const violation of violations) {
@@ -1282,6 +1288,55 @@ try {
     );
   }
   await settle(page, 200);
+
+  // ---- Attachment viewer at the narrowest phone width. ----
+  await page.locator(".note-card").first().click();
+  await page.locator("#note-editor").waitFor({ timeout: 10_000 });
+  await page
+    .locator("#note-editor")
+    .fill("Attachment viewer\n\nA phone gallery check.");
+  await page.locator("#note-image-input").setInputFiles({
+    name: "gallery.png",
+    mimeType: "image/png",
+    buffer: galleryImage,
+  });
+  await page.locator(".status-attachments").waitFor({ timeout: 30_000 });
+  await page.locator(".status-attachments").click();
+  await page.locator(".attachment-row").waitFor({ timeout: 30_000 });
+  await page.waitForFunction(
+    () => !document.querySelector(".save-state")?.textContent?.includes("Unsaved"),
+    null,
+    { timeout: 30_000 },
+  );
+  await page.keyboard.press("Control+e");
+  await page.locator(".editor-preview img.attachment-preview-image").first().click();
+  await page.locator(".attachment-gallery").waitFor({ timeout: 10_000 });
+  await settle(page, 300);
+  const viewer = await page.evaluate(() => {
+    const gallery = document.querySelector(".attachment-gallery");
+    const actions = document.querySelector(".gallery-actions");
+    const rect = gallery?.getBoundingClientRect();
+    return {
+      x: rect?.x,
+      width: rect?.width,
+      viewport: window.innerWidth,
+      body: document.body.scrollWidth,
+      actionsRight: actions?.getBoundingClientRect().right,
+    };
+  });
+  results.push(
+    check(
+      "attachment viewer fits a 320px phone",
+      viewer.x === 0 &&
+        viewer.width === 320 &&
+        viewer.body <= 320 &&
+        (viewer.actionsRight ?? 0) <= 320,
+      JSON.stringify(viewer),
+    ),
+  );
+  await audit("attachment viewer, mobile dark", ".attachment-gallery");
+  await page.keyboard.press("Escape");
+  await page.locator(".attachment-gallery").waitFor({ state: "detached" });
 
   await page.screenshot({ path: path.join(tmpdir(), "notebox-a11y.png") });
 } catch (error) {

@@ -341,8 +341,25 @@ pub trait NoteStore {
     /// Record that the server has an attachment's bytes.
     fn mark_attachment_uploaded(&self, hash: &str, at: i64) -> Result<(), StoreError>;
 
+    /// Mark an attachment's bytes as not confirmed on the server.
+    ///
+    /// Used before a cloud delete. If the device stops before the local row
+    /// and references are removed, the next sync uploads the bytes again
+    /// instead of leaving a note that points at a missing cloud blob.
+    fn mark_attachment_pending(&self, hash: &str) -> Result<(), StoreError>;
+
     /// Count and total size of attachments stored locally.
     fn attachment_usage(&self) -> Result<AttachmentUsage, StoreError>;
+
+    /// Number of notes whose body still links an attachment.
+    fn attachment_note_count(&self, hash: &str) -> Result<u64, StoreError>;
+
+    /// Delete one attachment's local bytes and row.
+    ///
+    /// Returns `false` without changing anything while a note still links the
+    /// hash or when the row does not exist. Removing a use from a note is an
+    /// ordinary note edit and must be saved before the bytes can go.
+    fn delete_attachment(&self, hash: &str) -> Result<bool, StoreError>;
 
     /// Import a remote update into a note, creating it if needed.
     fn apply_update(&self, id: &NoteId, update: &[u8], at: i64) -> Result<Note, StoreError>;

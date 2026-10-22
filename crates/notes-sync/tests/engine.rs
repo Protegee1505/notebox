@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use notes_core::Note;
 use notes_proto::{
     AuthRequest, AuthResponse, Base64Bytes, BlobChunk, BlobStored, CredentialUpdateRequest,
-    CredentialUpdateResponse, DeviceList, NoteId, SyncRequest, SyncResponse,
+    CredentialUpdateResponse, DeviceList, NoteId, StorageUsage, SyncRequest, SyncResponse,
 };
 use notes_server::{MemoryStorage, Server, ServerConfig, ServerError};
 use notes_store::{NewNote, NoteQuery, NoteStore, NoteView, SqliteStore, SyncState};
@@ -229,6 +229,20 @@ impl SyncTransport for TestTransport {
             chunk.data = Base64Bytes::new(data);
         }
         self.finish(call, chunk)
+    }
+
+    async fn usage(&self, token: &str) -> Result<StorageUsage, SyncError> {
+        let call = self.begin()?;
+        self.device(token).await?;
+        let usage = self.server.usage().await.map_err(map_error)?;
+        self.finish(call, usage)
+    }
+
+    async fn delete_blob(&self, token: &str, hash: &str) -> Result<(), SyncError> {
+        let call = self.begin()?;
+        self.device(token).await?;
+        self.server.delete_blob(hash).await.map_err(map_error)?;
+        self.finish(call, ())
     }
 
     async fn devices(&self, token: &str) -> Result<DeviceList, SyncError> {
@@ -723,6 +737,30 @@ fn attachments_round_trip_between_devices_and_are_verified() {
         matches!(error, SyncError::HashMismatch { .. }),
         "unexpected error: {error}"
     );
+}
+
+#[test]
+fn cloud_usage_and_attachment_deletion_are_explicit() {
+    let server = InProcess::new();
+    let laptop = device(&server, "laptop");
+    laptop.setup();
+
+    let first = pollster::block_on(laptop.client.upload_attachment(b"first", "image/webp"))
+        .expect("upload first");
+    let second = pollster::block_on(laptop.client.upload_attachment(b"second", "text/plain"))
+        .expect("upload second");
+    let usage = pollster::block_on(laptop.client.storage_usage()).expect("usage");
+    assert_eq!(usage.attachments.bytes, 11);
+    assert_eq!(usage.attachments.count, 2);
+    assert_eq!(usage.notes.bytes, 0);
+    assert_eq!(usage.limit_bytes, notes_proto::D1_DATABASE_LIMIT_BYTES);
+
+    pollster::block_on(laptop.client.delete_attachment(&first.hash)).expect("delete");
+    pollster::block_on(laptop.client.delete_attachment(&first.hash)).expect("delete is idempotent");
+    let usage = pollster::block_on(laptop.client.storage_usage()).expect("usage again");
+    assert_eq!(usage.attachments.bytes, second.size);
+    assert_eq!(usage.attachments.count, 1);
+    assert!(pollster::block_on(laptop.client.download_attachment(&first.hash)).is_err());
 }
 
 #[test]

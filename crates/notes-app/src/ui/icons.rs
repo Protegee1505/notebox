@@ -71,6 +71,12 @@ pub fn Icon(name: &'static str) -> Element {
                 "chevron-down" => rsx! {
                     path { d: "M6 9l6 6 6-6" }
                 },
+                "chevron-left" => rsx! {
+                    path { d: "M15 18l-6-6 6-6" }
+                },
+                "chevron-right" => rsx! {
+                    path { d: "M9 18l6-6-6-6" }
+                },
                 "pin" => rsx! {
                     path { d: "M12 17v5" }
                     path { d: "M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z" }

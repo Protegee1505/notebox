@@ -12,7 +12,8 @@
 use async_trait::async_trait;
 use notes_proto::{
     envelope, AuthRequest, AuthResponse, BlobChunk, BlobStored, CredentialUpdateRequest,
-    CredentialUpdateResponse, DeviceList, Envelope, SyncRequest, SyncResponse, PROTOCOL_VERSION,
+    CredentialUpdateResponse, DeviceList, Envelope, StorageUsage, SyncRequest, SyncResponse,
+    PROTOCOL_VERSION,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -291,6 +292,34 @@ impl SyncTransport for WebTransport {
             )
             .await?;
         Self::decode(reply)
+    }
+
+    async fn usage(&self, token: &str) -> Result<StorageUsage, SyncError> {
+        let reply = self
+            .send("GET", "/v1/usage", Some(token), None, None)
+            .await?;
+        Self::decode(reply)
+    }
+
+    async fn delete_blob(&self, token: &str, hash: &str) -> Result<(), SyncError> {
+        let reply = self
+            .send(
+                "DELETE",
+                &format!("/v1/blob/{hash}"),
+                Some(token),
+                None,
+                None,
+            )
+            .await?;
+        if (200..300).contains(&reply.status) {
+            Ok(())
+        } else {
+            Err(server_error(
+                reply.status,
+                reply.retry_after,
+                reply.body.as_bytes(),
+            ))
+        }
     }
 
     async fn devices(&self, token: &str) -> Result<DeviceList, SyncError> {

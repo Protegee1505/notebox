@@ -2,6 +2,7 @@
 
 pub mod editor;
 pub mod focus;
+pub mod gallery;
 pub mod history;
 pub mod icons;
 pub mod login;
@@ -15,6 +16,7 @@ pub mod topbar;
 pub mod update;
 
 pub use editor::EditorPane;
+pub use gallery::AttachmentGallery;
 pub use history::HistoryPanel;
 pub use login::LoginScreen;
 pub use note_list::NoteList;

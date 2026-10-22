@@ -12,7 +12,7 @@
 use async_trait::async_trait;
 use notes_proto::{
     AuthRequest, AuthResponse, BlobChunk, BlobStored, CredentialUpdateRequest,
-    CredentialUpdateResponse, DeviceList, SyncRequest, SyncResponse,
+    CredentialUpdateResponse, DeviceList, StorageUsage, SyncRequest, SyncResponse,
 };
 
 use crate::SyncError;
@@ -59,6 +59,12 @@ pub trait SyncTransport {
 
     /// Fetch one attachment chunk.
     async fn get_blob(&self, token: &str, hash: &str, index: u32) -> Result<BlobChunk, SyncError>;
+
+    /// Read the account's cloud-storage totals.
+    async fn usage(&self, token: &str) -> Result<StorageUsage, SyncError>;
+
+    /// Delete every stored chunk and the metadata for one attachment.
+    async fn delete_blob(&self, token: &str, hash: &str) -> Result<(), SyncError>;
 
     /// List the devices that can reach the account.
     async fn devices(&self, token: &str) -> Result<DeviceList, SyncError>;
@@ -107,6 +113,14 @@ impl SyncTransport for Box<dyn SyncTransport> {
 
     async fn get_blob(&self, token: &str, hash: &str, index: u32) -> Result<BlobChunk, SyncError> {
         (**self).get_blob(token, hash, index).await
+    }
+
+    async fn usage(&self, token: &str) -> Result<StorageUsage, SyncError> {
+        (**self).usage(token).await
+    }
+
+    async fn delete_blob(&self, token: &str, hash: &str) -> Result<(), SyncError> {
+        (**self).delete_blob(token, hash).await
     }
 
     async fn devices(&self, token: &str) -> Result<DeviceList, SyncError> {

@@ -23,8 +23,8 @@ use std::cell::RefCell;
 use notes_core::{decode_version_vector, encode_version_vector, VersionVector};
 use notes_proto::{
     AuthRequest, Base64Bytes, CredentialUpdateRequest, CredentialUpdateResponse, DeviceList,
-    NoteId, PushUpdate, SyncRequest, MAX_DEVICE_NAME_CHARS, MAX_PUSH_UPDATES, MAX_UPDATE_BYTES,
-    MAX_USERNAME_CHARS,
+    NoteId, PushUpdate, StorageUsage, SyncRequest, MAX_DEVICE_NAME_CHARS, MAX_PUSH_UPDATES,
+    MAX_UPDATE_BYTES, MAX_USERNAME_CHARS,
 };
 use notes_store::{NoteStore, SyncState};
 
@@ -396,6 +396,21 @@ impl<T: SyncTransport> SyncClient<T> {
     pub async fn download_attachment(&self, hash: &str) -> Result<AttachmentData, SyncError> {
         let session = self.token()?;
         blob::download(&self.transport, &session.token, hash).await
+    }
+
+    /// Read how much the account stores on the server.
+    pub async fn storage_usage(&self) -> Result<StorageUsage, SyncError> {
+        let session = self.token()?;
+        self.transport.usage(&session.token).await
+    }
+
+    /// Delete an attachment from the server.
+    ///
+    /// The local row and note references are not touched; callers remove those
+    /// after this succeeds. Deleting a hash that is already gone succeeds.
+    pub async fn delete_attachment(&self, hash: &str) -> Result<(), SyncError> {
+        let session = self.token()?;
+        self.transport.delete_blob(&session.token, hash).await
     }
 
     /// Move the attachments one note links to or from the server.

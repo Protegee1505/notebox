@@ -23,7 +23,8 @@ mod workspace;
 
 pub use attachments::{
     attachment_url, content_hash, extension_for_mime, mime_for_extension, normalize_file_name,
-    parse_attachment_url, references, AttachmentReference, AttachmentUrl, ATTACHMENTS_DIR,
+    parse_attachment_url, references, remove_attachment_references, AttachmentReference,
+    AttachmentUrl, ATTACHMENTS_DIR,
 };
 pub use document::{NoteDocument, HISTORY_MERGE_INTERVAL_SECS, TEXT_CONTAINER};
 pub use error::{ExportError, NoteError};

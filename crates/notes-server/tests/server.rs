@@ -597,6 +597,73 @@ fn a_blob_chunk_round_trips_and_is_idempotent() {
 }
 
 #[test]
+fn usage_counts_attachment_and_update_bytes() {
+    let server = server();
+    let created = pollster::block_on(server.setup(
+        Some("setup-secret"),
+        &request("alice", "laptop", 7),
+        1_000,
+    ))
+    .expect("setup");
+    let device = pollster::block_on(server.authenticate(&created.token, 1_100)).expect("device");
+    let chunk = BlobChunk {
+        hash: "ab".repeat(32),
+        index: 0,
+        total: 1,
+        size: 3,
+        mime: "image/webp".into(),
+        data: Base64Bytes::new(vec![1, 2, 3]),
+    };
+    pollster::block_on(server.put_blob(&chunk, 1_100)).expect("upload");
+    let request = SyncRequest {
+        cursor: 0,
+        updates: vec![update(1), update(2)],
+    };
+    pollster::block_on(server.sync(&device, &request, 1_200)).expect("sync");
+
+    let usage = pollster::block_on(server.usage()).expect("usage");
+    assert_eq!(usage.attachments.bytes, 3);
+    assert_eq!(usage.attachments.count, 1);
+    assert_eq!(usage.notes.bytes, 16);
+    assert_eq!(usage.notes.count, 2);
+    assert_eq!(usage.limit_bytes, notes_proto::D1_DATABASE_LIMIT_BYTES);
+}
+
+#[test]
+fn deleting_a_blob_removes_every_chunk_and_is_idempotent() {
+    let server = server();
+    let _laptop = pollster::block_on(server.setup(
+        Some("setup-secret"),
+        &request("alice", "laptop", 7),
+        1_000,
+    ))
+    .expect("setup");
+    let hash = "cd".repeat(32);
+    let chunk = BlobChunk {
+        hash: hash.clone(),
+        index: 0,
+        total: 1,
+        size: 4,
+        mime: "image/webp".into(),
+        data: Base64Bytes::new(vec![1, 2, 3, 4]),
+    };
+    pollster::block_on(server.put_blob(&chunk, 1_100)).expect("upload");
+    assert_eq!(server.storage().chunk_count(), 1);
+
+    pollster::block_on(server.delete_blob(&hash)).expect("delete");
+    assert_eq!(server.storage().chunk_count(), 0);
+    assert!(matches!(
+        pollster::block_on(server.get_blob(&hash, 0)).unwrap_err(),
+        ServerError::NotFound(_)
+    ));
+    pollster::block_on(server.delete_blob(&hash)).expect("delete again");
+    assert!(matches!(
+        pollster::block_on(server.delete_blob(&"AB".repeat(32))).unwrap_err(),
+        ServerError::Invalid(_)
+    ));
+}
+
+#[test]
 fn malformed_fields_are_refused() {
     let server = server();
     let mut auth = request("alice", "laptop", 7);

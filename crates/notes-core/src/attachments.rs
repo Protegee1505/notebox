@@ -128,6 +128,112 @@ pub fn references(markdown: &str) -> Vec<AttachmentReference> {
     references
 }
 
+/// A link whose destination points at the attachment being removed.
+struct LinkRemoval {
+    start: usize,
+    end: usize,
+    content_start: Option<usize>,
+    content_end: Option<usize>,
+}
+
+/// Remove the references to one attachment from a note body.
+///
+/// Images are removed whole. Links keep their label text and lose only the
+/// attachment URL, so a sentence that happened to link a file stays readable.
+/// This is an ordinary text edit: the note's history still contains the old
+/// reference, and the bytes are removed separately.
+pub fn remove_attachment_references(markdown: &str, hash: &str) -> String {
+    let hash = hash.to_ascii_lowercase();
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TABLES);
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+    options.insert(Options::ENABLE_TASKLISTS);
+    options.insert(Options::ENABLE_FOOTNOTES);
+
+    // Byte ranges covered by image syntax and by the opening and closing
+    // punctuation of a link. Events are nested, so track the image start and
+    // only remove the outer image once.
+    let mut removals: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut image_start: Option<usize> = None;
+    let mut image_depth = 0usize;
+    let mut link: Option<LinkRemoval> = None;
+    for (event, range) in Parser::new_ext(markdown, options).into_offset_iter() {
+        match event {
+            pulldown_cmark::Event::Start(Tag::Image { dest_url, .. }) => {
+                if image_depth == 0 && reference_matches(&dest_url, &hash) {
+                    image_start = Some(range.start);
+                }
+                image_depth += 1;
+                note_link_content(&mut link, &range);
+            }
+            pulldown_cmark::Event::End(pulldown_cmark::TagEnd::Image) => {
+                image_depth = image_depth.saturating_sub(1);
+                if image_depth == 0 {
+                    if let Some(start) = image_start.take() {
+                        removals.push(start..range.end);
+                    }
+                }
+            }
+            pulldown_cmark::Event::Start(Tag::Link { dest_url, .. })
+                if reference_matches(&dest_url, &hash) =>
+            {
+                link = Some(LinkRemoval {
+                    start: range.start,
+                    end: range.end,
+                    content_start: None,
+                    content_end: None,
+                });
+            }
+            pulldown_cmark::Event::End(pulldown_cmark::TagEnd::Link) => {
+                if let Some(link) = link.take() {
+                    match (link.content_start, link.content_end) {
+                        (Some(content_start), Some(content_end)) if content_start < content_end => {
+                            removals.push(link.start..content_start);
+                            removals.push(content_end..link.end);
+                        }
+                        _ => removals.push(link.start..link.end),
+                    }
+                }
+            }
+            _ => {
+                note_link_content(&mut link, &range);
+            }
+        }
+    }
+
+    if removals.is_empty() {
+        return markdown.to_string();
+    }
+    removals.sort_by_key(|range| range.start);
+    let mut out = String::with_capacity(markdown.len());
+    let mut cursor = 0;
+    for range in removals {
+        if range.start < cursor {
+            // Nested image and link ranges overlap; the second removal starts
+            // inside the first and has already been covered.
+            continue;
+        }
+        out.push_str(&markdown[cursor..range.start]);
+        cursor = range.end;
+    }
+    out.push_str(&markdown[cursor..]);
+    out
+}
+
+fn note_link_content(link: &mut Option<LinkRemoval>, range: &std::ops::Range<usize>) {
+    let Some(link) = link.as_mut() else {
+        return;
+    };
+    if link.content_start.is_none() {
+        link.content_start = Some(range.start);
+    }
+    link.content_end = Some(range.end);
+}
+
+fn reference_matches(destination: &str, hash: &str) -> bool {
+    parse_attachment_url(destination).is_some_and(|parsed| parsed.hash.eq_ignore_ascii_case(hash))
+}
+
 /// The relative URL a note uses for an attachment.
 pub fn attachment_url(hash: &str, mime: &str) -> String {
     format!(
@@ -192,7 +298,7 @@ pub fn normalize_file_name(name: &str, mime: &str) -> String {
 mod tests {
     use super::{
         attachment_url, content_hash, mime_for_extension, normalize_file_name,
-        parse_attachment_url, references,
+        parse_attachment_url, references, remove_attachment_references,
     };
 
     const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -236,6 +342,41 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].hash, HASH);
         assert_eq!(found[0].extension, "png");
+    }
+
+    #[test]
+    fn an_attachment_can_be_removed_from_the_note_body() {
+        let other = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+        let body = format!(
+            "Trip\n\n![holiday](attachments/{HASH}.webp)\n\nSee [the guide](attachments/{HASH}.pdf) and [other](attachments/{other}.png)."
+        );
+        let edited = remove_attachment_references(&body, HASH);
+        assert!(!edited.contains(HASH));
+        assert!(
+            edited.contains("See the guide and [other]"),
+            "edited body: {edited:?}"
+        );
+        assert!(edited.contains(other));
+        assert!(references(&edited)
+            .iter()
+            .all(|reference| reference.hash != HASH));
+
+        assert_eq!(remove_attachment_references("unchanged", HASH), "unchanged");
+    }
+
+    #[test]
+    fn a_reference_style_attachment_link_keeps_its_label() {
+        let body = format!("Read [the report][file].\n\n[file]: attachments/{HASH}.pdf");
+        let edited = remove_attachment_references(&body, HASH);
+        assert!(
+            edited.contains("Read the report."),
+            "edited body: {edited:?}"
+        );
+        assert!(
+            edited.contains("[file]: attachments/"),
+            "the now-unused definition may stay"
+        );
+        assert!(references(&edited).is_empty());
     }
 
     #[test]

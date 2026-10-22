@@ -12,7 +12,9 @@ use worker::js_sys;
 use worker::wasm_bindgen::{JsCast, JsValue};
 use worker::D1Database;
 
-use crate::storage::{AccountRow, BlobMetaRow, DeviceRow, NewUpdate, Storage, UpdateRow};
+use crate::storage::{
+    AccountRow, BlobMetaRow, DeviceRow, NewUpdate, Storage, StorageUsageRow, UpdateRow,
+};
 use crate::StorageError;
 
 /// A [`Storage`] backed by the two D1 databases.
@@ -63,6 +65,12 @@ struct BlobMetaDb {
     mime: String,
     chunks: i64,
     created_at: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct UsageDb {
+    bytes: i64,
+    count: i64,
 }
 
 fn text(value: &str) -> JsValue {
@@ -411,5 +419,48 @@ impl Storage for D1Storage {
             )));
         };
         Ok(Some(bytes))
+    }
+
+    async fn storage_usage(&self) -> Result<StorageUsageRow, StorageError> {
+        let blobs = self
+            .blobs
+            .prepare("SELECT coalesce(sum(size), 0) AS bytes, count(*) AS count FROM blob_meta")
+            .bind(&[])?;
+        let blobs = blobs
+            .first::<UsageDb>(None)
+            .await?
+            .unwrap_or(UsageDb { bytes: 0, count: 0 });
+        let notes = self
+            .sync
+            .prepare(
+                "SELECT coalesce(sum(length(blob)), 0) AS bytes, count(*) AS count FROM update_log",
+            )
+            .bind(&[])?;
+        let notes = notes
+            .first::<UsageDb>(None)
+            .await?
+            .unwrap_or(UsageDb { bytes: 0, count: 0 });
+        Ok(StorageUsageRow {
+            attachment_bytes: blobs.bytes.max(0) as u64,
+            attachment_count: blobs.count.max(0) as u64,
+            note_bytes: notes.bytes.max(0) as u64,
+            note_count: notes.count.max(0) as u64,
+        })
+    }
+
+    async fn delete_blob(&self, hash: &str) -> Result<(), StorageError> {
+        let chunks = self
+            .blobs
+            .prepare("DELETE FROM blob_chunk WHERE hash = ?")
+            .bind(&[text(hash)])?;
+        let meta = self
+            .blobs
+            .prepare("DELETE FROM blob_meta WHERE hash = ?")
+            .bind(&[text(hash)])?;
+        self.blobs
+            .batch(vec![chunks, meta])
+            .await
+            .map_err(bound_error)?;
+        Ok(())
     }
 }

@@ -202,9 +202,26 @@ fn the_upload_queue_skips_data_the_server_already_has() {
             .unwrap()
             .uploaded
     );
+
+    // A cloud delete clears the confirmation first, so a device that stops
+    // before removing the local row uploads the bytes again next time.
+    store
+        .mark_attachment_pending(&first.hash)
+        .expect("mark pending");
+    assert!(
+        !store
+            .attachment(&first.hash)
+            .expect("lookup")
+            .unwrap()
+            .uploaded
+    );
+    assert_eq!(
+        store.unsynced_attachments(0).expect("queue"),
+        vec![first.hash.clone(), second.hash.clone()]
+    );
     assert_eq!(
         store.unsynced_attachments(1).expect("limit"),
-        vec![second.hash]
+        vec![first.hash]
     );
 }
 
@@ -250,6 +267,44 @@ fn notes_with_attachment_work_lists_uploads_and_missing_bytes() {
         store.notes_with_attachment_work(1).expect("limit"),
         vec![waiting.id()]
     );
+}
+
+#[test]
+fn deleting_an_attachment_waits_for_every_note_to_stop_using_it() {
+    let store = store();
+    let photo = store
+        .put_attachment("holiday.png", "image/webp", b"photo", 1_000)
+        .expect("put");
+    let note = create(&store, "Trip", 1_000);
+    note.replace_text(&format!(
+        "Trip\n\n![holiday]({})",
+        attachment_url(&photo.hash, &photo.mime)
+    ))
+    .expect("edit");
+    store.save_note(&note, 1_100).expect("save");
+
+    assert_eq!(
+        store
+            .attachment_note_count(&photo.hash)
+            .expect("note count"),
+        1
+    );
+    assert!(!store.delete_attachment(&photo.hash).expect("blocked"));
+    assert!(store.attachment(&photo.hash).expect("lookup").is_some());
+
+    note.replace_text("Trip").expect("remove reference");
+    store.save_note(&note, 1_200).expect("save");
+    assert_eq!(
+        store
+            .attachment_note_count(&photo.hash)
+            .expect("note count"),
+        0
+    );
+    assert!(store.delete_attachment(&photo.hash).expect("delete"));
+    assert_eq!(store.attachment(&photo.hash).expect("lookup"), None);
+    assert_eq!(store.attachment_bytes(&photo.hash).expect("bytes"), None);
+    assert_eq!(store.attachment_usage().expect("usage").count, 0);
+    assert!(!store.delete_attachment(&photo.hash).expect("already gone"));
 }
 
 #[test]

@@ -13,11 +13,11 @@ use std::rc::Rc;
 #[cfg(target_arch = "wasm32")]
 use dioxus::core::spawn_forever;
 use dioxus::prelude::*;
-use notes_core::{plain_line, Note, NoteVersion};
-use notes_proto::{NoteId, Notebook, NotebookId};
+use notes_core::{plain_line, remove_attachment_references, Note, NoteVersion};
+use notes_proto::{NoteId, Notebook, NotebookId, StorageUsage};
 use notes_store::{
-    Attachment, ImportReport, NewNote, NoteQuery, NoteStore, NoteSummary, NoteView, SearchQuery,
-    TagCount,
+    Attachment, AttachmentUsage, ImportReport, NewNote, NoteQuery, NoteStore, NoteSummary,
+    NoteView, SearchQuery, TagCount,
 };
 use notes_sync::BoxedTransport;
 use serde::{Deserialize, Serialize};
@@ -272,6 +272,18 @@ pub struct AppState {
     pub attachments_open: bool,
     /// Inline image URLs by content hash, for the rendered view.
     pub attachment_urls: HashMap<String, String>,
+    /// The open note's attachment grid and full-image viewer.
+    pub gallery_open: bool,
+    /// Selected attachment in the gallery.
+    pub gallery_index: usize,
+    /// Delete confirmation for the selected attachment.
+    pub gallery_confirm_delete: bool,
+    /// How many notes link the selected attachment.
+    pub gallery_note_count: u64,
+    /// Attachment whose cloud copy is being deleted.
+    pub attachment_deleting: Option<String>,
+    /// Local attachment bytes, shown in Settings.
+    pub attachment_usage: AttachmentUsage,
     /// First-image thumbnails for cards and search results, by content hash.
     pub card_images: HashMap<String, Rc<str>>,
     /// Images being compressed before they are stored.
@@ -412,6 +424,12 @@ impl AppState {
             attachments: Vec::new(),
             attachments_open: false,
             attachment_urls: HashMap::new(),
+            gallery_open: false,
+            gallery_index: 0,
+            gallery_confirm_delete: false,
+            gallery_note_count: 0,
+            attachment_deleting: None,
+            attachment_usage: AttachmentUsage::default(),
             card_images: HashMap::new(),
             attaching: 0,
             draft: String::new(),
@@ -961,6 +979,7 @@ impl AppContext {
         let tags = store.list_tags().unwrap_or_default();
         let note_count = store.note_count().unwrap_or(0);
 
+        let attachment_usage = store.attachment_usage().unwrap_or_default();
         let mut state = self.state.write_unchecked();
         state.notes = notes;
         state.snippets = snippets;
@@ -969,6 +988,7 @@ impl AppContext {
         state.notebooks = notebooks;
         state.tags = tags;
         state.note_count = note_count;
+        state.attachment_usage = attachment_usage;
         if let Some(notebook) = state.notebook {
             if !state.notebooks.iter().any(|item| item.id == notebook) {
                 state.notebook = None;
@@ -1266,6 +1286,8 @@ impl AppContext {
             }
         }
 
+        let usage = store.attachment_usage().unwrap_or_default();
+        let mut gallery_closed = false;
         let mut state = self.state.write_unchecked();
         if state.selected != Some(id) {
             return;
@@ -1282,6 +1304,26 @@ impl AppContext {
         }
         state.attachments_open = state.attachments_open && !attachments.is_empty();
         state.attachments = attachments;
+        state.attachment_usage = usage;
+        if state.gallery_open {
+            if state.attachments.is_empty() {
+                state.gallery_open = false;
+                state.gallery_confirm_delete = false;
+                state.gallery_note_count = 0;
+                gallery_closed = true;
+            } else {
+                state.gallery_index = state.gallery_index.min(state.attachments.len() - 1);
+                state.gallery_confirm_delete = false;
+            }
+        }
+        drop(state);
+        if gallery_closed {
+            self.restore_gallery_focus();
+        } else if self.state.peek().gallery_open {
+            // The deleted item can shift the selection to another attachment.
+            // Refresh the shared-file count before a Delete button is enabled.
+            self.refresh_gallery_note_count();
+        }
     }
 
     /// Called about once a second: saves after a quiet moment, expires toasts
@@ -2004,6 +2046,569 @@ impl AppContext {
         state.attachments_open = !state.attachments_open && !state.attachments.is_empty();
     }
 
+    /// Open the per-note attachment gallery, optionally on one image.
+    ///
+    /// The gallery is another view of the note's own attachment rows, not a
+    /// library: removing the last reference removes the item from this list.
+    pub fn open_attachment_gallery(&self, hash: Option<String>) {
+        let (selected, count) = {
+            let state = self.state.peek();
+            (state.selected, state.attachments.len())
+        };
+        if selected.is_none() {
+            return;
+        }
+        if count == 0 {
+            self.toast_info("This note has no attachments yet");
+            return;
+        }
+        let return_hash = hash.clone();
+        let index = {
+            let state = self.state.peek();
+            hash.and_then(|hash| {
+                state
+                    .attachments
+                    .iter()
+                    .position(|attachment| attachment.hash == hash)
+            })
+            .or_else(|| {
+                if state.gallery_open && state.gallery_index < count {
+                    Some(state.gallery_index)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0)
+        };
+        {
+            let mut state = self.state.write_unchecked();
+            state.gallery_open = true;
+            state.gallery_index = index;
+            state.gallery_confirm_delete = false;
+            state.palette_open = false;
+            state.shortcuts_open = false;
+            state.account_open = false;
+            state.color_open = false;
+            state.find_open = false;
+            hide_history(&mut state);
+        }
+        self.runtime.borrow_mut().gallery_return_hash = return_hash;
+        self.refresh_gallery_note_count();
+        let _ = document::eval(
+            "setTimeout(() => document.getElementById('gallery-close')?.focus(), 30);",
+        );
+    }
+
+    /// Close the gallery and return focus to whatever opened it.
+    pub fn close_attachment_gallery(&self) {
+        {
+            let mut state = self.state.write_unchecked();
+            state.gallery_open = false;
+            state.gallery_confirm_delete = false;
+            state.gallery_note_count = 0;
+        }
+        self.restore_gallery_focus();
+    }
+
+    /// Put focus back on the image or button that opened the gallery.
+    ///
+    /// A deleted image no longer exists, and the footer button disappears
+    /// with the last attachment, so fall back to the app root.
+    fn restore_gallery_focus(&self) {
+        let hash = self.runtime.borrow_mut().gallery_return_hash.take();
+        let hash = serde_json::to_string(&hash).unwrap_or_else(|_| "null".to_string());
+        let _ = document::eval(&format!(
+            "setTimeout(() => {{\
+               const hash = {hash};\
+               if (hash) {{\
+                 const image = Array.from(document.querySelectorAll('[data-attachment-hash]'))\
+                   .find((el) => el.getAttribute('data-attachment-hash') === hash);\
+                 if (image) {{ image.focus(); return; }}\
+               }}\
+               const fallback = document.getElementById('status-attachments-button')\
+                 ?? document.getElementById('app-root');\
+               fallback?.focus();\
+             }}, 30)"
+        ));
+    }
+
+    /// Select one image in the gallery.
+    pub fn select_gallery_index(&self, index: usize) {
+        {
+            let mut state = self.state.write_unchecked();
+            if index >= state.attachments.len() {
+                return;
+            }
+            state.gallery_index = index;
+            state.gallery_confirm_delete = false;
+        }
+        self.refresh_gallery_note_count();
+    }
+
+    /// Move the gallery selection, wrapping at either end.
+    pub fn step_gallery(&self, delta: isize) {
+        let (index, count) = {
+            let state = self.state.peek();
+            (state.gallery_index, state.attachments.len())
+        };
+        if count == 0 {
+            return;
+        }
+        let next = (index as isize + delta).rem_euclid(count as isize) as usize;
+        self.select_gallery_index(next);
+    }
+
+    /// Ask the store how many notes still link the selected attachment.
+    fn refresh_gallery_note_count(&self) {
+        let hash = {
+            let state = self.state.peek();
+            state
+                .attachments
+                .get(state.gallery_index)
+                .map(|attachment| attachment.hash.clone())
+        };
+        let Some(hash) = hash else {
+            return;
+        };
+        let count = self
+            .store()
+            .and_then(|store| store.attachment_note_count(&hash).ok())
+            .unwrap_or(1);
+        let mut state = self.state.write_unchecked();
+        if state.gallery_open
+            && state
+                .attachments
+                .get(state.gallery_index)
+                .is_some_and(|attachment| attachment.hash == hash)
+        {
+            state.gallery_note_count = count;
+        }
+    }
+
+    /// Remove every Markdown reference to an attachment, keeping its bytes.
+    pub fn remove_attachment_from_note(&self, attachment: Attachment) {
+        let count = self
+            .store()
+            .and_then(|store| store.attachment_note_count(&attachment.hash).ok())
+            .unwrap_or(1);
+        if count <= 1 {
+            self.toast_danger(
+                "This is the only note that uses the file. Use Delete to remove the last copy.",
+            );
+            return;
+        }
+        if self.state.peek().sync.status.busy() || self.runtime.borrow().busy {
+            self.toast_info("Wait for the current sync to finish before removing an image.");
+            return;
+        }
+        let draft = self.state.peek().draft.clone();
+        let edited = remove_attachment_references(&draft, &attachment.hash);
+        if edited == draft {
+            self.toast_info("That image is no longer linked in this note");
+            return;
+        }
+        self.note_input(edited);
+        self.save_now();
+        if self.state.peek().dirty {
+            self.toast_danger("The reference could not be removed because the note did not save.");
+        } else {
+            self.toast_success(format!("Removed {} from this note", attachment.name));
+        }
+    }
+
+    /// Open the delete confirmation for the selected attachment.
+    pub fn request_attachment_delete(&self) {
+        if self.state.peek().attachment_deleting.is_some() {
+            return;
+        }
+        self.refresh_gallery_note_count();
+        let (hash, uploaded, count, connected, status, busy) = {
+            let state = self.state.peek();
+            let current = state.attachments.get(state.gallery_index);
+            (
+                current.map(|attachment| attachment.hash.clone()),
+                current.is_some_and(|attachment| attachment.uploaded),
+                state.gallery_note_count,
+                state.profile.sync_connected,
+                state.sync.status,
+                state.sync.status.busy() || self.runtime.borrow().busy,
+            )
+        };
+        let Some(hash) = hash else {
+            return;
+        };
+        if let Some(blocker) = attachment_delete_blocker(uploaded, count, connected, status, busy) {
+            self.state.write_unchecked().gallery_confirm_delete = false;
+            self.report_attachment_delete_blocker(blocker);
+            return;
+        }
+        let mut state = self.state.write_unchecked();
+        if state
+            .attachments
+            .get(state.gallery_index)
+            .is_none_or(|attachment| attachment.hash != hash)
+        {
+            return;
+        }
+        state.gallery_confirm_delete = true;
+    }
+
+    /// Close the delete confirmation without changing anything.
+    pub fn cancel_attachment_delete(&self) {
+        self.state.write_unchecked().gallery_confirm_delete = false;
+        let _ = document::eval(
+            "requestAnimationFrame(() => document.getElementById('gallery-delete')?.focus());",
+        );
+    }
+
+    /// Confirm deletion of the selected attachment.
+    ///
+    /// A signed-in client deletes the server copy first. If that request fails,
+    /// nothing local changes. A lost note reference can be repaired by sync;
+    /// orphaned bytes cannot.
+    pub fn confirm_attachment_delete(&self) {
+        if self.state.peek().attachment_deleting.is_some() {
+            return;
+        }
+        let (hash, note_id, uploaded, connected, status, busy) = {
+            let state = self.state.peek();
+            if !state.gallery_confirm_delete {
+                return;
+            }
+            let Some(note_id) = state.selected else {
+                return;
+            };
+            let current = state.attachments.get(state.gallery_index);
+            (
+                current.map(|attachment| attachment.hash.clone()),
+                note_id,
+                current.is_some_and(|attachment| attachment.uploaded),
+                state.profile.sync_connected,
+                state.sync.status,
+                state.sync.status.busy() || self.runtime.borrow().busy,
+            )
+        };
+        let Some(hash) = hash else {
+            return;
+        };
+        // Sync, another note or the session can change while the confirmation
+        // is open. Re-check the hard guards before the cloud copy goes away.
+        let count = self
+            .store()
+            .and_then(|store| store.attachment_note_count(&hash).ok())
+            .unwrap_or(1);
+        if let Some(blocker) = attachment_delete_blocker(uploaded, count, connected, status, busy) {
+            self.state.write_unchecked().gallery_confirm_delete = false;
+            self.report_attachment_delete_blocker(blocker);
+            return;
+        }
+        {
+            let mut state = self.state.write_unchecked();
+            state.gallery_confirm_delete = false;
+            state.attachment_deleting = Some(hash.clone());
+        }
+        let _ = document::eval(
+            "requestAnimationFrame(() => document.getElementById('gallery-close')?.focus());",
+        );
+        {
+            let mut runtime = self.runtime.borrow_mut();
+            runtime.delete_hash = Some(hash.clone());
+            runtime.delete_note = Some(note_id);
+        }
+        if connected {
+            self.start_cloud_attachment_delete(hash);
+        } else {
+            self.finish_attachment_delete(&hash, false);
+        }
+    }
+
+    fn report_attachment_delete_blocker(&self, blocker: AttachmentDeleteBlocker) {
+        match blocker {
+            AttachmentDeleteBlocker::Busy => {
+                self.toast_info("Wait for the current sync to finish before deleting a file.")
+            }
+            AttachmentDeleteBlocker::Shared(count) => self.toast_danger(format!(
+                "This file is used in {count} notes. Remove it from the other notes first."
+            )),
+            AttachmentDeleteBlocker::SignIn => {
+                self.toast_danger("Sign in to remove the cloud copy. Nothing was deleted.")
+            }
+            AttachmentDeleteBlocker::Offline => {
+                self.toast_danger("Reconnect to delete the cloud copy. Nothing was deleted.")
+            }
+        }
+    }
+
+    fn attachment_delete_failed(&self, message: String) {
+        {
+            let mut runtime = self.runtime.borrow_mut();
+            runtime.delete_hash = None;
+            runtime.delete_note = None;
+        }
+        self.state.write_unchecked().attachment_deleting = None;
+        self.toast_danger(message);
+    }
+
+    fn start_cloud_attachment_delete(&self, hash: String) {
+        let client = self.runtime.borrow().client.clone();
+        let Some(client) = client else {
+            self.attachment_delete_failed(
+                "The device session is missing. Sign in again; nothing was deleted.".to_string(),
+            );
+            return;
+        };
+        let Some(store) = self.store() else {
+            self.attachment_delete_failed(
+                "The local store is not open. Nothing was deleted.".to_string(),
+            );
+            return;
+        };
+        // Clear the upload confirmation before asking the server. If the app
+        // stops after the cloud copy is gone, the next sync uploads the local
+        // bytes again rather than leaving a dead link.
+        if let Err(error) = store.mark_attachment_pending(&hash) {
+            self.attachment_delete_failed(format!(
+                "Could not prepare the delete: {error}. Nothing was deleted."
+            ));
+            return;
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let account = self.runtime.borrow().account.clone();
+            let session = client.session();
+            let (Some(account), Some(session)) = (account, session) else {
+                self.attachment_delete_failed(
+                    "The device session is missing. Sign in again; nothing was deleted."
+                        .to_string(),
+                );
+                return;
+            };
+            let worker_hash = hash.clone();
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let spawned = std::thread::Builder::new()
+                .name("notebox-delete-attachment".to_string())
+                .spawn(move || {
+                    let result = sync::delete_attachment_blocking(&account, &session, &worker_hash)
+                        .map_err(|error| sync::friendly_sync_error(&error));
+                    let _ = sender.send(result);
+                });
+            match spawned {
+                Ok(_) => self.runtime.borrow_mut().delete_rx = Some(receiver),
+                Err(error) => self.attachment_delete_failed(format!(
+                    "Could not start the delete request: {error}. Nothing was deleted."
+                )),
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let context = self.clone();
+            spawn_forever(async move {
+                let result = client
+                    .delete_attachment(&hash)
+                    .await
+                    .map_err(|error| sync::friendly_sync_error(&error));
+                context.finish_cloud_attachment_delete(hash, result);
+            });
+        }
+    }
+
+    fn finish_cloud_attachment_delete(&self, hash: String, result: Result<(), String>) {
+        match result {
+            Ok(()) => self.finish_attachment_delete(&hash, true),
+            Err(error) => self.attachment_delete_failed(format!(
+                "The cloud copy could not be deleted: {error}. Nothing was removed from this device."
+            )),
+        }
+    }
+
+    /// Remove the reference, local bytes and row after any cloud delete.
+    fn finish_attachment_delete(&self, hash: &str, cloud_deleted: bool) {
+        let note_id = {
+            let mut runtime = self.runtime.borrow_mut();
+            runtime.delete_hash = None;
+            runtime.delete_note.take()
+        };
+        let Some(note_id) = note_id else {
+            self.attachment_delete_failed(
+                "The delete request lost track of the note. Nothing was removed.".to_string(),
+            );
+            return;
+        };
+        let (name, draft, selected) = {
+            let state = self.state.peek();
+            (
+                state
+                    .attachments
+                    .iter()
+                    .find(|attachment| attachment.hash == hash)
+                    .map(|attachment| attachment.name.clone())
+                    .or_else(|| {
+                        self.store()
+                            .and_then(|store| store.attachment(hash).ok().flatten())
+                            .map(|attachment| attachment.name)
+                    })
+                    .unwrap_or_else(|| hash.chars().take(8).collect()),
+                state.draft.clone(),
+                state.selected,
+            )
+        };
+
+        // The gallery can close and another note can open while the cloud
+        // request is in flight. Edit the note the attachment belonged to, not
+        // whichever note happens to be open when the request returns.
+        let saved = if selected == Some(note_id) {
+            let edited = remove_attachment_references(&draft, hash);
+            if edited != draft {
+                self.note_input(edited);
+                self.save_now();
+            }
+            if self.state.peek().dirty {
+                Err("the note did not save".to_string())
+            } else {
+                Ok(())
+            }
+        } else {
+            self.save_note_without_attachment(note_id, hash)
+        };
+        if let Err(error) = saved {
+            self.attachment_delete_failed(format!(
+                "Could not remove {name} from its note: {error}.{}",
+                if cloud_deleted {
+                    " The cloud copy is already gone; the next sync can upload it again from this device."
+                } else {
+                    ""
+                }
+            ));
+            return;
+        }
+        let Some(store) = self.store() else {
+            self.attachment_delete_failed(
+                "The local store is not open. Nothing was deleted.".into(),
+            );
+            return;
+        };
+        if store.attachment_note_count(hash).unwrap_or(1) > 0 {
+            self.attachment_delete_failed(format!(
+                "Another note still uses {name}. It was not deleted.{}",
+                if cloud_deleted {
+                    " The cloud copy is already gone; the next sync can upload it again."
+                } else {
+                    ""
+                }
+            ));
+            return;
+        }
+        match store.delete_attachment(hash) {
+            Ok(true) => {
+                let selected_now = self.state.peek().selected;
+                {
+                    let mut state = self.state.write_unchecked();
+                    state.attachment_urls.remove(hash);
+                    state.card_images.remove(hash);
+                    state.attachment_deleting = None;
+                    state.gallery_confirm_delete = false;
+                }
+                if selected_now == Some(note_id) {
+                    self.load_attachments(note_id);
+                }
+                self.reload();
+                self.toast_success(format!("Deleted {name}"));
+            }
+            Ok(false) => {
+                self.attachment_delete_failed(format!(
+                    "{name} could not be deleted.{}",
+                    if cloud_deleted {
+                        " The cloud copy is already gone; the next sync can upload it again."
+                    } else {
+                        ""
+                    }
+                ));
+            }
+            Err(error) => self.attachment_delete_failed(format!(
+                "Could not delete {name}: {error}.{}",
+                if cloud_deleted {
+                    " The cloud copy is already gone; the next sync can upload it again."
+                } else {
+                    ""
+                }
+            )),
+        }
+    }
+
+    /// Strip one attachment reference from a stored note that is not open.
+    fn save_note_without_attachment(&self, note_id: NoteId, hash: &str) -> Result<(), String> {
+        let Some(store) = self.store() else {
+            return Err("the local store is not open".to_string());
+        };
+        let note = store
+            .open_note(&note_id)
+            .map_err(|error| format!("the note could not be loaded ({error})"))?;
+        let text = note.text();
+        let edited = remove_attachment_references(&text, hash);
+        if edited == text {
+            return Ok(());
+        }
+        let stamp = now();
+        note.set_next_commit_timestamp(stamp);
+        note.replace_text(&edited)
+            .map_err(|error| format!("the edit could not be applied ({error})"))?;
+        store
+            .save_note(&note, stamp)
+            .map(|_| ())
+            .map_err(|error| format!("the note could not be saved ({error})"))
+    }
+
+    /// Save one attachment to Downloads (native) or the browser's downloads.
+    pub fn download_attachment(&self, attachment: Attachment) {
+        if !attachment.available {
+            self.toast_info("That file has not downloaded yet; it will arrive with sync.");
+            return;
+        }
+        let Some(store) = self.store() else {
+            return;
+        };
+        match store.attachment_bytes(&attachment.hash) {
+            Ok(Some(bytes)) => {
+                self.deliver_attachment(&attachment.name, &attachment.mime, bytes);
+            }
+            Ok(None) => self.toast_info("That file has no local bytes to download."),
+            Err(error) => self.toast_danger(format!("Could not read the file: {error}")),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn deliver_attachment(&self, name: &str, _mime: &str, bytes: Vec<u8>) {
+        let directory = storage::export_directory();
+        let path = unique_download_path(&directory, name);
+        let result = std::fs::create_dir_all(&directory).and_then(|_| std::fs::write(&path, bytes));
+        match result {
+            Ok(()) => self.toast_success(format!("Downloaded to {}", path.display())),
+            Err(error) => self.toast_danger(format!("Could not save the file: {error}")),
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn deliver_attachment(&self, name: &str, mime: &str, bytes: Vec<u8>) {
+        let encoded = serde_json::to_string(&notes_proto::Base64Bytes::new(bytes))
+            .unwrap_or_else(|_| "\"\"".to_string());
+        let name = serde_json::to_string(name).unwrap_or_else(|_| "\"attachment\"".to_string());
+        let mime = serde_json::to_string(mime)
+            .unwrap_or_else(|_| "\"application/octet-stream\"".to_string());
+        let _ = document::eval(&format!(
+            "const data = {encoded};\
+             const bytes = Uint8Array.from(atob(data), c => c.charCodeAt(0));\
+             const blob = new Blob([bytes], {{type: {mime}}});\
+             const link = document.createElement('a');\
+             link.href = URL.createObjectURL(blob);\
+             link.download = {name};\
+             link.click();\
+             setTimeout(() => URL.revokeObjectURL(link.href), 1000);"
+        ));
+        self.toast_success("Download started");
+    }
+
     /// Collapse or restore the sidebar on a wide window.
     pub fn toggle_sidebar_collapsed(&self) {
         let mut state = self.state.write_unchecked();
@@ -2332,14 +2937,24 @@ impl AppContext {
     /// Open Settings and refresh the device list when connected.
     pub fn open_settings(&self) {
         self.go(Screen::Settings);
+        if let Some(store) = self.store() {
+            let usage = store.attachment_usage().unwrap_or_default();
+            self.state.write_unchecked().attachment_usage = usage;
+        }
         if self.state.peek().profile.sync_connected {
             self.refresh_devices();
+            self.refresh_cloud_usage();
         }
     }
 
     /// Close overlays, or leave the editor on a phone.
     pub fn escape(&self) {
         let mut return_to_account = false;
+        let close_gallery = self.state.peek().gallery_open;
+        if close_gallery {
+            self.close_attachment_gallery();
+            return;
+        }
         {
             let mut state = self.state.write_unchecked();
             if state.pending_delete.is_some() {
@@ -2915,6 +3530,12 @@ impl AppContext {
             }
             return;
         }
+        if self.runtime.borrow().delete_hash.is_some() {
+            if manual {
+                self.toast_info("Wait for the image delete to finish.");
+            }
+            return;
+        }
         // The draft must be in SQLite before the merge runs; otherwise the
         // engine would pull a body the editor never contributed.
         self.save_now();
@@ -3137,6 +3758,54 @@ impl AppContext {
         };
         if let Some(result) = devices {
             self.finish_devices(result);
+        }
+
+        let usage = {
+            let mut runtime = self.runtime.borrow_mut();
+            match runtime.usage_rx.as_ref().map(|rx| rx.try_recv()) {
+                Some(Ok(value)) => {
+                    runtime.usage_rx = None;
+                    Some(value)
+                }
+                Some(Err(TryRecvError::Disconnected)) => {
+                    runtime.usage_rx = None;
+                    Some(Err(
+                        "The storage-check thread stopped without an answer.".to_string()
+                    ))
+                }
+                Some(Err(TryRecvError::Empty)) | None => None,
+            }
+        };
+        if let Some(result) = usage {
+            self.finish_cloud_usage(result);
+        }
+
+        let deleted = {
+            let mut runtime = self.runtime.borrow_mut();
+            match runtime.delete_rx.as_ref().map(|rx| rx.try_recv()) {
+                Some(Ok(value)) => {
+                    runtime.delete_rx = None;
+                    Some(value)
+                }
+                Some(Err(TryRecvError::Disconnected)) => {
+                    runtime.delete_rx = None;
+                    Some(Err(
+                        "The delete thread stopped without an answer. Nothing was removed."
+                            .to_string(),
+                    ))
+                }
+                Some(Err(TryRecvError::Empty)) | None => None,
+            }
+        };
+        if let Some(result) = deleted {
+            let hash = self.runtime.borrow_mut().delete_hash.clone();
+            match hash {
+                Some(hash) => self.finish_cloud_attachment_delete(hash, result),
+                None => self.attachment_delete_failed(
+                    "The delete request finished without an attachment. Nothing was removed."
+                        .to_string(),
+                ),
+            }
         }
     }
 
@@ -3521,7 +4190,76 @@ impl AppContext {
         }
     }
 
-    /// Fetch the account's device list.
+    /// Read the cloud-storage totals.
+    ///
+    /// Settings calls this when it opens and when Refresh is pressed; no timer
+    /// polls it, so an idle app adds no D1 reads.
+    pub fn refresh_cloud_usage(&self) {
+        if self.state.peek().sync.usage_loading {
+            return;
+        }
+        let client = self.runtime.borrow().client.clone();
+        let Some(client) = client else {
+            return;
+        };
+        {
+            let mut state = self.state.write_unchecked();
+            state.sync.usage_loading = true;
+            state.sync.usage_error = None;
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let account = self.runtime.borrow().account.clone();
+            let session = client.session();
+            let (Some(account), Some(session)) = (account, session) else {
+                self.state.write_unchecked().sync.usage_loading = false;
+                return;
+            };
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let spawned = std::thread::Builder::new()
+                .name("notebox-usage".to_string())
+                .spawn(move || {
+                    let result = sync::usage_blocking(&account, &session)
+                        .map_err(|error| sync::friendly_sync_error(&error));
+                    let _ = sender.send(result);
+                });
+            match spawned {
+                Ok(_) => self.runtime.borrow_mut().usage_rx = Some(receiver),
+                Err(error) => self
+                    .finish_cloud_usage(Err(format!("Could not start the storage check: {error}"))),
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let context = self.clone();
+            spawn_forever(async move {
+                let result = client
+                    .storage_usage()
+                    .await
+                    .map_err(|error| sync::friendly_sync_error(&error));
+                context.finish_cloud_usage(result);
+            });
+        }
+    }
+
+    fn finish_cloud_usage(&self, result: Result<StorageUsage, String>) {
+        let mut state = self.state.write_unchecked();
+        state.sync.usage_loading = false;
+        if !state.profile.sync_connected {
+            return;
+        }
+        match result {
+            Ok(usage) => {
+                state.sync.usage = Some(usage);
+                state.sync.usage_error = None;
+                state.sync.usage_checked_at = Some(now());
+            }
+            Err(error) => state.sync.usage_error = Some(error),
+        }
+    }
+
     pub fn refresh_devices(&self) {
         if self.state.peek().sync.devices_loading {
             return;
@@ -3675,9 +4413,16 @@ impl AppContext {
     /// Forget the local session. The web cookie is cleared by the Worker so a
     /// reload cannot sign the browser straight back in.
     pub fn sign_out(&self) {
-        if self.runtime.borrow().busy {
-            self.toast_info("Wait for the current sync to finish.");
-            return;
+        {
+            let runtime = self.runtime.borrow();
+            if runtime.busy {
+                self.toast_info("Wait for the current sync to finish.");
+                return;
+            }
+            if runtime.delete_hash.is_some() {
+                self.toast_info("Wait for the image delete to finish.");
+                return;
+            }
         }
         let client = self.runtime.borrow().client.clone();
 
@@ -3994,6 +4739,75 @@ fn count_label(value: usize, singular: &str, plural: &str) -> String {
     format!("{value} {}", if value == 1 { singular } else { plural })
 }
 
+/// Why an attachment delete cannot start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AttachmentDeleteBlocker {
+    Shared(u64),
+    SignIn,
+    Offline,
+    Busy,
+}
+
+/// Check the guards shared by the confirmation request and its final click.
+///
+/// Another note or a sync can appear while the confirmation is open, so both
+/// points call this. A shared file ranks before a session problem because the
+/// user can remove one reference and keep the bytes for the other note.
+fn attachment_delete_blocker(
+    uploaded: bool,
+    count: u64,
+    connected: bool,
+    status: SyncStatus,
+    busy: bool,
+) -> Option<AttachmentDeleteBlocker> {
+    if count > 1 {
+        return Some(AttachmentDeleteBlocker::Shared(count));
+    }
+    if !connected && uploaded {
+        return Some(AttachmentDeleteBlocker::SignIn);
+    }
+    if connected && matches!(status, SyncStatus::Offline | SyncStatus::NeedsLogin) {
+        return Some(AttachmentDeleteBlocker::Offline);
+    }
+    if busy {
+        return Some(AttachmentDeleteBlocker::Busy);
+    }
+    None
+}
+
+/// Pick a free file name in the download directory.
+#[cfg(not(target_arch = "wasm32"))]
+fn unique_download_path(directory: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let name = std::path::Path::new(name)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty() && *name != "." && *name != "..")
+        .unwrap_or("attachment");
+    let first = directory.join(name);
+    if !first.exists() {
+        return first;
+    }
+    let path = std::path::Path::new(name);
+    let stem = path
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "attachment".to_string());
+    let extension = path
+        .extension()
+        .map(|ext| ext.to_string_lossy().into_owned());
+    for number in 1..10_000 {
+        let candidate = match extension.as_deref() {
+            Some(extension) => format!("{stem} ({number}).{extension}"),
+            None => format!("{stem} ({number})"),
+        };
+        let path = directory.join(candidate);
+        if !path.exists() {
+            return path;
+        }
+    }
+    first
+}
+
 /// Display name for an attachment's image tag: no suffix, no brackets.
 fn attachment_label(name: &str) -> String {
     let stem = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
@@ -4029,6 +4843,9 @@ fn hide_editor_overlays(state: &mut AppState) {
     state.find_query.clear();
     state.find_index = 0;
     state.pending_delete = None;
+    state.gallery_open = false;
+    state.gallery_confirm_delete = false;
+    state.gallery_note_count = 0;
 }
 
 /// Clear the history panel when the note or the list changes underneath it.
@@ -4375,5 +5192,48 @@ mod tests {
         assert_eq!(tone_class(Some("amber")), "tone-amber");
         assert_eq!(tone_class(Some("tone-rose")), "tone-default");
         assert_eq!(tone_class(None), "tone-default");
+    }
+
+    #[test]
+    fn attachment_delete_guards_prefer_a_shared_file_then_the_session() {
+        use super::{
+            attachment_delete_blocker as guard, AttachmentDeleteBlocker as Blocker, SyncStatus,
+        };
+
+        assert_eq!(guard(false, 1, false, SyncStatus::Local, false), None);
+        assert_eq!(
+            guard(true, 1, false, SyncStatus::Local, false),
+            Some(Blocker::SignIn)
+        );
+        assert_eq!(
+            guard(true, 2, false, SyncStatus::Local, false),
+            Some(Blocker::Shared(2))
+        );
+        assert_eq!(
+            guard(false, 1, true, SyncStatus::Offline, false),
+            Some(Blocker::Offline)
+        );
+        assert_eq!(
+            guard(false, 1, true, SyncStatus::Idle, true),
+            Some(Blocker::Busy)
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn download_names_cannot_escape_the_download_directory() {
+        let directory = std::path::Path::new("/tmp/notebox-download-test");
+        assert_eq!(
+            super::unique_download_path(directory, "../../etc/passwd"),
+            directory.join("passwd")
+        );
+        assert_eq!(
+            super::unique_download_path(directory, "folder/photo.png"),
+            directory.join("photo.png")
+        );
+        assert_eq!(
+            super::unique_download_path(directory, ".."),
+            directory.join("attachment")
+        );
     }
 }

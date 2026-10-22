@@ -20,7 +20,9 @@ pub use auth::{
 pub use error::{ServerError, StorageError};
 pub use memory::MemoryStorage;
 pub use service::{Server, ServerConfig, DEVICE_TOUCH_INTERVAL_SECS, SYNC_PAGE};
-pub use storage::{AccountRow, BlobMetaRow, DeviceRow, NewUpdate, Storage, UpdateRow};
+pub use storage::{
+    AccountRow, BlobMetaRow, DeviceRow, NewUpdate, Storage, StorageUsageRow, UpdateRow,
+};
 
 #[cfg(target_arch = "wasm32")]
 mod d1;

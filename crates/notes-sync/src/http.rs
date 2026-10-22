@@ -14,7 +14,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use notes_proto::{
     AuthRequest, AuthResponse, BlobChunk, BlobStored, CredentialUpdateRequest,
-    CredentialUpdateResponse, DeviceList, Envelope, SyncRequest, SyncResponse, PROTOCOL_VERSION,
+    CredentialUpdateResponse, DeviceList, Envelope, StorageUsage, SyncRequest, SyncResponse,
+    PROTOCOL_VERSION,
 };
 use serde::de::DeserializeOwned;
 
@@ -158,6 +159,35 @@ impl SyncTransport for HttpTransport {
             token,
         );
         self.call(builder.call())
+    }
+
+    async fn usage(&self, token: &str) -> Result<StorageUsage, SyncError> {
+        let builder = self.bearer(self.agent.get(self.url("/v1/usage")), token);
+        self.call(builder.call())
+    }
+
+    async fn delete_blob(&self, token: &str, hash: &str) -> Result<(), SyncError> {
+        let builder = self.bearer(
+            self.agent.delete(self.url(&format!("/v1/blob/{hash}"))),
+            token,
+        );
+        let mut response = builder.call().map_err(network_error)?;
+        let status = response.status().as_u16();
+        if (200..300).contains(&status) {
+            return Ok(());
+        }
+        let retry_after = response
+            .headers()
+            .get("retry-after")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|text| text.trim().parse::<i64>().ok());
+        let bytes = response
+            .body_mut()
+            .with_config()
+            .limit(MAX_RESPONSE_BYTES)
+            .read_to_vec()
+            .map_err(network_error)?;
+        Err(server_error(status, retry_after, &bytes))
     }
 
     async fn devices(&self, token: &str) -> Result<DeviceList, SyncError> {

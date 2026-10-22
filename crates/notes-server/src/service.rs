@@ -9,8 +9,9 @@ use std::time::Duration;
 use notes_proto::{
     is_sha256_hex, is_token_hex, AuthRequest, AuthResponse, BlobChunk, BlobStored,
     CredentialUpdateRequest, CredentialUpdateResponse, DeviceInfo, DeviceList, PulledUpdate,
-    SyncRequest, SyncResponse, MAX_BLOB_CHUNKS, MAX_BLOB_CHUNK_BYTES, MAX_DEVICE_NAME_CHARS,
-    MAX_PUSH_UPDATES, MAX_UPDATE_BYTES, MAX_USERNAME_CHARS,
+    StorageUsage, SyncRequest, SyncResponse, UsagePart, D1_DATABASE_LIMIT_BYTES, MAX_BLOB_CHUNKS,
+    MAX_BLOB_CHUNK_BYTES, MAX_DEVICE_NAME_CHARS, MAX_PUSH_UPDATES, MAX_UPDATE_BYTES,
+    MAX_USERNAME_CHARS,
 };
 
 use crate::auth::{
@@ -330,6 +331,39 @@ impl<S: Storage> Server<S> {
             size: meta.size,
             mime: meta.mime,
             data: data.into(),
+        })
+    }
+
+    /// Delete every chunk and the metadata for one attachment.
+    ///
+    /// The operation is idempotent: deleting a hash the server does not have
+    /// succeeds, so a response lost in transit can be retried safely.
+    pub async fn delete_blob(&self, hash: &str) -> Result<(), ServerError> {
+        if !is_sha256_hex(hash) {
+            return Err(ServerError::Invalid(
+                "hash must be lowercase hex SHA-256".into(),
+            ));
+        }
+        self.storage.delete_blob(hash).await?;
+        Ok(())
+    }
+
+    /// Current attachment and note/history storage totals.
+    ///
+    /// This is two aggregate reads and never writes, keeping a Settings refresh
+    /// well inside the free Worker and D1 budgets.
+    pub async fn usage(&self) -> Result<StorageUsage, ServerError> {
+        let usage = self.storage.storage_usage().await?;
+        Ok(StorageUsage {
+            attachments: UsagePart {
+                bytes: usage.attachment_bytes,
+                count: usage.attachment_count,
+            },
+            notes: UsagePart {
+                bytes: usage.note_bytes,
+                count: usage.note_count,
+            },
+            limit_bytes: D1_DATABASE_LIMIT_BYTES,
         })
     }
 

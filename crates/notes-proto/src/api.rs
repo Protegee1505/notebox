@@ -30,6 +30,14 @@ pub const MAX_BLOB_CHUNK_BYTES: usize = 1024 * 1024;
 /// Maximum number of chunks in one attachment.
 pub const MAX_BLOB_CHUNKS: u32 = 1024;
 
+/// Free-plan storage allowed for one D1 database, in decimal bytes.
+///
+/// Cloudflare counts database size per database. Notebox has one database for
+/// notes and history and one for attachment metadata and chunks, so Settings
+/// shows a meter for each against this value. Re-check the plan before relying
+/// on it staying the same.
+pub const D1_DATABASE_LIMIT_BYTES: u64 = 500 * 1_000 * 1_000;
+
 /// Length in bytes of the Argon2id login key a client sends.
 pub const LOGIN_KEY_BYTES: usize = 32;
 
@@ -187,6 +195,30 @@ pub struct DeviceList {
     pub devices: Vec<DeviceInfo>,
 }
 
+/// One storage measure in a cloud-usage response.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UsagePart {
+    /// Bytes currently stored.
+    pub bytes: u64,
+    /// Rows counted by the measure. For notes this is the update-log length.
+    pub count: u64,
+}
+
+/// How much of the free D1 allowance the account uses.
+///
+/// Both parts are approximate database usage, not an invoice: SQLite pages,
+/// indexes, account rows and the base64 expansion in `update_log` mean the
+/// provider's size can be a little larger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageUsage {
+    /// Attachment metadata and chunk bytes in the blobs database.
+    pub attachments: UsagePart,
+    /// Note updates and their history in the notes database.
+    pub notes: UsagePart,
+    /// Limit that applies to each database.
+    pub limit_bytes: u64,
+}
+
 /// Error body returned with a non-success status.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ErrorBody {
@@ -330,6 +362,24 @@ mod tests {
             serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back.version, PROTOCOL_VERSION);
         assert_eq!(back.payload, request);
+    }
+
+    #[test]
+    fn a_usage_response_survives_json() {
+        let usage = super::StorageUsage {
+            attachments: super::UsagePart {
+                bytes: 512,
+                count: 2,
+            },
+            notes: super::UsagePart {
+                bytes: 1024,
+                count: 7,
+            },
+            limit_bytes: super::D1_DATABASE_LIMIT_BYTES,
+        };
+        let json = serde_json::to_string(&Envelope::new(usage)).expect("serialize");
+        let back: Envelope<super::StorageUsage> = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.payload, usage);
     }
 
     #[test]

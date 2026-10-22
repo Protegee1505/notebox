@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 #[cfg(not(target_arch = "wasm32"))]
 use notes_proto::CredentialUpdateResponse;
-use notes_proto::{DeviceInfo, NoteId};
+use notes_proto::{DeviceInfo, NoteId, StorageUsage};
 #[cfg(not(target_arch = "wasm32"))]
 use notes_store::NoteStore;
 use notes_sync::{
@@ -111,6 +111,14 @@ pub struct SyncUi {
     pub devices_error: Option<String>,
     /// Device id waiting for a second click before revoking.
     pub confirm_revoke: Option<String>,
+    /// Last cloud-storage totals shown in Settings.
+    pub usage: Option<StorageUsage>,
+    /// A usage request is in flight.
+    pub usage_loading: bool,
+    /// Last usage failure.
+    pub usage_error: Option<String>,
+    /// Unix seconds of the last successful usage check.
+    pub usage_checked_at: Option<i64>,
 }
 
 impl Default for SyncUi {
@@ -123,6 +131,10 @@ impl Default for SyncUi {
             devices_loading: false,
             devices_error: None,
             confirm_revoke: None,
+            usage: None,
+            usage_loading: false,
+            usage_error: None,
+            usage_checked_at: None,
         }
     }
 }
@@ -229,6 +241,19 @@ pub struct Runtime {
     /// Native credential-change result: the server's trimmed username.
     #[cfg(not(target_arch = "wasm32"))]
     pub change_rx: Option<std::sync::mpsc::Receiver<Result<CredentialUpdateResponse, String>>>,
+    /// Native cloud-usage result.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub usage_rx: Option<std::sync::mpsc::Receiver<Result<StorageUsage, String>>>,
+    /// Native cloud-delete result for one attachment hash.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub delete_rx: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
+    /// Attachment hash whose cloud copy is being deleted.
+    pub delete_hash: Option<String>,
+    /// Note the attachment belonged to when the delete started. The user can
+    /// open another note while the request is in flight.
+    pub delete_note: Option<NoteId>,
+    /// Image that opened the gallery, so closing can return focus there.
+    pub gallery_return_hash: Option<String>,
 }
 
 /// Inputs to the scheduling decision.
@@ -742,6 +767,37 @@ pub fn devices_blocking(
         Some(session.clone()),
     )?;
     pollster::block_on(client.devices())
+}
+
+/// Read cloud-storage totals on a native build. Blocking; use a thread.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn usage_blocking(
+    account: &SavedAccount,
+    session: &SyncSession,
+) -> Result<StorageUsage, SyncError> {
+    let client = client(
+        &account.server,
+        &account.username,
+        &account.device,
+        Some(session.clone()),
+    )?;
+    pollster::block_on(client.storage_usage())
+}
+
+/// Delete one attachment from the server on a native build. Blocking.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn delete_attachment_blocking(
+    account: &SavedAccount,
+    session: &SyncSession,
+    hash: &str,
+) -> Result<(), SyncError> {
+    let client = client(
+        &account.server,
+        &account.username,
+        &account.device,
+        Some(session.clone()),
+    )?;
+    pollster::block_on(client.delete_attachment(hash))
 }
 
 /// Revoke one device on a native build. Blocking; use a thread.

@@ -370,6 +370,32 @@ async function main() {
   });
   same(missing.status, 404, "a missing chunk is a 404");
 
+  const anonymousUsage = await call("GET", "/v1/usage");
+  same(anonymousUsage.status, 401, "usage needs a device token");
+  const usage = await call("GET", "/v1/usage", { token: phone.token });
+  same(usage.status, 200, "device reads attachment and history usage");
+  const stored = payload(usage);
+  same(stored.attachments.count, 1, "usage counts the uploaded attachment");
+  same(stored.attachments.bytes, image.length, "usage reports attachment bytes");
+  ok(stored.notes.count >= 120, "usage counts pushed history updates");
+  ok(stored.notes.bytes > 0, "usage reports note history bytes");
+  same(stored.limit_bytes, 500_000_000, "usage reports the D1 per-database limit");
+
+  const anonymousDelete = await call("DELETE", `/v1/blob/${hash}`);
+  same(anonymousDelete.status, 401, "deleting a blob needs a device token");
+  const deleted = await call("DELETE", `/v1/blob/${hash}`, {
+    token: laptop.token,
+  });
+  same(deleted.status, 204, "laptop deletes the uploaded attachment");
+  const deletedAgain = await call("DELETE", `/v1/blob/${hash}`, {
+    token: laptop.token,
+  });
+  same(deletedAgain.status, 204, "deleting the same blob is idempotent");
+  const gone = await call("GET", `/v1/blob/${hash}?index=0`, {
+    token: laptop.token,
+  });
+  same(gone.status, 404, "a deleted chunk is gone");
+
   console.log("\n-- devices --");
   const devices = await call("GET", "/v1/devices", { token: phone.token });
   same(devices.status, 200, "device list loads");
