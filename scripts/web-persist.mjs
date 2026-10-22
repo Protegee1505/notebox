@@ -402,6 +402,13 @@ try {
   await previewImage.focus();
   await page.keyboard.press("Enter");
   await page.locator(".attachment-gallery").waitFor({ timeout: 10_000 });
+  // The viewer focuses its close button on the next frame; press arrows only
+  // after that, or a fast runner sends them to the preview still.
+  await page.waitForFunction(
+    () => document.activeElement?.id === "gallery-close",
+    null,
+    { timeout: 5_000 },
+  );
   await page.keyboard.press("ArrowRight");
   await page.waitForFunction(
     () => document.querySelector(".gallery-position")?.textContent?.includes("2 of 2"),
