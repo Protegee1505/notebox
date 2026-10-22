@@ -54,9 +54,9 @@ free.
 
 On boot, `/home/kinfuny/.customize_environment` runs
 `scripts/cloudshell-bootstrap.sh --boot --quiet`. It first appends a
-`boot-hook start` line with the boot id to `~/.cache/notebox-build/boot.log`,
-then writes a `boot-hook finish` line with the exit code and ready state. The
-script:
+`boot-hook start` line with the boot id and whether `/tmp/opencode` was already
+present to `~/.cache/notebox-build/boot.log`, then writes a `boot-hook finish`
+line with the exit code and ready state. The script:
 
 1. repairs the symlinks in `$HOME` before any tool can write to `/home`;
 2. drops `target.tar.xz` first if `/home` free space is below
