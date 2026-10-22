@@ -5,9 +5,9 @@
 // axe-core on every main screen in light and dark themes. It also checks the
 // keyboard path: note-list arrow keys, Tab trapped inside each dialog, focus
 // return after closing a panel, and autofocus on Settings, Login and dialogs.
-// The feature checks cover the static avatar, the unclipped selected-card ring,
-// the default trash confirmation, switching off that confirmation, and the
-// first topbar theme click while the choice is System.
+// The feature checks cover the account avatar and panel, the unclipped
+// selected-card ring, the default trash confirmation, switching off that
+// confirmation, and the first topbar theme click while the choice is System.
 //
 //   PLAYWRIGHT_MODULES=/path/to/node_modules \
 //   node scripts/web-a11y.mjs [dist-dir]
@@ -451,26 +451,74 @@ try {
   );
 
   const avatar = await page.evaluate(() => {
-    const badge = document.querySelector(".topbar .avatar");
-    return badge
+    const trigger = document.querySelector(".topbar .avatar-button");
+    const badge = trigger?.querySelector(".avatar");
+    return trigger
       ? {
-          tag: badge.tagName,
-          role: badge.getAttribute("role"),
-          tabIndex: badge.getAttribute("tabindex"),
-          hidden: badge.getAttribute("aria-hidden"),
+          tag: trigger.tagName,
+          hasPopup: trigger.getAttribute("aria-haspopup"),
+          expanded: trigger.getAttribute("aria-expanded"),
+          label: trigger.getAttribute("aria-label"),
+          badgeHidden: badge?.getAttribute("aria-hidden"),
         }
       : null;
   });
-  const avatarShortcut = await page.getByRole("button", { name: "Open settings" }).count();
   results.push(
     check(
-      "the avatar is a static, non-interactive badge",
-      avatar?.tag === "SPAN" &&
-        avatar.role === null &&
-        avatar.tabIndex === null &&
-        avatar.hidden === "true" &&
-        avatarShortcut === 0,
-      JSON.stringify({ avatar, avatarShortcut }),
+      "the avatar is an account button",
+      avatar?.tag === "BUTTON" &&
+        avatar.hasPopup === "dialog" &&
+        avatar.expanded === "false" &&
+        Boolean(avatar.label?.startsWith("Account and sync:")) &&
+        avatar.badgeHidden === "true",
+      JSON.stringify(avatar),
+    ),
+  );
+
+  await page.locator("#account-button").click();
+  await page.locator("#account-menu").waitFor({ timeout: 10_000 });
+  await settle(page);
+  const accountMenu = await page.evaluate(() => {
+    const menu = document.querySelector("#account-menu");
+    const actions = Array.from(menu?.querySelectorAll(".account-action") ?? []);
+    return {
+      role: menu?.getAttribute("role"),
+      expanded: document
+        .querySelector("#account-button")
+        ?.getAttribute("aria-expanded"),
+      focused: document.activeElement?.id,
+      labels: actions.map((action) => action.textContent?.trim() ?? ""),
+    };
+  });
+  results.push(
+    check(
+      "the avatar opens the account panel",
+      accountMenu.role === "dialog" &&
+        accountMenu.expanded === "true" &&
+        accountMenu.focused === "account-menu" &&
+        accountMenu.labels.length >= 2 &&
+        accountMenu.labels.includes("Account settings"),
+      JSON.stringify(accountMenu),
+    ),
+  );
+
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(
+    () => document.activeElement?.id === "account-button",
+    null,
+    { timeout: 10_000 },
+  );
+  const accountClosed = await page.evaluate(() => ({
+    menu: Boolean(document.querySelector("#account-menu")),
+    expanded: document
+      .querySelector("#account-button")
+      ?.getAttribute("aria-expanded"),
+  }));
+  results.push(
+    check(
+      "Escape closes the account panel and returns focus",
+      !accountClosed.menu && accountClosed.expanded === "false",
+      JSON.stringify(accountClosed),
     ),
   );
 
@@ -709,6 +757,44 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await settle(page, 500);
   await audit("notes, mobile light");
+
+  await page.locator("#account-button").click();
+  await page.locator("#account-menu").waitFor({ timeout: 10_000 });
+  await settle(page, 150);
+  const accountSheet = await page.evaluate(() => {
+    const menu = document.querySelector("#account-menu");
+    if (!menu) return null;
+    const box = menu.getBoundingClientRect();
+    return {
+      position: getComputedStyle(menu).position,
+      top: box.top,
+      bottom: box.bottom,
+      left: box.left,
+      right: box.right,
+      viewport: window.innerHeight,
+    };
+  });
+  results.push(
+    check(
+      "the account panel is a phone sheet inside the viewport",
+      Boolean(
+        accountSheet &&
+          accountSheet.position === "fixed" &&
+          accountSheet.top >= 0 &&
+          accountSheet.left >= 0 &&
+          accountSheet.right <= 390 &&
+          accountSheet.bottom <= accountSheet.viewport,
+      ),
+      JSON.stringify(accountSheet),
+    ),
+  );
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(
+    () => document.activeElement?.id === "account-button",
+    null,
+    { timeout: 10_000 },
+  );
+
   await page.getByRole("button", { name: "Open navigation" }).click();
   await page.locator(".sidebar.is-open").waitFor();
   await page.locator(".nav-row", { hasText: "Settings" }).click();

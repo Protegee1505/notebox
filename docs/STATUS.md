@@ -22,8 +22,9 @@ optional welcome tour is created only when the owner asks for it. A phone can
 start a note from a floating button on the list instead of opening the
 sidebar. Relaunching now returns to the last note and screen, a visible device
 sees another device's edit on its next ten-second poll without a reload,
-deleting asks first by default, the avatar is a static badge, and a first theme
-click while the choice is System always changes the visible theme.
+deleting asks first by default, the avatar opens an account panel on desktop
+and phones, and a first theme click while the choice is System always changes
+the visible theme.
 A 100 KB note opens in a median under 50 ms in the web UI and typing drops no
 frames; Linux desktop cold start is 555 ms warm. The installer budget now
 measures the `.deb` (9.9 MB), not the self-contained AppImage. The free Worker
@@ -49,6 +50,22 @@ scrolls, and no light row is left below the app when the keyboard opens.
 
 ## Shipped
 
+- `notes-app`: **the avatar is the account control**. The topbar avatar is now
+  a real button. It opens an account panel: an anchored popover on desktop and a
+  fixed bottom sheet on phones. The panel shows the username or "Local only", a
+  one-line sync state, a contextual "Sync now" when signed in or "Sign in to
+  sync" when local, and "Account settings". Sign-out, devices and credentials
+  stay in Settings. The status pill is a read-only indicator now, and the avatar
+  carries the sync dot when the pill collapses on a narrow screen. Escape closes
+  the panel and returns focus to the avatar; a click outside closes it; opening
+  the palette, shortcuts, Find, history or another screen closes it. The header
+  rises above a toast while the panel is open so the sheet rows stay tappable.
+  Verified with 240 native tests passed and one skipped,
+  `cargo clippy --workspace --all-targets -- -D warnings`, `cargo deny check`,
+  `scripts/budget-check`, `web-a11y.mjs` 76/76 (button semantics, panel
+  open/focus/close, phone sheet inside the viewport), `web-persist.mjs` 22/22,
+  `web-restore.mjs` 18/18 and `web-budget.mjs` 1.73 MiB brotli. No account, sync
+  protocol or schema change; not deployed.
 - `notes-app`, `notes-sync`: **resume the last workspace, see other devices
   without a reload, and confirm a delete**. Local preferences now save the open
   note, Notes/Settings screen, Active/Archived/Trash view, phone list-or-editor
@@ -337,7 +354,7 @@ scrolls, and no light row is left below the app when the keyboard opens.
   the credential form, changes both username and password, signs out, signs in
   with the new pair and confirms the note is still there. The CI web job
   installs `worker-build` and runs it after the backup round trip.
-- `scripts/web-a11y.mjs`: 73-check P8 accessibility, onboarding, phone-layout
+- `scripts/web-a11y.mjs`: 76-check P8 accessibility, onboarding, phone-layout
   and desktop-chrome flow. It runs axe-core's WCAG 2.0, 2.1 and 2.2 A/AA rules
   on notes, history, the command palette, shortcuts, trash, Settings, Login and
   the mobile layout, each in light and dark themes. The same run checks first
@@ -348,7 +365,9 @@ scrolls, and no light row is left below the app when the keyboard opens.
   keeps Find closed, a phone tap on a hit keeps focus out of the editor,
   desktop Back opens a 1160 px gallery at 1400 px, choosing a gallery card
   returns to the editor, and Navigator collapses and restores the sidebar. The
-  avatar is a static badge with no Settings shortcut, the selected card clears
+  avatar is a button with dialog semantics; opening it focuses the account
+  panel, Escape closes it and returns focus to the avatar, and at 390 px the
+  panel is a fixed sheet inside the viewport. The selected card clears
   the list's top clip edge by 8 px, moving a note asks first and focuses Cancel
   before Escape/Cancel returns focus to the trash button, one topbar click from
   System lands on dark, and the confirmation setting toggles off and back on.
@@ -718,7 +737,7 @@ scrolls, and no light row is left below the app when the keyboard opens.
 | CI | Run 39727904123 on 71e0b72: all eight jobs green (gates, wasm, server, Windows, Android, desktop, OPFS, web). Run 39718495732 on e11a0f5 was green too; the earlier run 39637535803 on 1e6bfdf was green, though GitHub Actions briefly left it `in_progress` during its 2026-10-21 partial outage after every job had passed |
 | P8 backup restore (Playwright) | 18/18 checks: fresh-profile export/import of a notebook, pinned tagged note and trashed note; text, tag, pin, trash, attachment row, decoded WebP, history peer label and idempotent second import; no console errors |
 | P8 wipe and sign-in (Playwright + local Worker) | 20/20 checks: three timed rejected logins (browser Argon2id median 122 ms), derived login key, account setup, first sync, image attachment, a second live profile appends a line that the first window receives without a reload, OPFS/localStorage/cookie/cache wipe, note gone, sign in, attachment download without a crash, note body/tag/pin/image, history labelled as the other devices, no duplicate, no console errors |
-| P8 accessibility, onboarding and search (Playwright + axe-core) | 73/73 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; first launch shows welcome Login with no back button, offline starts empty, optional tour adds three cards, Ctrl K focuses search, Ctrl P opens the palette, a search mark renders, opening a hit leaves Find closed with no selection and a long hit scrolls to its match, a phone tap on a hit keeps focus out of the editor, tag-only matches keep Find closed; the avatar is a static badge with no Settings shortcut, the selected card ring clears the list top by 8 px, trash asks first and focuses Cancel before Escape/Cancel returns focus to the trash button, one topbar click leaves System for dark, and the delete-confirmation setting toggles off and on; note-list Arrow/Home/Enter, Tab and Shift+Tab stay inside the three dialogs, focus return after overlays, Settings/Login/dialog autofocus; image title and no list overflow at 390/360/320; card titles keep a full line at 360×420 and compact rows at 1024×420; 320 px header, scrollable toolbar and reachable Quote; colour sheet inside the viewport; the floating new-note button hidden at 1400 px and opening the editor at 390 px; tag chips fold away while the note body scrolls and return at the top; one-tap Back and phone Settings/navigation; desktop Back opens a 1160 px gallery, choosing a note returns, and Navigator collapses and restores the sidebar; no console errors |
+| P8 accessibility, onboarding and search (Playwright + axe-core) | 76/76 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; first launch shows welcome Login with no back button, offline starts empty, optional tour adds three cards, Ctrl K focuses search, Ctrl P opens the palette, a search mark renders, opening a hit leaves Find closed with no selection and a long hit scrolls to its match, a phone tap on a hit keeps focus out of the editor, tag-only matches keep Find closed; the avatar is a button that opens an account panel, focuses it, closes on Escape with focus back on the avatar, and becomes a fixed in-viewport sheet at 390 px, the selected card ring clears the list top by 8 px, trash asks first and focuses Cancel before Escape/Cancel returns focus to the trash button, one topbar click leaves System for dark, and the delete-confirmation setting toggles off and on; note-list Arrow/Home/Enter, Tab and Shift+Tab stay inside the three dialogs, focus return after overlays, Settings/Login/dialog autofocus; image title and no list overflow at 390/360/320; card titles keep a full line at 360×420 and compact rows at 1024×420; 320 px header, scrollable toolbar and reachable Quote; colour sheet inside the viewport; the floating new-note button hidden at 1400 px and opening the editor at 390 px; tag chips fold away while the note body scrolls and return at the top; one-tap Back and phone Settings/navigation; desktop Back opens a 1160 px gallery, choosing a note returns, and Navigator collapses and restores the sidebar; no console errors |
 | P8 local preferences and restart (Playwright) | 22/22 checks: browser storage, the attachment panel starts closed, the card shows a decoded thumbnail, note with image and history survive restart, the last note and Settings screen return without choosing them, one theme click leaves System, dark theme and list layout survive restart, turning delete confirmation off skips the prompt, second tab blocked by the store lock, no console errors |
 | P8 phone sign-in (one-off Playwright, 360 px touch + local Worker) | New note saved, derived login key, account setup, status `Synced`, synced note in the list, no list overflow, Settings round trip, navigation drawer, one-tap Back with the colour menu open; no console errors |
 | Web login preview | Rebuilt release at 2026-10-21: the Worker origin is read-only with no URL input, the offline action is visible, and the screen has no horizontal overflow or console errors at 1400 px and 390 px |

@@ -106,11 +106,16 @@ pub fn App() -> Element {
             onclick: {
                 let context = context.clone();
                 move |_| {
-                    // A click anywhere outside the colour menu dismisses it
-                    // and still reaches the control under the finger. There is
-                    // no full-screen backdrop that could swallow the tap.
-                    if context.state.peek().color_open {
-                        context.state.write_unchecked().color_open = false;
+                    // A click anywhere outside the colour menu or account
+                    // panel dismisses it and still reaches the control under
+                    // the finger. There is no full-screen backdrop that could
+                    // swallow the tap.
+                    let mut state = context.state.write_unchecked();
+                    if state.color_open {
+                        state.color_open = false;
+                    }
+                    if state.account_open {
+                        state.account_open = false;
                     }
                 }
             },

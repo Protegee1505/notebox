@@ -316,6 +316,8 @@ pub struct AppState {
     pub mobile_list: bool,
     /// The wide note gallery, with the editor hidden, opened by Back.
     pub browsing: bool,
+    /// Account panel under the avatar.
+    pub account_open: bool,
     /// Colour menu under the editor header.
     pub color_open: bool,
     /// History panel over the editor.
@@ -432,6 +434,7 @@ impl AppState {
             sidebar_collapsed: false,
             mobile_list: true,
             browsing: false,
+            account_open: false,
             color_open: false,
             history_open: false,
             history_versions: Vec::new(),
@@ -1513,6 +1516,7 @@ impl AppContext {
             state.find_open = open;
             if open {
                 state.editor_mode = EditorMode::Write;
+                state.account_open = false;
             } else {
                 state.find_query.clear();
                 state.find_index = 0;
@@ -1957,6 +1961,7 @@ impl AppContext {
             state.palette_open = false;
             state.shortcuts_open = false;
             state.sidebar_open = false;
+            state.account_open = false;
             hide_history(&mut state);
             hide_editor_overlays(&mut state);
             if screen == Screen::Notes {
@@ -2179,6 +2184,7 @@ impl AppContext {
             state.history_error = None;
             state.find_open = false;
             state.color_open = false;
+            state.account_open = false;
         }
         if let Some(version_id) = selected {
             self.load_history_version(&version_id);
@@ -2309,6 +2315,20 @@ impl AppContext {
         }
     }
 
+    /// Show or hide the account panel under the avatar.
+    ///
+    /// Opening it closes the navigation drawer and the colour menu, so only
+    /// one transient surface owns the next tap.
+    pub fn toggle_account_menu(&self) {
+        let mut state = self.state.write_unchecked();
+        let open = !state.account_open;
+        state.account_open = open;
+        if open {
+            state.sidebar_open = false;
+            state.color_open = false;
+        }
+    }
+
     /// Open Settings and refresh the device list when connected.
     pub fn open_settings(&self) {
         self.go(Screen::Settings);
@@ -2319,6 +2339,7 @@ impl AppContext {
 
     /// Close overlays, or leave the editor on a phone.
     pub fn escape(&self) {
+        let mut return_to_account = false;
         {
             let mut state = self.state.write_unchecked();
             if state.pending_delete.is_some() {
@@ -2327,6 +2348,9 @@ impl AppContext {
                 state.palette_open = false;
             } else if state.shortcuts_open {
                 state.shortcuts_open = false;
+            } else if state.account_open {
+                state.account_open = false;
+                return_to_account = true;
             } else if state.find_open {
                 state.find_open = false;
             } else if state.sidebar_open {
@@ -2345,6 +2369,9 @@ impl AppContext {
                 state.mobile_list = true;
             }
         }
+        if return_to_account {
+            let _ = document::eval("document.getElementById('account-button')?.focus();");
+        }
         self.save_preferences();
     }
 
@@ -2355,6 +2382,7 @@ impl AppContext {
             state.palette_open = true;
             state.palette_query.clear();
             state.palette_index = 0;
+            state.account_open = false;
         }
         self.focus_palette();
     }
@@ -2410,6 +2438,7 @@ impl AppContext {
         let mut state = self.state.write_unchecked();
         state.shortcuts_open = true;
         state.palette_open = false;
+        state.account_open = false;
     }
 
     /// Expand the sign-in details form with the current username.
@@ -3990,10 +4019,11 @@ fn attachment_set_changed(draft: &str, attachments: &[Attachment]) -> bool {
             .any(|reference| !attachments.iter().any(|item| item.hash == reference.hash))
 }
 
-/// Close overlays that belong to the open editor. They must not survive a
-/// screen change or a login, where the user sees no menu but every tap would
-/// still land on its backdrop.
+/// Close dismissible menus and overlays that belong to the current screen.
+/// They must not survive a screen change or a login, where the user sees no
+/// menu but every tap would still land on its backdrop.
 fn hide_editor_overlays(state: &mut AppState) {
+    state.account_open = false;
     state.color_open = false;
     state.find_open = false;
     state.find_query.clear();

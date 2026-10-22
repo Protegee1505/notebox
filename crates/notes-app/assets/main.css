@@ -339,6 +339,12 @@ kbd {
   border-bottom: 1px solid var(--border);
 }
 
+/* The account panel is anchored in the header, so the header has to outrank a
+   toast. The panel closes before any modal overlay opens. */
+.topbar.has-account {
+  z-index: 65;
+}
+
 .topbar-start,
 .topbar-end {
   display: flex;
@@ -525,7 +531,8 @@ kbd {
 
 @media (prefers-reduced-motion: reduce) {
   .status-pill.is-busy .status-dot,
-  .sync-state.is-busy .status-dot {
+  .sync-state.is-busy .status-dot,
+  .avatar-dot.is-busy {
     animation: none;
   }
 }
@@ -586,6 +593,7 @@ kbd {
 }
 
 .avatar {
+  position: relative;
   display: inline-grid;
   place-items: center;
   width: 2.1rem;
@@ -603,6 +611,170 @@ kbd {
   width: 3rem;
   height: 3rem;
   font-size: var(--text-lg);
+}
+
+.avatar-button {
+  display: inline-grid;
+  place-items: center;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.avatar-button:hover .avatar {
+  border-color: var(--border-strong);
+}
+
+.avatar-button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.avatar-button.is-open .avatar {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 20%, transparent);
+}
+
+.avatar-dot {
+  position: absolute;
+  right: -0.08rem;
+  bottom: -0.08rem;
+  width: 0.55rem;
+  height: 0.55rem;
+  border: 2px solid var(--surface);
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.avatar-dot.is-ok {
+  background: var(--success);
+}
+
+.avatar-dot.is-warn,
+.avatar-dot.is-busy {
+  background: var(--accent);
+}
+
+.avatar-dot.is-error {
+  background: var(--danger);
+}
+
+.avatar-dot.is-busy {
+  animation: status-pulse 1.4s ease-in-out infinite;
+}
+
+.account-anchor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.account-menu {
+  position: absolute;
+  top: calc(100% + var(--space-2));
+  right: 0;
+  z-index: 36;
+  width: min(18rem, calc(100vw - var(--space-6)));
+  max-height: calc(var(--app-height, 100dvh) - var(--topbar-h) - var(--space-6));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  animation: pop-in 140ms ease;
+}
+
+.account-menu:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.account-identity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2);
+}
+
+.account-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.account-copy strong {
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.account-detail {
+  flex-wrap: wrap;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.account-detail span:not(.status-dot) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.account-sep {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background: var(--border);
+}
+
+.account-action {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 2.5rem;
+  padding: var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.account-action:hover {
+  background: var(--surface-2);
+}
+
+.account-action:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.account-action:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.account-action .icon {
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+  color: var(--muted);
+}
+
+.account-note {
+  margin: var(--space-1) var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
 }
 
 /* ---------- shell ---------- */
@@ -3931,6 +4103,23 @@ kbd {
     max-width: none;
   }
 
+  /* The account panel is a sheet on a phone, where the top bar is tight.
+     It sits above the safe-area inset and keeps the same rows as desktop. */
+  .account-menu {
+    position: fixed;
+    top: auto;
+    right: var(--space-3);
+    bottom: calc(var(--space-3) + env(safe-area-inset-bottom, 0px));
+    left: var(--space-3);
+    z-index: 80;
+    width: auto;
+    animation: account-sheet-in 160ms ease;
+  }
+
+  .account-action {
+    min-height: 2.75rem;
+  }
+
   /* A fixed sheet keeps the menu inside the viewport even when the header is
      tight. Tapping anywhere else closes it without swallowing the tap. */
   .color-popover {
@@ -4024,6 +4213,17 @@ kbd {
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes account-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
