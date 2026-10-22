@@ -197,6 +197,43 @@ try {
   ].join("\n");
   await page.locator("#note-editor").fill(longBody);
   await settle(page, 1200);
+
+  // ---- Desktop Back opens the wide gallery, and Navigator collapses. ----
+  await page.getByRole("button", { name: "Back to notes" }).click();
+  await page.locator(".workspace.browsing").waitFor({ timeout: 10_000 });
+  const gallery = await page.locator(".list-pane").boundingBox();
+  results.push(
+    check(
+      "desktop Back opens the wide notes gallery",
+      Boolean(gallery && gallery.width > 900) &&
+        !(await page.locator(".editor-pane").isVisible()),
+      JSON.stringify(gallery),
+    ),
+  );
+  await page
+    .locator(".note-card", { hasText: "Long note for the search landing" })
+    .first()
+    .click();
+  await page.locator("#note-editor").waitFor({ timeout: 10_000 });
+  results.push(
+    check(
+      "choosing a gallery note returns to the editor",
+      (await page.locator(".workspace.browsing").count()) === 0,
+    ),
+  );
+
+  await page.getByRole("button", { name: "Hide navigation" }).click();
+  await page.locator(".workspace.nav-collapsed").waitFor({ timeout: 10_000 });
+  results.push(
+    check(
+      "desktop Navigator collapses the sidebar",
+      !(await page.locator(".sidebar").isVisible()),
+    ),
+  );
+  await page.getByRole("button", { name: "Show navigation" }).click();
+  await page.locator(".sidebar").waitFor({ state: "visible", timeout: 10_000 });
+  results.push(check("desktop Navigator restores the sidebar", true));
+
   await page.locator("#note-editor").click();
   await page.keyboard.press("Control+k");
   await page.waitForFunction(
@@ -1017,6 +1054,8 @@ try {
   await page.getByRole("button", { name: "Open settings" }).click();
   await page.getByRole("heading", { name: "Local data" }).waitFor();
   await page.getByRole("button", { name: "Back to notes" }).click();
+  await page.locator(".workspace.show-list").waitFor();
+  await page.locator(".note-card").first().click();
   await page.locator("#note-editor").waitFor();
   await page.getByRole("button", { name: "Back to notes" }).click();
   await page.locator(".workspace.show-list").waitFor();

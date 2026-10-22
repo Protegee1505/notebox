@@ -218,6 +218,8 @@ try {
     mimeType: "image/png",
     buffer: image,
   });
+  await page.locator(".status-attachments").waitFor({ timeout: 30_000 });
+  await page.locator(".status-attachments").click();
   await page.locator(".attachment-row").waitFor({ timeout: 30_000 });
   await page.waitForFunction(
     () => !document.querySelector(".save-state")?.textContent?.includes("Unsaved"),
@@ -310,6 +312,8 @@ try {
       (await page.getByRole("button", { name: "Unpin note" }).count()) === 1,
     ),
   );
+  await page.locator(".status-attachments").click();
+  await page.locator(".attachment-strip").waitFor({ timeout: 10_000 });
   results.push(
     check(
       "attachment came back",

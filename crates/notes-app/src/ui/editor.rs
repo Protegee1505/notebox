@@ -66,6 +66,7 @@ pub fn EditorPane() -> Element {
     let history_open = state.history_open;
     let notebooks = state.notebooks.clone();
     let attachments = state.attachments.clone();
+    let attachments_open = state.attachments_open;
     let attaching = state.attaching;
     let summary = selected.and_then(|id| state.notes.iter().find(|note| note.id == id).cloned());
     let pinned = summary.as_ref().map(|note| note.pinned).unwrap_or(false);
@@ -209,7 +210,7 @@ pub fn EditorPane() -> Element {
                     title: "Back to notes",
                     onclick: {
                         let context = context.clone();
-                        move |_| context.state.write_unchecked().mobile_list = true
+                        move |_| context.back_to_notes()
                     },
                     Icon { name: "arrow-left" }
                 }
@@ -591,11 +592,26 @@ pub fn EditorPane() -> Element {
                 }
             }
 
-            if !attachments.is_empty() {
-                div { class: "attachment-strip", aria_label: "Attachments",
+            if attachments_open && !attachments.is_empty() {
+                div {
+                    id: "attachments-panel",
+                    class: "attachment-strip",
+                    role: "region",
+                    aria_label: "Attachments",
                     div { class: "attachment-strip-head",
                         span { class: "attachment-strip-title", "Attachments" }
                         span { class: "attachment-strip-count", "{attachments.len()}" }
+                        button {
+                            class: "icon-button small attachment-strip-close",
+                            r#type: "button",
+                            aria_label: "Close attachments",
+                            title: "Close attachments",
+                            onclick: {
+                                let context = context.clone();
+                                move |_| context.toggle_attachments()
+                            },
+                            Icon { name: "x" }
+                        }
                     }
                     div { class: "attachment-rows",
                         for attachment in attachments.iter().take(12) {
@@ -674,6 +690,25 @@ pub fn EditorPane() -> Element {
                             }
                         },
                         Icon { name: "check" }
+                    }
+                }
+                if !attachments.is_empty() {
+                    button {
+                        class: if attachments_open { "status-attachments is-active" } else { "status-attachments" },
+                        r#type: "button",
+                        aria_label: "Attachments",
+                        aria_expanded: if attachments_open { "true" } else { "false" },
+                        aria_controls: "attachments-panel",
+                        title: if attachments_open { "Hide attachments" } else { "Show attachments" },
+                        onclick: {
+                            let context = context.clone();
+                            move |_| context.toggle_attachments()
+                        },
+                        Icon { name: "image" }
+                        span { "{attachments.len()}" }
+                        span { class: "status-attachments-label",
+                            if attachments.len() == 1 { "image" } else { "images" }
+                        }
                     }
                 }
                 div { class: "status-counts",

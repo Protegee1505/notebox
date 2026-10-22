@@ -401,10 +401,6 @@ kbd {
   border-left: 1px solid var(--border);
 }
 
-.menu-button {
-  display: none;
-}
-
 .search-field {
   flex: 0 1 34rem;
   display: flex;
@@ -1052,6 +1048,39 @@ kbd {
   border-style: dashed;
 }
 
+.note-media {
+  width: 100%;
+  height: 6.5rem;
+  flex: none;
+  overflow: hidden;
+  border: 1px solid var(--tone-edge);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--tone-bg) 62%, var(--surface));
+}
+
+.note-media img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.note-media-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  width: 100%;
+  height: 100%;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.note-media-fallback .icon {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
 .note-card-top {
   display: flex;
   align-items: flex-start;
@@ -1167,11 +1196,33 @@ kbd {
 .note-rows .note-card {
   /* The list is the scroll container. Keep each row at its content height, or
      a long list makes flex shrink every row and hide its title. */
+  position: relative;
   flex: none;
   min-height: 0;
   gap: 0.2rem;
   padding: 0.7rem 0.8rem;
   border-radius: var(--radius);
+}
+
+.note-rows .note-card.has-image {
+  padding-left: 2.9rem;
+}
+
+.note-rows .note-media {
+  position: absolute;
+  top: 0.55rem;
+  left: 0.55rem;
+  width: 1.8rem;
+  height: 1.8rem;
+}
+
+.note-rows .note-media-fallback {
+  font-size: 0;
+}
+
+.note-rows .note-media-fallback .icon {
+  width: 0.9rem;
+  height: 0.9rem;
 }
 
 .note-rows .note-title {
@@ -1272,10 +1323,6 @@ kbd {
   padding: 0 var(--space-4);
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--tone-bg, var(--surface)) 55%, var(--surface));
-}
-
-.back-button {
-  display: none;
 }
 
 .editor-where {
@@ -1726,6 +1773,10 @@ kbd {
   text-align: center;
 }
 
+.attachment-strip-close {
+  margin-left: auto;
+}
+
 .attachment-rows {
   display: flex;
   flex-direction: column;
@@ -1851,6 +1902,41 @@ kbd {
 
 .tag-input:hover {
   border-color: var(--border);
+}
+
+.status-attachments {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex: none;
+  height: 1.7rem;
+  padding: 0 0.45rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.status-attachments:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.status-attachments:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.status-attachments.is-active {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.status-attachments .icon {
+  width: 0.9rem;
+  height: 0.9rem;
 }
 
 .status-counts {
@@ -3495,10 +3581,6 @@ kbd {
     position: relative;
   }
 
-  .menu-button {
-    display: inline-grid;
-  }
-
   .new-note-fab {
     display: grid;
   }
@@ -3630,10 +3712,6 @@ kbd {
   .update-actions {
     justify-content: flex-end;
     width: 100%;
-  }
-
-  .back-button {
-    display: inline-grid;
   }
 
   .topbar {
@@ -3924,5 +4002,110 @@ kbd {
   to {
     opacity: 1;
     transform: translate(-50%, 0);
+  }
+}
+
+/* ---------- wide notes gallery, sidebar toggle and card images ---------- */
+
+@media (min-width: 1100px) {
+  .icon-button.menu-button-mobile {
+    display: none;
+  }
+
+  .icon-button.menu-button-desktop {
+    display: inline-grid;
+  }
+}
+
+@media (max-width: 1099px) {
+  .icon-button.menu-button-desktop {
+    display: none;
+  }
+
+  .icon-button.menu-button-mobile {
+    display: inline-grid;
+  }
+}
+
+@media (min-width: 700px) {
+  .workspace.browsing {
+    grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  }
+
+  .workspace.browsing .editor-pane {
+    display: none;
+  }
+
+  .workspace.browsing .list-pane {
+    border-right: none;
+  }
+
+  .workspace.browsing .list-header {
+    padding: var(--space-6) var(--space-6) var(--space-4);
+  }
+
+  .workspace.browsing .note-list {
+    padding: 0 var(--space-6) var(--space-7);
+  }
+
+  .workspace.browsing .note-grid {
+    grid-template-columns: repeat(auto-fill, minmax(min(16rem, 100%), 1fr));
+    gap: var(--space-4);
+  }
+
+  .workspace.browsing .note-rows {
+    width: 100%;
+    max-width: 70rem;
+    margin: 0 auto;
+  }
+}
+
+@media (min-width: 700px) and (max-width: 1099px) {
+  .workspace.browsing {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (min-width: 1100px) {
+  .workspace.nav-collapsed {
+    grid-template-columns: var(--list-w) minmax(0, 1fr);
+  }
+
+  .workspace.nav-collapsed .sidebar {
+    display: none;
+  }
+
+  .workspace.nav-collapsed .list-pane {
+    position: relative;
+  }
+
+  .workspace.nav-collapsed .new-note-fab {
+    display: grid;
+  }
+
+  .workspace.nav-collapsed .note-list {
+    padding-bottom: calc(var(--space-7) + var(--space-5));
+  }
+
+  .workspace.nav-collapsed.browsing {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workspace.nav-collapsed.browsing .note-list {
+    padding-bottom: var(--space-7);
+  }
+
+  .workspace.nav-collapsed.settings-mode {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .workspace.nav-collapsed.settings-mode .settings-pane {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 699px) {
+  .status-attachments-label {
+    display: none;
   }
 }

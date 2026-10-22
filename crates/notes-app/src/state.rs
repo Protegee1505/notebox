@@ -6,7 +6,7 @@
 //! one place to plug into.
 
 use std::cell::{OnceCell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::rc::Rc;
 
@@ -33,6 +33,12 @@ use crate::media;
 use crate::storage::{self, Persistence, StorageInfo};
 use crate::sync::{self, Due, OpenNotePlan, SyncFailure, SyncReport, SyncStatus, SyncUi};
 use crate::time::{now, relative_time};
+
+/// Most card thumbnails kept in memory at once. A large gallery still marks
+/// every image note with its fallback tile, but only these load the bytes.
+const CARD_IMAGE_LIMIT: usize = 12;
+/// Skip thumbnails larger than this. The full image still opens in the note.
+const CARD_IMAGE_MAX_BYTES: usize = 800 * 1024;
 
 /// Top-level screens. Notes and Settings keep the sidebar; Login is full page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -261,8 +267,12 @@ pub struct AppState {
     pub selected: Option<NoteId>,
     /// Attachments the open note links, in the order first added.
     pub attachments: Vec<Attachment>,
+    /// Whether the attachment panel is open below the editor.
+    pub attachments_open: bool,
     /// Inline image URLs by content hash, for the rendered view.
     pub attachment_urls: HashMap<String, String>,
+    /// First-image thumbnails for cards and search results, by content hash.
+    pub card_images: HashMap<String, Rc<str>>,
     /// Images being compressed before they are stored.
     pub attaching: usize,
     /// Editor body.
@@ -299,8 +309,12 @@ pub struct AppState {
     pub shortcuts_open: bool,
     /// Sidebar drawer on narrow screens.
     pub sidebar_open: bool,
+    /// Whether the wide-screen sidebar is collapsed.
+    pub sidebar_collapsed: bool,
     /// Which single pane a phone shows.
     pub mobile_list: bool,
+    /// The wide note gallery, with the editor hidden, opened by Back.
+    pub browsing: bool,
     /// Colour menu under the editor header.
     pub color_open: bool,
     /// History panel over the editor.
@@ -389,7 +403,9 @@ impl AppState {
             note_count: 0,
             selected: None,
             attachments: Vec::new(),
+            attachments_open: false,
             attachment_urls: HashMap::new(),
+            card_images: HashMap::new(),
             attaching: 0,
             draft: String::new(),
             saved_text: String::new(),
@@ -408,7 +424,9 @@ impl AppState {
             palette_index: 0,
             shortcuts_open: false,
             sidebar_open: false,
+            sidebar_collapsed: false,
             mobile_list: true,
+            browsing: false,
             color_open: false,
             history_open: false,
             history_versions: Vec::new(),
@@ -459,6 +477,45 @@ pub struct AppContext {
 struct StoreHandle {
     store: Rc<dyn NoteStore>,
     persistence: Option<Rc<Persistence>>,
+}
+
+/// Build thumbnails for the first images on the current cards.
+///
+/// Data URLs are cached by hash across reloads. The cap keeps a search with
+/// hundreds of image notes from turning every keystroke into a large decode;
+/// notes beyond it still show the image fallback tile.
+fn load_card_images(
+    store: &dyn NoteStore,
+    notes: &[NoteSummary],
+    cached: &HashMap<String, Rc<str>>,
+) -> HashMap<String, Rc<str>> {
+    let mut images = HashMap::new();
+    let mut seen = HashSet::new();
+    for note in notes {
+        let Some(image) = note.first_image.as_ref() else {
+            continue;
+        };
+        if !image.available || !media::is_previewable_image(&image.mime) {
+            continue;
+        }
+        if !seen.insert(image.hash.as_str()) {
+            continue;
+        }
+        if images.len() >= CARD_IMAGE_LIMIT {
+            break;
+        }
+        if let Some(url) = cached.get(&image.hash) {
+            images.insert(image.hash.clone(), url.clone());
+            continue;
+        }
+        if let Ok(Some(bytes)) = store.attachment_bytes(&image.hash) {
+            if bytes.len() <= CARD_IMAGE_MAX_BYTES {
+                let url = media::image_data_url(&image.mime, &bytes);
+                images.insert(image.hash.clone(), Rc::from(url));
+            }
+        }
+    }
+    images
 }
 
 impl AppContext {
@@ -862,6 +919,10 @@ impl AppContext {
             }
         };
 
+        let card_images = {
+            let cached = self.state.peek();
+            load_card_images(store, &notes, &cached.card_images)
+        };
         let notebooks = store.list_notebooks().unwrap_or_default();
         let tags = store.list_tags().unwrap_or_default();
         let note_count = store.note_count().unwrap_or(0);
@@ -870,6 +931,7 @@ impl AppContext {
         state.notes = notes;
         state.snippets = snippets;
         state.search_hits = search_hits;
+        state.card_images = card_images;
         state.notebooks = notebooks;
         state.tags = tags;
         state.note_count = note_count;
@@ -954,9 +1016,11 @@ impl AppContext {
                 state.redo.clear();
                 state.last_undo = None;
                 state.mobile_list = false;
+                state.browsing = false;
                 state.editor_mode = EditorMode::Write;
                 hide_history(&mut state);
                 state.attachments.clear();
+                state.attachments_open = false;
                 state.attachment_urls.clear();
                 true
             }
@@ -1111,6 +1175,10 @@ impl AppContext {
                 drop(state);
                 if attachments_changed {
                     self.load_attachments(id);
+                    // The card marker comes from the store summary, and the
+                    // thumbnail cache is built with a list reload. Refresh both
+                    // as soon as an image is added, not only after Back.
+                    self.reload();
                 }
             }
             Err(message) => {
@@ -1144,7 +1212,7 @@ impl AppContext {
                 .iter()
                 .filter(|attachment| {
                     attachment.available
-                        && attachment.mime.starts_with("image/")
+                        && media::is_previewable_image(&attachment.mime)
                         && !state.attachment_urls.contains_key(&attachment.hash)
                 })
                 .cloned()
@@ -1168,12 +1236,13 @@ impl AppContext {
             attachments.iter().any(|attachment| {
                 &attachment.hash == hash
                     && attachment.available
-                    && attachment.mime.starts_with("image/")
+                    && media::is_previewable_image(&attachment.mime)
             })
         });
         for (hash, url) in fresh_urls {
             state.attachment_urls.insert(hash, url);
         }
+        state.attachments_open = state.attachments_open && !attachments.is_empty();
         state.attachments = attachments;
     }
 
@@ -1692,6 +1761,7 @@ impl AppContext {
         state.undo.clear();
         state.redo.clear();
         state.mobile_list = true;
+        state.attachments_open = false;
         hide_history(&mut state);
         hide_editor_overlays(&mut state);
     }
@@ -1793,7 +1863,7 @@ impl AppContext {
         hide_history(&mut state);
         hide_editor_overlays(&mut state);
         if screen == Screen::Notes {
-            state.mobile_list = state.selected.is_none();
+            state.mobile_list = state.browsing || state.selected.is_none();
         }
         if screen == Screen::Login {
             state.login.error = None;
@@ -1802,6 +1872,37 @@ impl AppContext {
         if screen == Screen::Notes {
             state.login_first_run = false;
         }
+    }
+
+    /// Leave the editor for the notes gallery.
+    ///
+    /// On a phone this is the existing list pane. On a wide window the app
+    /// hides the editor and lets the list use the room, so Back has a visible
+    /// result instead of only setting the phone flag.
+    pub fn back_to_notes(&self) {
+        self.save_now();
+        {
+            let mut state = self.state.write_unchecked();
+            state.browsing = true;
+            state.mobile_list = true;
+            state.attachments_open = false;
+            hide_history(&mut state);
+            hide_editor_overlays(&mut state);
+        }
+        self.reload();
+    }
+
+    /// Show or hide the open note's attachment strip. It starts closed so a
+    /// note with an image is not permanently shorter on every screen.
+    pub fn toggle_attachments(&self) {
+        let mut state = self.state.write_unchecked();
+        state.attachments_open = !state.attachments_open && !state.attachments.is_empty();
+    }
+
+    /// Collapse or restore the sidebar on a wide window.
+    pub fn toggle_sidebar_collapsed(&self) {
+        let mut state = self.state.write_unchecked();
+        state.sidebar_collapsed = !state.sidebar_collapsed;
     }
 
     /// Cycle the topbar theme button.
@@ -2100,7 +2201,7 @@ impl AppContext {
         } else if state.screen == Screen::Settings || state.screen == Screen::Login {
             state.screen = Screen::Notes;
             state.login_first_run = false;
-            state.mobile_list = state.selected.is_none();
+            state.mobile_list = state.browsing || state.selected.is_none();
         } else if !state.mobile_list {
             state.mobile_list = true;
         }
@@ -2571,7 +2672,7 @@ impl AppContext {
             state.screen = Screen::Notes;
             state.login_first_run = false;
             state.offline = false;
-            state.mobile_list = state.selected.is_none();
+            state.mobile_list = state.browsing || state.selected.is_none();
             hide_editor_overlays(&mut state);
         }
         self.save_preferences();
@@ -2610,7 +2711,7 @@ impl AppContext {
             state.offline = true;
             state.login_first_run = false;
             state.screen = Screen::Notes;
-            state.mobile_list = state.selected.is_none();
+            state.mobile_list = state.browsing || state.selected.is_none();
             hide_editor_overlays(&mut state);
         }
         self.save_preferences();
@@ -3968,6 +4069,7 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             trashed_at: None,
+            first_image: None,
         };
         assert_eq!(note_title(&note), "image");
     }

@@ -25,8 +25,8 @@ use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 
 use crate::error::StoreError;
 use crate::{
-    search_terms, Attachment, AttachmentUsage, ImportReport, NewNote, NoteQuery, NoteStore,
-    NoteSummary, NoteView, SearchHit, SearchQuery, SyncState, TagCount, WorkspacePush,
+    search_terms, Attachment, AttachmentUsage, ImportReport, NewNote, NoteImage, NoteQuery,
+    NoteStore, NoteSummary, NoteView, SearchHit, SearchQuery, SyncState, TagCount, WorkspacePush,
 };
 
 /// Schema version written to `PRAGMA user_version`.
@@ -1259,6 +1259,7 @@ fn save_note_with(
     )?;
 
     update_note_attachment_links(conn, &id_text, &text, updated_at)?;
+    let first_image = first_image_for(conn, &id_text)?;
 
     Ok(NoteSummary {
         id,
@@ -1272,6 +1273,7 @@ fn save_note_with(
         created_at,
         updated_at,
         trashed_at: meta.trashed_at,
+        first_image,
     })
 }
 
@@ -1329,6 +1331,7 @@ fn finish_summary(raw: RawSummary) -> Result<NoteSummary, StoreError> {
         } else {
             Some(raw.trashed_at)
         },
+        first_image: None,
     })
 }
 
@@ -1383,6 +1386,7 @@ fn list_with(
     }
     drop(statement);
     attach_tags(conn, &mut summaries)?;
+    attach_first_images(conn, &mut summaries)?;
     Ok(summaries)
 }
 
@@ -1441,6 +1445,7 @@ fn search_with(conn: &Connection, query: &SearchQuery) -> Result<Vec<SearchHit>,
 
     let mut summaries: Vec<NoteSummary> = hits.iter().map(|hit| hit.note.clone()).collect();
     attach_tags(conn, &mut summaries)?;
+    attach_first_images(conn, &mut summaries)?;
     for (hit, summary) in hits.iter_mut().zip(summaries) {
         hit.note = summary;
     }
@@ -1470,6 +1475,67 @@ fn view_clause(view: NoteView) -> &'static str {
         NoteView::Trash => "n.trashed_at <> 0",
         NoteView::All => "1 = 1",
     }
+}
+
+/// The first linked image on one note, or `None` when it has none.
+fn first_image_for(conn: &Connection, note_id: &str) -> Result<Option<NoteImage>, StoreError> {
+    Ok(conn
+        .query_row(
+            "SELECT a.hash, a.mime, a.data IS NOT NULL
+             FROM note_attachment na JOIN attachment a ON a.hash = na.hash
+             WHERE na.note_id = ?1
+               AND a.mime LIKE 'image/%'
+               AND a.mime <> 'image/svg+xml'
+             ORDER BY na.added_at, a.hash
+             LIMIT 1",
+            params![note_id],
+            |row| {
+                Ok(NoteImage {
+                    hash: row.get(0)?,
+                    mime: row.get(1)?,
+                    available: row.get::<_, i64>(2)? != 0,
+                })
+            },
+        )
+        .optional()?)
+}
+
+/// Read one image per listed note in one query, for card thumbnails.
+fn attach_first_images(conn: &Connection, summaries: &mut [NoteSummary]) -> Result<(), StoreError> {
+    if summaries.is_empty() {
+        return Ok(());
+    }
+    let ids: Vec<String> = summaries.iter().map(|note| note.id.to_string()).collect();
+    let placeholders = vec!["?"; ids.len()].join(",");
+    let sql = format!(
+        "SELECT na.note_id, a.hash, a.mime, a.data IS NOT NULL
+         FROM note_attachment na JOIN attachment a ON a.hash = na.hash
+         WHERE na.note_id IN ({placeholders})
+           AND a.mime LIKE 'image/%'
+           AND a.mime <> 'image/svg+xml'
+         ORDER BY na.note_id, na.added_at, a.hash"
+    );
+    let mut statement = conn.prepare(&sql)?;
+    let rows = statement.query_map(params_from_iter(ids.iter().map(String::as_str)), |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            NoteImage {
+                hash: row.get(1)?,
+                mime: row.get(2)?,
+                available: row.get::<_, i64>(3)? != 0,
+            },
+        ))
+    })?;
+    let mut by_note: HashMap<String, NoteImage> = HashMap::new();
+    for row in rows {
+        let (id, image) = row?;
+        by_note.entry(id).or_insert(image);
+    }
+    drop(statement);
+    for summary in summaries.iter_mut() {
+        summary.first_image = by_note.remove(&summary.id.to_string());
+    }
+    Ok(())
 }
 
 /// Read the tags of the listed notes in one query, keeping their order.

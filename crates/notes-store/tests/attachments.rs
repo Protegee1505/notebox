@@ -3,7 +3,10 @@
 use std::io::Cursor;
 
 use notes_core::{attachment_url, content_hash, read_export_zip, ExportBundle};
-use notes_store::{export_bundle, NewNote, NoteStore, SearchQuery, SqliteStore, SCHEMA_VERSION};
+use notes_store::{
+    export_bundle, NewNote, NoteImage, NoteQuery, NoteStore, NoteView, SearchQuery, SqliteStore,
+    SCHEMA_VERSION,
+};
 
 fn store() -> SqliteStore {
     SqliteStore::open_in_memory().expect("in-memory store")
@@ -43,6 +46,68 @@ fn bytes_round_trip_and_identical_data_is_stored_once() {
     let usage = store.attachment_usage().expect("usage");
     assert_eq!(usage.count, 1);
     assert_eq!(usage.bytes, 10);
+}
+
+#[test]
+fn summaries_carry_one_image_for_cards_and_search_results() {
+    let store = store();
+    let guide = store
+        .put_attachment("guide.pdf", "application/pdf", b"guide", 900)
+        .expect("guide");
+    let photo = store
+        .put_attachment("holiday.png", "image/webp", b"photo", 1_000)
+        .expect("photo");
+    let note = create(&store, "Holiday", 1_000);
+    let body = format!(
+        "Holiday\n\n[guide]({})\n\n![holiday]({})",
+        attachment_url(&guide.hash, &guide.mime),
+        attachment_url(&photo.hash, &photo.mime)
+    );
+    note.replace_text(&body).expect("edit");
+    store.save_note(&note, 1_100).expect("save");
+
+    let expected = Some(NoteImage {
+        hash: photo.hash.clone(),
+        mime: "image/webp".to_string(),
+        available: true,
+    });
+    assert_eq!(
+        store.note_summary(&note.id()).expect("summary").first_image,
+        expected
+    );
+    let listed = store
+        .list_notes(&NoteQuery::page(NoteView::Active))
+        .expect("list");
+    assert_eq!(listed[0].first_image, expected);
+    let hits = store.search(&SearchQuery::new("Holiday")).expect("search");
+    assert_eq!(hits[0].note.first_image, expected);
+
+    // Removing the image from the note body clears the card marker.
+    note.replace_text("Holiday").expect("edit");
+    store.save_note(&note, 1_200).expect("save");
+    assert_eq!(
+        store.note_summary(&note.id()).expect("summary").first_image,
+        None
+    );
+}
+
+#[test]
+fn a_linked_image_without_bytes_still_marks_the_card() {
+    let store = store();
+    let missing = content_hash(b"not here yet");
+    let note = create(&store, "Waiting", 1_000);
+    note.replace_text(&format!("Waiting\n\n![remote](attachments/{missing}.webp)"))
+        .expect("edit");
+    store.save_note(&note, 1_100).expect("save");
+
+    assert_eq!(
+        store.note_summary(&note.id()).expect("summary").first_image,
+        Some(NoteImage {
+            hash: missing,
+            mime: "image/webp".to_string(),
+            available: false,
+        })
+    );
 }
 
 #[test]

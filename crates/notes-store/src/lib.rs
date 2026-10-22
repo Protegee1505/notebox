@@ -102,6 +102,17 @@ impl NoteQuery {
     }
 }
 
+/// The first image a note links, as the card grid needs it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoteImage {
+    /// Lowercase SHA-256 of the image bytes.
+    pub hash: String,
+    /// Image MIME type, for example `image/webp`.
+    pub mime: String,
+    /// Whether the bytes are in this database.
+    pub available: bool,
+}
+
 /// A note as the list and card grid needs it, without loading the CRDT.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoteSummary {
@@ -127,6 +138,8 @@ pub struct NoteSummary {
     pub updated_at: i64,
     /// Unix seconds when the note was trashed.
     pub trashed_at: Option<i64>,
+    /// First linked image, for a card thumbnail or image marker.
+    pub first_image: Option<NoteImage>,
 }
 
 /// Filter for [`NoteStore::search`].

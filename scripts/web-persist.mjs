@@ -185,6 +185,14 @@ try {
     mimeType: "image/png",
     buffer: image,
   });
+  await page.locator(".status-attachments").waitFor({ timeout: 30_000 });
+  results.push(
+    check(
+      "the attachment panel starts closed",
+      (await page.locator(".attachment-strip").count()) === 0,
+    ),
+  );
+  await page.locator(".status-attachments").click();
   await page.locator(".attachment-row").waitFor({ timeout: 30_000 });
   await page.waitForFunction(
     () => !document.querySelector(".save-state")?.textContent?.includes("Unsaved"),
@@ -205,6 +213,19 @@ try {
     check(
       "attachment is listed before restart",
       (await page.locator(".attachment-row").count()) >= 1,
+    ),
+  );
+  const cardImage = page
+    .locator(".note-card", { hasText: title })
+    .first()
+    .locator(".note-media img");
+  await cardImage.waitFor({ timeout: 30_000 });
+  const cardSrc = (await cardImage.getAttribute("src")) ?? "";
+  results.push(
+    check(
+      "the note card shows the image before restart",
+      cardSrc.startsWith("data:image/"),
+      cardSrc.slice(0, 40),
     ),
   );
 
@@ -279,6 +300,8 @@ try {
       after.slice(0, 300),
     ),
   );
+  await page.locator(".status-attachments").click();
+  await page.locator(".attachment-strip").waitFor({ timeout: 10_000 });
   results.push(
     check(
       "attachment row survived the restart",

@@ -301,6 +301,8 @@ try {
     mimeType: "image/png",
     buffer: Buffer.from(DOT_PNG, "base64"),
   });
+  await page.locator(".status-attachments").waitFor({ timeout: 60_000 });
+  await page.locator(".status-attachments").click();
   await page.locator(".attachment-row").first().waitFor({ timeout: 60_000 });
   await page.waitForFunction(
     () => !document.querySelector(".attachment-working"),
@@ -413,6 +415,7 @@ try {
       (await page.locator(".editor-tag", { hasText: tag }).count()) === 1,
     ),
   );
+  await page.locator(".status-attachments").click();
   await page.locator(".attachment-row").first().waitFor({ timeout: 30_000 });
   const attachmentText = await page.locator(".attachment-strip").innerText();
   results.push(

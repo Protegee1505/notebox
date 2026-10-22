@@ -1,6 +1,6 @@
 # Status
 
-Updated: 2026-10-21
+Updated: 2026-10-22
 Phase: 8 (polish and performance, in progress); P1–P7 complete except the
 owner-only release execution. The app can now restore a backup in Settings or
 from the command palette, and export format v2 carries each note's Loro history,
@@ -8,7 +8,10 @@ so a fresh device gets the version timeline back. P1 archives still import. A
 wiped browser profile also signs in to a local Worker and pulls its note, tag,
 pin and history back. An accessibility audit of every main screen and theme
 passes, including note-list arrow keys, Tab trapped inside dialogs and focus
-return after closing a panel. The phone note list now keeps a pasted image title
+return after closing a panel. Image notes now show their first image on cards,
+Back opens a full-width desktop gallery, the Navigator collapses the sidebar,
+and the attachment strip starts closed behind a footer count. The phone note
+list now keeps a pasted image title
 inside the viewport and keeps full title lines when the list scrolls, the
 editor header fits and the toolbar scrolls at 320 px, and the colour menu no
 longer puts a full-screen blocker over Back and Settings. A first launch now
@@ -42,6 +45,23 @@ scrolls, and no light row is left below the app when the keyboard opens.
 
 ## Shipped
 
+- `notes-app`, `notes-store`: **image notes show their image, and the desktop
+  chrome responds**. The store fills `NoteSummary.first_image` from one batched
+  query for list, search and save summaries. Cards render the first linked
+  image as a thumbnail, and a labelled image tile when the bytes are missing,
+  over 800 KB, or not a previewable type; previews and search snippets drop
+  raw image Markdown. At most 12 thumbnails stay in memory. Back now opens the
+  `browsing` gallery: at 700 px and wider the editor is hidden and the list
+  fills the window, while choosing a card returns to the editor; phones keep
+  the existing list pane. A separate desktop Navigator button collapses the
+  sidebar and shows the New note button on the list, while phones keep the
+  drawer. The attachment strip starts closed behind a footer count button with
+  a close control, and closes itself when the last attachment is removed.
+  Verified with 239 native tests (one skipped), store tests for first-image
+  metadata, removed links and missing bytes, `web-persist.mjs` 17/17 (closed
+  panel and a decoded card thumbnail), `web-restore.mjs` 18/18 and
+  `web-a11y.mjs` 67/67 (a 1160 px gallery at 1400 px, Navigator collapse and
+  restore, plus the 320 px phone checks). Chromium release build.
 - `notes-app`: **search highlights stay on the result cards, and a hit opens at
   the match**. Opening a result no longer opens or prefills Find, focuses the
   Find box or selects text in the editor; `<mark>` runs render only on a card's
@@ -54,7 +74,7 @@ scrolls, and no light row is left below the app when the keyboard opens.
   chips. Ctrl F remains the deliberate Find action.
   `scripts/web-a11y.mjs` replaces the prefill check with three checks: Find
   closed with no selection, a long note scrolled to its match, and a phone tap
-  that leaves focus out of the editor; the flow passes 63/63 with no console
+  that leaves focus out of the editor; the flow passes 67/67 with no console
   errors. Chromium release build. Deployed as 1e6bfdf after CI run 39637535803.
 - `notes-app`: **tag chips fold away while the note body scrolls**. The chip
   row sits above the scrolling body, so on a phone it kept taking a line from
@@ -282,16 +302,18 @@ scrolls, and no light row is left below the app when the keyboard opens.
   the credential form, changes both username and password, signs out, signs in
   with the new pair and confirms the note is still there. The CI web job
   installs `worker-build` and runs it after the backup round trip.
-- `scripts/web-a11y.mjs`: 63-check P8 accessibility, onboarding and phone-layout
-  flow. It runs axe-core's WCAG 2.0, 2.1 and 2.2 A/AA rules on notes, history,
-  the command palette, shortcuts, trash, Settings, Login and the mobile layout,
-  each in light and dark themes. The same run checks first launch opens the
-  welcome Login with no back button, offline starts with no samples, the
-  welcome tour creates three cards, Ctrl K focuses search, Ctrl P opens the
-  palette, a search match gets a `<mark>`, opening a hit leaves Find closed and
-  selects no text, a long hit scrolls to its match, a tag-only hit keeps Find
-  closed, and a phone tap on a hit keeps focus out of the editor. It checks
-  note-list Arrow/Home/Enter handling, keeps Tab and Shift+Tab inside the
+- `scripts/web-a11y.mjs`: 67-check P8 accessibility, onboarding, phone-layout
+  and desktop-chrome flow. It runs axe-core's WCAG 2.0, 2.1 and 2.2 A/AA rules
+  on notes, history, the command palette, shortcuts, trash, Settings, Login and
+  the mobile layout, each in light and dark themes. The same run checks first
+  launch opens the welcome Login with no back button, offline starts with no
+  samples, the welcome tour creates three cards, Ctrl K focuses search, Ctrl P
+  opens the palette, a search match gets a `<mark>`, opening a hit leaves Find
+  closed and selects no text, a long hit scrolls to its match, a tag-only hit
+  keeps Find closed, a phone tap on a hit keeps focus out of the editor,
+  desktop Back opens a 1160 px gallery at 1400 px, choosing a gallery card
+  returns to the editor, and Navigator collapses and restores the sidebar. It
+  checks note-list Arrow/Home/Enter handling, keeps Tab and Shift+Tab inside the
   three modal dialogs, checks focus return after
   closing history, the palette or the shortcut sheet, Settings' back button and
   Login's first field. At 390, 360 and 320 px it adds an image data-URL note,
@@ -414,12 +436,13 @@ scrolls, and no light row is left below the app when the keyboard opens.
   unchanged, and no new server request is made.
 - `scripts/web-persist.mjs`: release-build Playwright check with a persistent
   Chromium profile. It enters offline mode, creates a local-only note, attaches
-  a PNG, waits for the WebP row, closes and reopens the browser, and finds the
-  text, image reference, attachment row and decoded `data:image/webp` bytes. It
-  also checks the second tab lock, the history panel, the Settings label after
-  restart, a synthetic page-hide after a just-typed edit, and that the dark
-  theme and list layout survive the restart. 15/15 checks pass with no console
-  errors.
+  a PNG, waits for the WebP row, confirms the attachment panel starts closed
+  and the card shows a decoded thumbnail, closes and reopens the browser, and
+  finds the text, image reference, attachment row and decoded `data:image/webp`
+  bytes. It also checks the second tab lock, the history panel, the Settings
+  label after restart, a synthetic page-hide after a just-typed edit, and that
+  the dark theme and list layout survive the restart. 17/17 checks pass with no
+  console errors.
 - `docs/adr/0010-browser-persistence.md` records the image, lock and fallback
   decisions. It amends ADR-0004's runtime shape: the app keeps the synchronous
   `NoteStore` for v1, and revisits a worker-backed store if image writes grow
@@ -652,12 +675,12 @@ scrolls, and no light row is left below the app when the keyboard opens.
 | S3 tail probe | 100 requests at 1/s: 100/100 tail events, 0 failures, CPU min 0 / p50 1 / p95 2 / max 2 ms; login 401 `invalid_credentials`, devices and sync 401 `unauthorized`; no 1102 or 5xx |
 | S3 Argon2id | desktop release 38.2 ms median (20 runs, max 92.1 ms); Chromium release build 119 ms median (178/119/116 ms, includes local Worker round trip); phone not measured |
 | S3 free limits | re-read 2026-10-21: 100,000 requests/day, 10 ms CPU, 50 subrequests, 50 D1 queries, 2 MB rows, 10 D1 databases; 2 databases in use |
-| Native tests | 236 passed, 1 skipped (the ignored Worker client e2e) |
+| Native tests | 239 passed, 1 skipped (the ignored Worker client e2e) |
 | CI | Run 39637535803 on 1e6bfdf: all eight jobs green (gates, wasm, server, Windows, Android, desktop, OPFS, web). The previous run 39622631498 on ce65296 was green too, though GitHub Actions briefly left it `in_progress` during its 2026-10-21 partial outage after every job had passed |
 | P8 backup restore (Playwright) | 18/18 checks: fresh-profile export/import of a notebook, pinned tagged note and trashed note; text, tag, pin, trash, attachment row, decoded WebP, history peer label and idempotent second import; no console errors |
 | P8 wipe and sign-in (Playwright + local Worker) | 19/19 checks: three timed rejected logins (browser Argon2id median 162 ms), derived login key, account setup, first sync, image attachment, OPFS/localStorage/cookie/cache wipe, note gone, sign in, attachment download without a crash, note body/tag/pin/image, history labelled as the other device, no duplicate, no console errors |
-| P8 accessibility, onboarding and search (Playwright + axe-core) | 63/63 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; first launch shows welcome Login with no back button, offline starts empty, optional tour adds three cards, Ctrl K focuses search, Ctrl P opens the palette, a search mark renders, opening a hit leaves Find closed with no selection and a long hit scrolls to its match, a phone tap on a hit keeps focus out of the editor, tag-only matches keep Find closed; note-list Arrow/Home/Enter, Tab and Shift+Tab stay inside the three dialogs, focus return after overlays, Settings/Login/dialog autofocus; image title and no list overflow at 390/360/320; card titles keep a full line at 360×420 and compact rows at 1024×420; 320 px header, scrollable toolbar and reachable Quote; colour sheet inside the viewport; the floating new-note button hidden at 1400 px and opening the editor at 390 px; tag chips fold away while the note body scrolls and return at the top; one-tap Back and phone Settings/navigation; no console errors |
-| P8 local preferences and restart (Playwright) | 15/15 checks: browser storage, note with image and history survive restart, dark theme and list layout survive restart, second tab blocked by the store lock, no console errors |
+| P8 accessibility, onboarding and search (Playwright + axe-core) | 67/67 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; first launch shows welcome Login with no back button, offline starts empty, optional tour adds three cards, Ctrl K focuses search, Ctrl P opens the palette, a search mark renders, opening a hit leaves Find closed with no selection and a long hit scrolls to its match, a phone tap on a hit keeps focus out of the editor, tag-only matches keep Find closed; note-list Arrow/Home/Enter, Tab and Shift+Tab stay inside the three dialogs, focus return after overlays, Settings/Login/dialog autofocus; image title and no list overflow at 390/360/320; card titles keep a full line at 360×420 and compact rows at 1024×420; 320 px header, scrollable toolbar and reachable Quote; colour sheet inside the viewport; the floating new-note button hidden at 1400 px and opening the editor at 390 px; tag chips fold away while the note body scrolls and return at the top; one-tap Back and phone Settings/navigation; desktop Back opens a 1160 px gallery, choosing a note returns, and Navigator collapses and restores the sidebar; no console errors |
+| P8 local preferences and restart (Playwright) | 17/17 checks: browser storage, the attachment panel starts closed, the card shows a decoded thumbnail, note with image and history survive restart, dark theme and list layout survive restart, second tab blocked by the store lock, no console errors |
 | P8 phone sign-in (one-off Playwright, 360 px touch + local Worker) | New note saved, derived login key, account setup, status `Synced`, synced note in the list, no list overflow, Settings round trip, navigation drawer, one-tap Back with the colour menu open; no console errors |
 | Web login preview | Rebuilt release at 2026-10-21: the Worker origin is read-only with no URL input, the offline action is visible, and the screen has no horizontal overflow or console errors at 1400 px and 390 px |
 | Live Worker deployment | `https://notebox.nbx-7207a015.workers.dev` serves release 0.1.0 / 1e6bfdf; `/version.json` reports the same build, so the live bundle carries the search-open change verified by 63/63 local release checks. The ce65296 probe had shown Welcome Login with no back button, then Try it offline opened an empty library with the optional Add welcome tour and no console errors. The earlier 5fae2ef deploy checked the seeded list's title line; the e9c8e82 deploy passed a fresh sign-in and first sync; the 759971a phone probe created a local image note and exercised the colour sheet and one-tap Back |

@@ -1,6 +1,7 @@
 //! The note list: a Keep-style card grid or a compact list.
 
 use dioxus::prelude::*;
+use notes_core::plain_line;
 use notes_store::{search_terms, NoteSummary, NoteView};
 
 use crate::state::{edited_label, note_title, tone_class, AppContext, Layout};
@@ -266,11 +267,33 @@ fn NoteCard(
     let context = use_context::<AppContext>();
     let id = note.id;
     let title = note_title(&note);
-    let preview = snippet
+    let raw_preview = snippet
         .as_deref()
         .filter(|text| !text.trim().is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| note.preview.clone());
+    let has_image = note.first_image.is_some() || raw_preview.contains("![");
+    let preview = preview_text(&raw_preview);
+    let image_url = note
+        .first_image
+        .as_ref()
+        .and_then(|image| context.state.read().card_images.get(&image.hash).cloned());
+    let media = match image_url {
+        Some(url) => rsx! {
+            img {
+                src: "{url}",
+                alt: "",
+                loading: "lazy",
+                decoding: "async",
+            }
+        },
+        None => rsx! {
+            div { class: "note-media-fallback",
+                Icon { name: "image" }
+                span { aria_hidden: "true", "Image" }
+            }
+        },
+    };
     let tags = tags_for_display(&note.tags, &query);
     let tag_count = note.tags.len();
     let pinned = note.pinned;
@@ -282,7 +305,8 @@ fn NoteCard(
     };
     let edited = edited_label(stamp);
     let class = format!(
-        "note-card {color}{}{}",
+        "note-card {color}{}{}{}",
+        if has_image { " has-image" } else { "" },
         if selected { " is-selected" } else { "" },
         if trash_view { " is-trashed" } else { "" }
     );
@@ -363,7 +387,12 @@ fn NoteCard(
             }
             h3 { class: "note-title", HighlightedText { text: title, query: query.clone() } }
             if !preview.is_empty() {
-                p { class: "note-preview", HighlightedText { text: preview, query } }
+                p { class: "note-preview", HighlightedText { text: preview, query: query.clone() } }
+            }
+            if has_image {
+                div { class: "note-media", role: "img", aria_label: "Image attachment",
+                    {media}
+                }
             }
             footer { class: "note-meta",
                 span { "{edited}" }
@@ -484,6 +513,51 @@ fn highlight_segments(text: &str, query: &str) -> Vec<TextSegment> {
     segments
 }
 
+/// Plain card text for a preview, including a search snippet.
+///
+/// Stored bodies and search snippets can both contain the Markdown source of
+/// an image. A complete image becomes its alt text. A snippet can cut the URL
+/// before the closing bracket, so the remaining fragment is removed too.
+fn preview_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0;
+    while let Some(offset) = text[cursor..].find("![") {
+        let start = cursor + offset;
+        out.push_str(&text[cursor..start]);
+        let after = &text[start + 2..];
+        let Some(bracket) = after.find(']') else {
+            // A snippet can start inside a long image URL. Drop the fragment.
+            cursor = text.len();
+            break;
+        };
+        let bracket = start + 2 + bracket;
+        let alt = text[start + 2..bracket].trim();
+        if !alt.is_empty() {
+            if !out.chars().next_back().is_some_and(char::is_whitespace) {
+                out.push(' ');
+            }
+            out.push_str(alt);
+            if !text[bracket + 1..]
+                .chars()
+                .next()
+                .is_some_and(char::is_whitespace)
+            {
+                out.push(' ');
+            }
+        }
+        let mut next = bracket + 1;
+        if text[next..].starts_with('(') {
+            match text[next + 1..].find(')') {
+                Some(paren) => next += paren + 2,
+                None => next = text.len(),
+            }
+        }
+        cursor = next;
+    }
+    out.push_str(&text[cursor..]);
+    plain_line(&out)
+}
+
 /// Show matching tags first so a tag-only hit is visible before the two-tag cap.
 fn tags_for_display(tags: &[String], query: &str) -> Vec<String> {
     let terms: Vec<String> = search_terms(query)
@@ -517,7 +591,7 @@ fn HighlightedText(text: String, query: String) -> Element {
 
 #[cfg(test)]
 mod tests {
-    use super::{highlight_segments, tags_for_display};
+    use super::{highlight_segments, preview_text, tags_for_display};
 
     fn marked(text: &str, query: &str) -> Vec<String> {
         highlight_segments(text, query)
@@ -561,6 +635,17 @@ mod tests {
             .map(|segment| segment.text.as_str())
             .collect();
         assert_eq!(rebuilt, "İÅ draft");
+    }
+
+    #[test]
+    fn previews_never_show_raw_image_markup() {
+        assert_eq!(
+            preview_text("Look ![sun](attachments/a.webp) here"),
+            "Look sun here"
+        );
+        assert_eq!(preview_text("![image](attachments/a.webp"), "image");
+        assert_eq!(preview_text("before ![image] after"), "before image after");
+        assert!(!preview_text("a ![image]...").contains("!["));
     }
 
     #[test]

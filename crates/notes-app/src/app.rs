@@ -63,6 +63,8 @@ pub fn App() -> Element {
     let screen = state.screen;
     let theme = state.theme;
     let mobile_list = state.mobile_list;
+    let browsing = state.browsing;
+    let sidebar_collapsed = state.sidebar_collapsed;
     let palette_open = state.palette_open;
     let shortcuts_open = state.shortcuts_open;
     let storage_error = state.storage_error.clone();
@@ -79,6 +81,12 @@ pub fn App() -> Element {
         workspace_class.push_str(" show-list");
     } else {
         workspace_class.push_str(" show-editor");
+    }
+    if browsing && screen == Screen::Notes {
+        workspace_class.push_str(" browsing");
+    }
+    if sidebar_collapsed {
+        workspace_class.push_str(" nav-collapsed");
     }
 
     rsx! {

@@ -11,6 +11,17 @@
 
 use base64::Engine as _;
 
+/// Image types the browser and the desktop WebView can show inline.
+///
+/// SVG is excluded: it is not an image the app creates, and an inline SVG can
+/// carry script, so the card and the attachment preview both leave it alone.
+pub fn is_previewable_image(mime: &str) -> bool {
+    matches!(
+        mime,
+        "image/webp" | "image/png" | "image/jpeg" | "image/gif" | "image/avif"
+    )
+}
+
 /// An inline image URL the renderer accepts.
 pub fn image_data_url(mime: &str, bytes: &[u8]) -> String {
     let mime = if mime.starts_with("image/") {
