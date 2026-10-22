@@ -771,7 +771,8 @@ scrolls, and no light row is left below the app when the keyboard opens.
 | S3 Argon2id | desktop release 38.2 ms median (20 runs, max 92.1 ms); Chromium release build 119 ms median (178/119/116 ms, includes local Worker round trip); phone not measured |
 | S3 free limits | re-read 2026-10-21: 100,000 requests/day, 10 ms CPU, 50 subrequests, 50 D1 queries, 2 MB rows, 10 D1 databases; 2 databases in use |
 | Native tests | 250 passed, 1 skipped (the ignored Worker client e2e) |
-| CI | Run 39733053626 on 2582101: all eight jobs green (gates, wasm, server, Windows, Android, desktop, OPFS, web). Run 39727904123 on 71e0b72 was green too; the earlier run 39637535803 on 1e6bfdf was green, though GitHub Actions briefly left it `in_progress` during its 2026-10-21 partial outage after every job had passed |
+| Dependency security | `RUSTSEC-2026-0384` (race in `tokio::time::Interval` on 1.54.0) fixed by the lockfile-only bump to `tokio` 1.54.1; local `cargo deny check` is clean |
+| CI | Run 39769056107 on 409740c: all eight jobs green (gates, wasm, server, Windows, Android, desktop, OPFS, web), including the attachment gallery checks and the tokio security bump. Run 39733053626 on 2582101 was also green; run 39727904123 on 71e0b72 was green too. The earlier run 39637535803 on 1e6bfdf was green, though GitHub Actions briefly left it `in_progress` during its 2026-10-21 partial outage after every job had passed |
 | P8 backup restore (Playwright) | 18/18 checks: fresh-profile export/import of a notebook, pinned tagged note and trashed note; text, tag, pin, trash, attachment row, decoded WebP, history peer label and idempotent second import; no console errors |
 | P8 wipe and sign-in (Playwright + local Worker) | 20/20 checks: three timed rejected logins (browser Argon2id median 122 ms), derived login key, account setup, first sync, image attachment, a second live profile appends a line that the first window receives without a reload, OPFS/localStorage/cookie/cache wipe, note gone, sign in, attachment download without a crash, note body/tag/pin/image, history labelled as the other devices, no duplicate, no console errors |
 | P8 accessibility, onboarding and search (Playwright + axe-core) | 78/78 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; first launch shows welcome Login with no back button, offline starts empty, optional tour adds three cards, Ctrl K focuses search, Ctrl P opens the palette, a search mark renders, opening a hit leaves Find closed with no selection and a long hit scrolls to its match, a phone tap on a hit keeps focus out of the editor, tag-only matches keep Find closed; the avatar is a button that opens an account panel, focuses it, closes on Escape with focus back on the avatar, and becomes a fixed in-viewport sheet at 390 px, the selected card ring clears the list top by 8 px, trash asks first and focuses Cancel before Escape/Cancel returns focus to the trash button, one topbar click leaves System for dark, and the delete-confirmation setting toggles off and on; note-list Arrow/Home/Enter, Tab and Shift+Tab stay inside the three dialogs, focus return after overlays, Settings/Login/dialog autofocus; image title and no list overflow at 390/360/320; card titles keep a full line at 360×420 and compact rows at 1024×420; 320 px header, scrollable toolbar and reachable Quote; colour sheet inside the viewport; the floating new-note button hidden at 1400 px and opening the editor at 390 px; tag chips fold away while the note body scrolls and return at the top; one-tap Back and phone Settings/navigation; desktop Back opens a 1160 px gallery, choosing a note returns, and Navigator collapses and restores the sidebar; the attachment viewer fits a 320 px phone and passes axe WCAG A/AA on mobile dark; no console errors |
@@ -883,10 +884,11 @@ scrolls, and no light row is left below the app when the keyboard opens.
   path is compile-checked and shares the engine tests, but this slice did not
   drive its login/sync threads through the UI against a live Worker.
 - **Attachment gallery deployment**: the viewer, download, permanent delete,
-  `GET /v1/usage` and the Settings meters pass the local release checks, but
-  this change is not merged or deployed. After CI is green it needs the owner's
-  separate deployment approval; then verify the viewer, a download, a delete
-  and both cloud meters against the live Worker.
+  `GET /v1/usage` and the Settings meters pass the local release checks and
+  are merged to `origin/main` as `e7f41cf`, followed by test fixes `d2930bb`
+  and `fbedddd`; CI run 39769056107 on `409740c` is green on all eight jobs.
+  Deployment still needs the owner's separate approval; then verify the
+  viewer, a download, a delete and both cloud meters against the live Worker.
 
 ## Next
 
@@ -896,10 +898,10 @@ scrolls, and no light row is left below the app when the keyboard opens.
    fresh sign-in and first sync; close P8 with the full wipe/pull/history drill
    against it. Repeat the first-run, open-note and cold-start measurements on
    Windows and Android when those runtimes are available.
-2. Ship the attachment gallery: review and merge, wait for green CI, then ask
-   the owner before deploying. Verify a rendered preview and the footer count
-   open the viewer live, download a file, delete a throwaway attachment and see
-   both Settings meters; then ask the owner to accept it.
+2. Ship the attachment gallery: merged and green in CI; ask the owner before
+   deploying. Verify a rendered preview and the footer count open the viewer
+   live, download a file, delete a throwaway attachment and see both Settings
+   meters; then ask the owner to accept it.
 3. Personal release execution: the Worker is deployed, the account is created,
    `SETUP_TOKEN` is deleted and `NBX_SERVER_URL` is set. **The v0.1.0 tag is
    deliberately not pushed yet**: the first-run, preferences, search,
