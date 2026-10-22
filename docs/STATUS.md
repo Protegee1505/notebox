@@ -28,9 +28,10 @@ is deployed and a fresh browser signed in and synced. S3 now has production
 analytics and a 100-request tail probe: 156 production invocations, zero
 errors, and no error 1102, with the CPU-budget nuance recorded in ADR-0003.
 The full wipe/pull/history drill against the deployed Worker, the Windows and
-Android runtime checks, and the v0.1.0 release remain; the fixes for the
-owner's reported bugs are deployed as 1e6bfdf after green CI, and need owner
-acceptance before the release. The running app can sign in,
+Android runtime checks, and the v0.1.0 release remain; the search fixes are
+deployed as 1e6bfdf and the image-card and desktop-chrome fixes as e11a0f5,
+both after green CI, and both need owner acceptance before the release. The
+running app can sign in,
 restore a session, sync notes and attachments, show status, list and revoke
 devices, and keep a conflict copy. The web build is served by the Worker and
 syncs same-origin; local notes, history and images persist in OPFS, with no
@@ -61,7 +62,11 @@ scrolls, and no light row is left below the app when the keyboard opens.
   metadata, removed links and missing bytes, `web-persist.mjs` 17/17 (closed
   panel and a decoded card thumbnail), `web-restore.mjs` 18/18 and
   `web-a11y.mjs` 67/67 (a 1160 px gallery at 1400 px, Navigator collapse and
-  restore, plus the 320 px phone checks). Chromium release build.
+  restore, plus the 320 px phone checks). Chromium release build. Deployed as
+  e11a0f5 after green CI run 39718495732; a fresh live 1400 px browser opened
+  offline, kept the attachment panel closed, decoded the card thumbnail,
+  opened the 1160 px gallery with the editor hidden, and collapsed the
+  sidebar, with no console errors.
 - `notes-app`: **search highlights stay on the result cards, and a hit opens at
   the match**. Opening a result no longer opens or prefills Find, focuses the
   Find box or selects text in the editor; `<mark>` runs render only on a card's
@@ -676,15 +681,15 @@ scrolls, and no light row is left below the app when the keyboard opens.
 | S3 Argon2id | desktop release 38.2 ms median (20 runs, max 92.1 ms); Chromium release build 119 ms median (178/119/116 ms, includes local Worker round trip); phone not measured |
 | S3 free limits | re-read 2026-10-21: 100,000 requests/day, 10 ms CPU, 50 subrequests, 50 D1 queries, 2 MB rows, 10 D1 databases; 2 databases in use |
 | Native tests | 239 passed, 1 skipped (the ignored Worker client e2e) |
-| CI | Run 39637535803 on 1e6bfdf: all eight jobs green (gates, wasm, server, Windows, Android, desktop, OPFS, web). The previous run 39622631498 on ce65296 was green too, though GitHub Actions briefly left it `in_progress` during its 2026-10-21 partial outage after every job had passed |
+| CI | Run 39718495732 on e11a0f5: all eight jobs green (gates, wasm, server, Windows, Android, desktop, OPFS, web). The previous run 39637535803 on 1e6bfdf was green too, though GitHub Actions briefly left it `in_progress` during its 2026-10-21 partial outage after every job had passed |
 | P8 backup restore (Playwright) | 18/18 checks: fresh-profile export/import of a notebook, pinned tagged note and trashed note; text, tag, pin, trash, attachment row, decoded WebP, history peer label and idempotent second import; no console errors |
 | P8 wipe and sign-in (Playwright + local Worker) | 19/19 checks: three timed rejected logins (browser Argon2id median 162 ms), derived login key, account setup, first sync, image attachment, OPFS/localStorage/cookie/cache wipe, note gone, sign in, attachment download without a crash, note body/tag/pin/image, history labelled as the other device, no duplicate, no console errors |
 | P8 accessibility, onboarding and search (Playwright + axe-core) | 67/67 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; first launch shows welcome Login with no back button, offline starts empty, optional tour adds three cards, Ctrl K focuses search, Ctrl P opens the palette, a search mark renders, opening a hit leaves Find closed with no selection and a long hit scrolls to its match, a phone tap on a hit keeps focus out of the editor, tag-only matches keep Find closed; note-list Arrow/Home/Enter, Tab and Shift+Tab stay inside the three dialogs, focus return after overlays, Settings/Login/dialog autofocus; image title and no list overflow at 390/360/320; card titles keep a full line at 360×420 and compact rows at 1024×420; 320 px header, scrollable toolbar and reachable Quote; colour sheet inside the viewport; the floating new-note button hidden at 1400 px and opening the editor at 390 px; tag chips fold away while the note body scrolls and return at the top; one-tap Back and phone Settings/navigation; desktop Back opens a 1160 px gallery, choosing a note returns, and Navigator collapses and restores the sidebar; no console errors |
 | P8 local preferences and restart (Playwright) | 17/17 checks: browser storage, the attachment panel starts closed, the card shows a decoded thumbnail, note with image and history survive restart, dark theme and list layout survive restart, second tab blocked by the store lock, no console errors |
 | P8 phone sign-in (one-off Playwright, 360 px touch + local Worker) | New note saved, derived login key, account setup, status `Synced`, synced note in the list, no list overflow, Settings round trip, navigation drawer, one-tap Back with the colour menu open; no console errors |
 | Web login preview | Rebuilt release at 2026-10-21: the Worker origin is read-only with no URL input, the offline action is visible, and the screen has no horizontal overflow or console errors at 1400 px and 390 px |
-| Live Worker deployment | `https://notebox.nbx-7207a015.workers.dev` serves release 0.1.0 / 1e6bfdf; `/version.json` reports the same build, so the live bundle carries the search-open change verified by 63/63 local release checks. The ce65296 probe had shown Welcome Login with no back button, then Try it offline opened an empty library with the optional Add welcome tour and no console errors. The earlier 5fae2ef deploy checked the seeded list's title line; the e9c8e82 deploy passed a fresh sign-in and first sync; the 759971a phone probe created a local image note and exercised the colour sheet and one-tap Back |
-| Deploy guard | `./scripts/deploy-web.sh --if-needed` deployed 1e6bfdf after green CI run 39637535803 and verified `/version.json`; the check also reports no pending migrations on either D1 database, `dx` 0.7.10 and `worker-build` 0.8.7 |
+| Live Worker deployment | `https://notebox.nbx-7207a015.workers.dev` serves release 0.1.0 / e11a0f5; `/version.json` reports the same build. A fresh live Chromium run at 1400 px opened offline, created an image note, saw the attachment panel closed and a decoded card thumbnail, opened the 1160 px Back gallery with the editor hidden, and collapsed the sidebar; no console errors. The previous 1e6bfdf deploy carried the search-open change verified by 63/63 local release checks. The ce65296 probe had shown Welcome Login with no back button, then Try it offline opened an empty library with the optional Add welcome tour and no console errors. The earlier 5fae2ef deploy checked the seeded list's title line; the e9c8e82 deploy passed a fresh sign-in and first sync; the 759971a phone probe created a local image note and exercised the colour sheet and one-tap Back |
+| Deploy guard | `./scripts/deploy-web.sh --if-needed` deployed e11a0f5 after green CI run 39718495732 and verified `/version.json`; the check also reports no pending migrations on either D1 database, `dx` 0.7.10 and `worker-build` 0.8.7. The previous guard deployed 1e6bfdf after CI run 39637535803 |
 | Remote D1 migrations | `notebox-sync` and `notebox-blobs` each applied `0001_init.sql`; `wrangler d1 migrations list --remote` reports no pending migrations |
 | P8 large note (web UI) | 102,415 B note: current run open median 9.9 ms (51.8, 8.5, 9.9, 8.7, 54.4 ms); 120 typed characters, input-to-frame p95 9.1 ms, max 13.7 ms, none over 34 ms; text survives a reload; recorded web start 1,195 ms including the offline choice and optional tour; earlier run 786–1010 ms with auto-seeded samples |
 | P8 desktop cold start (Linux release) | warm median 555 ms over 5 runs (547–587 ms), budget 600 ms; earlier first run 628 ms with sample seeding, 2,170 ms when WebKit's cache is cold; not remeasured since automatic seeding was removed; Xvfb with isolated XDG directories |
@@ -702,7 +707,7 @@ scrolls, and no light row is left below the app when the keyboard opens.
 | PWA bundle | 10 precached files; 32,625 bytes of manifest, icons, HTML and worker; pre-cache assets from the Dioxus manifest only |
 | P7 browser persistence (Playwright) | 13/13 checks: Browser storage label, local-only note and PNG, WebP attachment, second-tab lock, browser restart, text/image/history, page-hide save, no console errors |
 | P7 conflict flow (Playwright) | 13/13 checks with two device contexts plus a third puller: delayed sync, edit during the run, conflict toast, merged original, `conflict`-tagged copy holding the typed text, follow-up sync before the minute timer, copy pulled by another device |
-| Web bundle (release, brotli) | P8 backup restore 1,787,615 B (1.70 MiB), raw 7,501,597 B, limit 3.00 MiB; P7 release build 1,818,284 B (1.73 MiB), raw 7,529,584 B; P7 Dioxus build 1,792,565 B (1.71 MiB), raw 7,489,034 B; P6 manual build 1,955,393 B (1.86 MiB), raw 9,353,273 B; P5 CI was 1,545,831 B |
+| Web bundle (release, brotli) | e11a0f5 image-card build 1,813,112 B (1.73 MiB), raw 7,638,386 B, limit 3.00 MiB; P8 backup restore 1,787,615 B (1.70 MiB), raw 7,501,597 B; P7 release build 1,818,284 B (1.73 MiB), raw 7,529,584 B; P7 Dioxus build 1,792,565 B (1.71 MiB), raw 7,489,034 B; P6 manual build 1,955,393 B (1.86 MiB), raw 9,353,273 B; P5 CI was 1,545,831 B |
 | Linux bundles | `notebox_0.1.0_amd64.deb` 9,867,218 B; `notebox_0.1.0_x86_64.AppImage` 89,597,120 B. The `.deb` installed and stayed up for 20 s under Xvfb; the extracted AppImage did the same. Both from `dx bundle` 0.7.10 with the patched lockfile |
 | P5 browser flow (Playwright) | 26/26 checks: autosave, timeline, diff, preview, restore, version retention, trash, confirm, cancel, restore and empty |
 | P5 layout review | 360/900/1400 px, light and dark; no horizontal overflow, no console errors |
@@ -797,9 +802,10 @@ scrolls, and no light row is left below the app when the keyboard opens.
    Windows and Android when those runtimes are available.
 2. Personal release execution: the Worker is deployed, the account is created,
    `SETUP_TOKEN` is deleted and `NBX_SERVER_URL` is set. **The v0.1.0 tag is
-   deliberately not pushed yet**: the first-run, preferences, search and
-   shortcut fixes are merged, deployed as 1e6bfdf and green in CI; the owner
-   should accept them. Then bump/confirm the version, push the tag, watch the
+   deliberately not pushed yet**: the first-run, preferences, search,
+   shortcut, image-card and desktop-chrome fixes are merged, deployed as
+   e11a0f5 and green in CI run 39718495732; the owner should accept them. Then
+   bump/confirm the version, push the tag, watch the
    first release workflow, and verify login and sync on a Windows install, a
    Linux install and the deployed web app.
 3. P7 release execution for Android when wanted: create and back up the
