@@ -762,16 +762,19 @@ scrolls, and no light row is left below the app when the keyboard opens.
   restart. Two compressed seeds in `~/.cache/notebox-build` restore the tree:
   `base.tar.xz` is 460 MiB and `target.tar.xz` is 1000 MiB. A measured
   base+target restore took 1m21s; the first `cargo nextest run --workspace`
-  took 53s and `./scripts/web-build.sh` took 23s. A real VM restart restored
+  took 53s and `./scripts/web-build.sh` took 23s. A real restart restored
   automatically in 1m19s; nextest then took 36s, and the first web build took
   84s because `web-build.sh` installed the system `clang` that the restart
   removed (21s of build plus package install). From a base-only restore they
   took 4m13s and 6m41s. `scripts/cloudshell-bootstrap.sh` handles boot,
-  `BASH_ENV`, fingerprint checks, atomic swaps and fallback installs;
-  `scripts/cloudshell-seed.sh` saves, verifies and prunes the seeds;
-  `scripts/relocate-caches.sh` repairs dangling links; `scripts/budget-check`
-  fails below 512 MiB free on `/home`, and the seed scripts keep a 1200 MiB
-  reserve. `/home` kept 1860 MiB free with both seeds. See `docs/DISK.md`.
+  `BASH_ENV`, fingerprint checks, atomic swaps and fallback installs, refuses
+  `--force` while a build is running unless `--allow-running` is explicit, and
+  the hook now writes start/finish lines with the boot id to `boot.log`;
+  `scripts/cloudshell-seed.sh` saves, verifies, prunes and marks seeds
+  `current` or `stale`; `scripts/relocate-caches.sh` repairs dangling links;
+  `scripts/budget-check` fails below 512 MiB free on `/home`, and the seed
+  scripts keep a 1200 MiB reserve. `/home` kept 1860 MiB free with both seeds.
+  See `docs/DISK.md`.
 
 ## Measurements
 
@@ -848,6 +851,11 @@ scrolls, and no light row is left below the app when the keyboard opens.
   at the live URL; native Windows/Linux login and sync still need a live run.
   Once signed in, Settings can change the username or password; there is no
   reset if both the password and every signed-in device are lost.
+- **Cloud Shell boot hook**: the hook now writes a `boot-hook start` marker and
+  boot id to `~/.cache/notebox-build/boot.log`, but the marker was added after
+  the last restart. A controlled full-VM reboot is still needed to prove the
+  boot path; the first-shell `BASH_ENV` restore and a manual `--force` restore
+  are proven. `--force` now refuses while a build is running.
 - **Android runtime**: no `/dev/kvm` and no Android SDK, so S2/S5 cannot be run
   on a device or emulator locally, and the P4/P6 Android screenshot, camera and
   boot checks are still missing. The local `aarch64-linux-android` check also
