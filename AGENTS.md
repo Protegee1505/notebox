@@ -37,6 +37,24 @@ Read PLAN.md first, then docs/STATUS.md.
 - npx wrangler dev --local | ./scripts/deploy-web.sh
 - npx wrangler d1 migrations apply <db> --local | --remote
 
+## Cloud Shell restore
+`/home` is a 4.8 GB partition and `/tmp/opencode` is wiped on every VM restart.
+The boot hook runs `scripts/cloudshell-bootstrap.sh`; non-interactive agent
+shells use `~/.config/notebox/bash-env.sh` through `BASH_ENV`.
+
+- Check: `./scripts/cloudshell-bootstrap.sh --status`.
+- Restore by hand: `./scripts/cloudshell-bootstrap.sh --force`.
+- Save seeds only after the gates and `./scripts/web-build.sh`, with no build
+  running: `./scripts/cloudshell-seed.sh save --all`.
+- Keep 1200 MiB free on `/home`; `scripts/budget-check` keeps a 512 MiB hard
+  floor. If space is tight, `./scripts/cloudshell-seed.sh prune --target`
+  removes the target seed first.
+- The web build needs system `clang` for SQLite wasm. It is not in the seed;
+  `scripts/web-build.sh` installs it on demand when non-interactive `sudo` is
+  available.
+
+See `docs/DISK.md`.
+
 ## Deploy
 The live web app and the Worker ship together. Use the guarded script; never run
 `npx wrangler deploy` directly, because it uploads whatever is in

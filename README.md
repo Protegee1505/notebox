@@ -204,15 +204,32 @@ The release build must already exist; the script accepts an explicit public
 directory when `dx` wrote outside `target/dx`.
 
 If `/home` is a small partition, keep build artifacts and caches on the larger
-disk before building; the script is idempotent and also creates the local Cargo
-target setting:
+disk before building:
 
 ```bash
-./scripts/relocate-caches.sh --force
+./scripts/relocate-caches.sh --repair
 ```
 
-See [docs/DISK.md](docs/DISK.md) for the layout, the 512 MiB free-space guard,
-and recovery steps.
+After a Cloud Shell restart, `/tmp/opencode` is empty. Restore the compressed
+toolchain and Cargo target seeds before the first build:
+
+```bash
+./scripts/cloudshell-bootstrap.sh --status
+./scripts/cloudshell-bootstrap.sh --force
+```
+
+The boot hook and non-interactive `BASH_ENV` normally run the bootstrap for
+you. Save fresh seeds after the gates and `./scripts/web-build.sh`:
+
+```bash
+./scripts/cloudshell-seed.sh save --base
+./scripts/cloudshell-seed.sh save --target
+```
+
+The web release build needs `clang`; `./scripts/web-build.sh` installs it on
+demand when non-interactive `sudo` is available. See
+[docs/DISK.md](docs/DISK.md) for the seed layout, the 1200 MiB reserve, the
+512 MiB guard and recovery steps.
 
 ## Local sync server
 

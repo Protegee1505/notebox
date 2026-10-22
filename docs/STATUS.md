@@ -758,14 +758,28 @@ scrolls, and no light row is left below the app when the keyboard opens.
   ADR-0016 the personal-server/offline-first release. `docs/API.md` documents
   the v1 endpoints the P3 engine implements.
 - Development disk: Cargo target, Rust/Cargo/npm/yarn/dx caches and Playwright
-  browsers now live under `/tmp/opencode`; `scripts/relocate-caches.sh` repairs
-  the layout and `scripts/budget-check` fails below 512 MiB free on `/home`.
-  See `docs/DISK.md`.
+  browsers now live under `/tmp/opencode`, which is wiped on a Cloud Shell VM
+  restart. Two compressed seeds in `~/.cache/notebox-build` restore the tree:
+  `base.tar.xz` is 460 MiB and `target.tar.xz` is 1000 MiB. A measured
+  base+target restore took 1m21s; the first `cargo nextest run --workspace`
+  took 53s and `./scripts/web-build.sh` took 23s. A real VM restart restored
+  automatically in 1m19s; nextest then took 36s, and the first web build took
+  84s because `web-build.sh` installed the system `clang` that the restart
+  removed (21s of build plus package install). From a base-only restore they
+  took 4m13s and 6m41s. `scripts/cloudshell-bootstrap.sh` handles boot,
+  `BASH_ENV`, fingerprint checks, atomic swaps and fallback installs;
+  `scripts/cloudshell-seed.sh` saves, verifies and prunes the seeds;
+  `scripts/relocate-caches.sh` repairs dangling links; `scripts/budget-check`
+  fails below 512 MiB free on `/home`, and the seed scripts keep a 1200 MiB
+  reserve. `/home` kept 1860 MiB free with both seeds. See `docs/DISK.md`.
 
 ## Measurements
 
 | Check | Result |
 | --- | --- |
+| Cloud Shell seeds and restore | base 460 MiB + target 1000 MiB (6046 MiB uncompressed); both SHA-256 verified; base+target restore 1m21s; `/home` free 1860 MiB; a real VM restart restored through the boot hook/`BASH_ENV` in 1m19s |
+| First build after a restore | `cargo nextest run --workspace` 53s (3.6s compile, 51.4s tests) with the target seed; `./scripts/web-build.sh` 23s when `clang` is present. Base only: nextest 4m13s, web build 6m41s. Real restart: nextest 36s, first web build 84s including on-demand `clang`, later 21s |
+| Seed save cost | base 1m6s (2103 MiB before compression); target 2m36s (6046 MiB before compression) |
 | S3 Worker CPU (production, Cloudflare analytics) | 156 invocations before the probe, 0 errors, all `success`; CPU bucket p50 median 4.618 ms, p95 26.291 ms, max 41.825 ms; 31 of 156 requests in 29 buckets above 10 ms; wall p99 median 127.2 ms, max 720.8 ms |
 | S3 tail probe | 100 requests at 1/s: 100/100 tail events, 0 failures, CPU min 0 / p50 1 / p95 2 / max 2 ms; login 401 `invalid_credentials`, devices and sync 401 `unauthorized`; no 1102 or 5xx |
 | S3 Argon2id | desktop release 38.2 ms median (20 runs, max 92.1 ms); Chromium release build 119 ms median (178/119/116 ms, includes local Worker round trip); phone not measured |
