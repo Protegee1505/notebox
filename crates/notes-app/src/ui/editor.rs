@@ -2,9 +2,15 @@
 
 use dioxus::html::HasFileData;
 use dioxus::prelude::*;
-use notes_core::{parse_attachment_url, render_markdown_with_images};
+use notes_core::{
+    external_url, markup_spans, parse_attachment_url, render_markdown_with_images, MarkupKind,
+    MarkupSpan, MAX_MARKUP_SPANS,
+};
 use notes_proto::{NoteId, NotebookId};
+use notes_store::Attachment;
 
+use crate::editor_markup::{self, SegmentKind};
+use crate::links;
 use crate::markdown_ops::Mark;
 use crate::media::{attachment_kind, format_size};
 use crate::state::{
@@ -17,10 +23,75 @@ use crate::ui::{AttachmentGallery, HistoryPanel};
 /// A few pixels of scroll keep the row still; roughly one text line hides it.
 const TAG_ROW_SCROLL_THRESHOLD: f64 = 24.0;
 
+/// Notes above this size stay a plain textarea. The overlay only helps when
+/// there are a readable number of links, and a very large body would cost a
+/// DOM node on every keystroke.
+const MAX_HIGHLIGHT_BYTES: usize = 256 * 1024;
+
 /// The note, mode and tag count the chip row was last measured on, plus
 /// whether the body was scrolled past the top. A mismatch means the row is
 /// visible again after a note switch, a mode switch or a tag edit.
 type TagRowState = (Option<NoteId>, EditorMode, usize, bool);
+
+/// The note and UTF-16 caret the token chip was last computed for.
+type CaretState = (Option<NoteId>, Option<usize>);
+
+/// Keep the highlight mirror exactly over the textarea.
+///
+/// The mirror is only painted with backgrounds and underlines, so it may sit
+/// above the textarea and stay non-interactive. Ctrl/Cmd+click compares the
+/// pointer with each token's rectangle in the click handler. The listener is
+/// installed once for the page; remounting the editor only refreshes the
+/// element references.
+const EDITOR_SYNC_SCRIPT: &str = r#"
+(() => {
+  const syncNow = () => {
+    const editor = document.getElementById('note-editor');
+    const mirror = document.querySelector('.editor-highlights');
+    const inner = mirror?.querySelector('.editor-highlights-inner');
+    if (!editor || !mirror || !inner) return;
+    mirror.style.left = editor.offsetLeft + 'px';
+    mirror.style.top = editor.offsetTop + 'px';
+    mirror.style.width = editor.clientWidth + 'px';
+    mirror.style.height = editor.clientHeight + 'px';
+    inner.style.transform =
+      'translate(' + (-editor.scrollLeft) + 'px,' + (-editor.scrollTop) + 'px)';
+    mirror.style.visibility = 'visible';
+    if (!editor.__noteboxMirrorObserver && 'ResizeObserver' in window) {
+      const observer = new ResizeObserver(() => {
+        if (!editor.isConnected) {
+          observer.disconnect();
+          return;
+        }
+        schedule();
+      });
+      editor.__noteboxMirrorObserver = observer;
+      observer.observe(editor);
+    }
+  };
+  const schedule = () => {
+    if (window.__noteboxSyncFrame) return;
+    window.__noteboxSyncFrame = requestAnimationFrame(() => {
+      window.__noteboxSyncFrame = 0;
+      syncNow();
+    });
+  };
+  window.__noteboxSyncEditor = schedule;
+  if (!window.__noteboxEditorSyncBound) {
+    window.__noteboxEditorSyncBound = true;
+    document.addEventListener('scroll', (event) => {
+      if (event.target?.id === 'note-editor') syncNow();
+    }, true);
+    document.addEventListener('input', (event) => {
+      if (event.target?.id === 'note-editor') schedule();
+    }, true);
+    window.addEventListener('resize', schedule);
+    window.visualViewport?.addEventListener('resize', schedule);
+    window.addEventListener('orientationchange', schedule);
+  }
+  syncNow();
+})();
+"#;
 
 /// Clipboard images cannot travel through Dioxus's paste event, so a page
 /// listener hands them to the hidden file input instead. A single listener is
@@ -93,6 +164,7 @@ pub fn EditorPane() -> Element {
     // top. Keying the state to the note, mode and tag count means a switch or
     // a tag edit shows the chips again without a reset effect.
     let tag_row = use_signal(|| (selected, mode, 0usize, false) as TagRowState);
+    let caret = use_signal(|| (None, None) as CaretState);
 
     let Some(id) = selected else {
         return rsx! {
@@ -137,6 +209,29 @@ pub fn EditorPane() -> Element {
     let pending_delete = state.pending_delete == Some(id);
     drop(state);
 
+    let candidate_spans = if mode == EditorMode::Write && draft.len() <= MAX_HIGHLIGHT_BYTES {
+        markup_spans(&draft)
+    } else {
+        Vec::new()
+    };
+    // A truncated scan would underline only part of a link-dense note.
+    let spans = if candidate_spans.len() < MAX_MARKUP_SPANS {
+        candidate_spans
+    } else {
+        Vec::new()
+    };
+    let token_actions = token_actions_json(&draft, &spans);
+    let segments = editor_markup::segments(&draft, &spans);
+    let (caret_note, caret_offset) = *caret.read();
+    let active_index = if mode == EditorMode::Write && caret_note == Some(id) {
+        caret_offset.and_then(|offset| editor_markup::token_at(&draft, &spans, offset))
+    } else {
+        None
+    };
+    let active_span = active_index.and_then(|index| spans.get(index)).cloned();
+    let active_markup = active_span
+        .as_ref()
+        .and_then(|span| active_markup_for(span, &attachments));
     let tag_count = tags.len();
     let (collapsed_note, collapsed_mode, collapsed_tags, collapsed) = *tag_row.read();
     let tags_collapsed = collapsed
@@ -568,14 +663,43 @@ pub fn EditorPane() -> Element {
 
             div { class: "editor-body",
                 if mode == EditorMode::Write {
+                    if !spans.is_empty() {
+                        div {
+                            class: "editor-highlights",
+                            aria_hidden: "true",
+                            onmounted: move |_| {
+                                let _ = document::eval(EDITOR_SYNC_SCRIPT);
+                            },
+                            pre { class: "editor-highlights-inner editor-text",
+                                for segment in segments.iter() {
+                                    if segment.span.is_some() {
+                                        span {
+                                            key: "{segment.start}",
+                                            class: segment_class(segment.kind),
+                                            "{&draft[segment.start..segment.end]}"
+                                        }
+                                    } else {
+                                        "{&draft[segment.start..segment.end]}"
+                                    }
+                                }
+                            }
+                        }
+                    }
                     textarea {
                         id: "note-editor",
-                        class: "note-editor",
+                        class: "note-editor editor-text",
                         aria_label: "Note body. The first line is the title.",
                         spellcheck: "true",
                         placeholder: "Start writing. The first line becomes the title.",
                         value: "{draft}",
-                        onmounted: move |_| crate::perf::editor_ready(),
+                        onmounted: {
+                            let mut caret = caret;
+                            move |_| {
+                                caret.set((Some(id), None));
+                                crate::perf::editor_ready();
+                                let _ = document::eval(EDITOR_SYNC_SCRIPT);
+                            }
+                        },
                         oninput: {
                             let context = context.clone();
                             move |event| context.note_input(event.value())
@@ -593,10 +717,81 @@ pub fn EditorPane() -> Element {
                             let context = context.clone();
                             move |_| context.save_now()
                         },
+                        onclick: {
+                            let context = context.clone();
+                            let spans = spans.clone();
+                            let token_actions = token_actions.clone();
+                            let note = id;
+                            move |event| {
+                                remember_caret(caret, note);
+                                let modifiers = event.modifiers();
+                                if !(modifiers.contains(Modifiers::CONTROL)
+                                    || modifiers.contains(Modifiers::META))
+                                {
+                                    return;
+                                }
+                                event.prevent_default();
+                                let point = event.client_coordinates();
+                                let script = format!(
+                                    "const editor = document.getElementById('note-editor');\
+                                     const mirror = document.querySelector('.editor-highlights');\
+                                     if (!editor || !mirror) return null;\
+                                     const x = {}, y = {};\
+                                     const ranges = {};\
+                                     const tokens = Array.from(mirror.querySelectorAll('.md-token'));\
+                                     const token = tokens.find((el) => {{\
+                                       const rect = el.getBoundingClientRect();\
+                                       return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;\
+                                     }});\
+                                     if (!token) return null;\
+                                     const index = tokens.indexOf(token);\
+                                     const range = ranges[index];\
+                                     if (!range) return null;\
+                                     const url = range[2];\
+                                     if (url) {{\
+                                       window.open(url, '_blank', 'noopener,noreferrer');\
+                                       return null;\
+                                     }}\
+                                     return [index, editor.selectionStart];",
+                                    point.x, point.y, token_actions
+                                );
+                                let eval = document::eval(&script);
+                                let context = context.clone();
+                                let spans = spans.clone();
+                                spawn(async move {
+                                    if let Ok(Some((index, caret))) =
+                                        eval.join::<Option<(usize, usize)>>().await
+                                    {
+                                        if context.state.peek().selected != Some(note) {
+                                            return;
+                                        }
+                                        if let Some(span) = spans.get(index) {
+                                            open_markup_span(&context, span, Some(caret));
+                                        }
+                                    }
+                                });
+                            }
+                        },
+                        onkeyup: move |_| remember_caret(caret, id),
+                        onselect: move |_| remember_caret(caret, id),
                         onkeydown: {
                             let context = context.clone();
+                            let spans = spans.clone();
+                            let token_actions = token_actions.clone();
                             move |event| {
-                                if event.key() == Key::Escape && context.state.peek().find_open {
+                                let command = event.modifiers().contains(Modifiers::CONTROL)
+                                    || event.modifiers().contains(Modifiers::META);
+                                if command && event.key() == Key::Enter {
+                                    event.prevent_default();
+                                    open_token_at_caret(
+                                        context.clone(),
+                                        id,
+                                        spans.clone(),
+                                        token_actions.clone(),
+                                    );
+                                } else if event.key() == Key::Escape
+                                    && context.state.peek().find_open
+                                {
                                     context.toggle_find();
                                 }
                             }
@@ -782,6 +977,35 @@ pub fn EditorPane() -> Element {
                         Icon { name: "check" }
                     }
                 }
+                if let Some(active) = active_markup.clone() {
+                    button {
+                        id: "token-open",
+                        class: "status-token",
+                        r#type: "button",
+                        aria_label: "{active.aria}",
+                        title: "{active.title}",
+                        onclick: {
+                            let context = context.clone();
+                            let action = active.action.clone();
+                            move |event| {
+                                event.stop_propagation();
+                                match action.clone() {
+                                    MarkupAction::Link(url) => {
+                                        if !links::open_external(&url) {
+                                            context.toast_info("That link has no web address to open");
+                                        }
+                                    }
+                                    MarkupAction::Image(hash) => {
+                                        context.open_editor_attachment(hash, caret_offset)
+                                    }
+                                }
+                            }
+                        },
+                        Icon { name: active.icon }
+                        span { class: "status-token-label", "{active.label}" }
+                        span { class: "status-token-detail", "{active.detail}" }
+                    }
+                }
                 if !attachments.is_empty() {
                     button {
                         id: "status-attachments-button",
@@ -845,6 +1069,201 @@ fn set_tag_row_scroll(
     );
     if *tag_row.peek() != next {
         tag_row.set(next);
+    }
+}
+
+/// One token action offered in the editor's status bar.
+#[derive(Clone)]
+struct ActiveMarkup {
+    action: MarkupAction,
+    label: &'static str,
+    detail: String,
+    aria: String,
+    title: String,
+    icon: &'static str,
+}
+
+/// What tapping the status-bar chip does.
+#[derive(Clone)]
+enum MarkupAction {
+    /// Open a web or email address outside the app.
+    Link(String),
+    /// Open one of the note's images in the viewer.
+    Image(String),
+}
+
+/// The status-bar action for the token under the caret, when it has one.
+fn active_markup_for(span: &MarkupSpan, attachments: &[Attachment]) -> Option<ActiveMarkup> {
+    match span.kind {
+        MarkupKind::Image => {
+            if let Some(hash) = span.attachment_hash.as_deref() {
+                let name = attachments
+                    .iter()
+                    .find(|attachment| attachment.hash == hash)
+                    .map(|attachment| attachment.name.clone())
+                    .unwrap_or_else(|| "image".to_string());
+                let detail = editor_markup::shorten(&name, 24);
+                return Some(ActiveMarkup {
+                    action: MarkupAction::Image(hash.to_string()),
+                    label: "View image",
+                    aria: format!("View image: {detail}"),
+                    title: "View the full image (Ctrl+Enter)".to_string(),
+                    icon: "image",
+                    detail,
+                });
+            }
+            let url = external_url(&span.destination)?;
+            let detail = link_detail(&url);
+            Some(ActiveMarkup {
+                action: MarkupAction::Link(url),
+                label: "Open image",
+                aria: format!("Open image in your browser: {detail}"),
+                title: "Open the image in your browser (Ctrl+Enter)".to_string(),
+                icon: "image",
+                detail,
+            })
+        }
+        MarkupKind::Link => {
+            let url = external_url(&span.destination)?;
+            let detail = link_detail(&url);
+            Some(ActiveMarkup {
+                action: MarkupAction::Link(url),
+                label: "Open link",
+                aria: format!("Open link in your browser: {detail}"),
+                title: "Open the link in your browser (Ctrl+Enter)".to_string(),
+                icon: "link",
+                detail,
+            })
+        }
+    }
+}
+
+/// Host or address shown next to an open action, kept short.
+fn link_detail(url: &str) -> String {
+    editor_markup::link_host(url)
+        .map(|host| editor_markup::shorten(&host, 28))
+        .unwrap_or_else(|| editor_markup::shorten(url, 32))
+}
+
+/// Open a token's destination: an attachment image or an external address.
+fn open_markup_span(context: &AppContext, span: &MarkupSpan, caret: Option<usize>) {
+    match span.kind {
+        MarkupKind::Image => {
+            if let Some(hash) = span.attachment_hash.as_deref() {
+                context.open_editor_attachment(hash.to_string(), caret);
+                return;
+            }
+            if let Some(url) = external_url(&span.destination) {
+                if links::open_external(&url) {
+                    return;
+                }
+            }
+            context.toast_info("That image cannot be opened");
+        }
+        MarkupKind::Link => {
+            if let Some(url) = external_url(&span.destination) {
+                if links::open_external(&url) {
+                    return;
+                }
+            }
+            context.toast_info("That link has no web address to open");
+        }
+    }
+}
+
+/// Open the token at the caret, for Ctrl+Enter.
+///
+/// The hit test runs in one synchronous script so a web link keeps the
+/// keyboard gesture. Opening a tab after an async round trip would be blocked
+/// as a popup. Images return their index and open the viewer from Rust.
+fn open_token_at_caret(
+    context: AppContext,
+    note: NoteId,
+    spans: Vec<MarkupSpan>,
+    token_actions: String,
+) {
+    let script = format!(
+        "const editor = document.getElementById('note-editor');\
+         if (!editor || document.activeElement !== editor) return null;\
+         const caret = editor.selectionStart;\
+         const ranges = {token_actions};\
+         const index = ranges.findIndex((range) => caret >= range[0] && caret <= range[1]);\
+         if (index < 0) return null;\
+         const url = ranges[index][2];\
+         if (url) {{\
+           window.open(url, '_blank', 'noopener,noreferrer');\
+           return null;\
+         }}\
+         return [index, caret];"
+    );
+    let eval = document::eval(&script);
+    spawn(async move {
+        if let Ok(Some((index, caret))) = eval.join::<Option<(usize, usize)>>().await {
+            if context.state.peek().selected != Some(note) {
+                return;
+            }
+            if let Some(span) = spans.get(index) {
+                open_markup_span(&context, span, Some(caret));
+            }
+        }
+    });
+}
+
+/// UTF-16 token ranges with their sanitized external URL, for the scripts.
+///
+/// The editor's caret is a UTF-16 offset but the scanner returns byte ranges.
+/// One pass keeps this linear even for a note near the highlight size cap.
+fn token_actions_json(text: &str, spans: &[MarkupSpan]) -> String {
+    if spans.is_empty() {
+        return "[]".to_string();
+    }
+    let mut entries: Vec<(usize, usize, Option<String>)> = Vec::with_capacity(spans.len());
+    let mut byte_cursor = 0;
+    let mut utf16_cursor = 0;
+    for span in spans {
+        if span.start < byte_cursor || span.end > text.len() || span.start >= span.end {
+            // The scanner never returns this, but keep indices aligned with
+            // the rendered token list if that ever changes.
+            entries.push((0, 0, None));
+            continue;
+        }
+        utf16_cursor += text[byte_cursor..span.start].encode_utf16().count();
+        let start = utf16_cursor;
+        utf16_cursor += text[span.start..span.end].encode_utf16().count();
+        let end = utf16_cursor;
+        byte_cursor = span.end;
+        let url = match span.kind {
+            MarkupKind::Link => external_url(&span.destination),
+            MarkupKind::Image if span.attachment_hash.is_none() => external_url(&span.destination),
+            MarkupKind::Image => None,
+        };
+        entries.push((start, end, url));
+    }
+    serde_json::to_string(&entries).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// Remember which token the caret sits in, for the status-bar chip.
+fn remember_caret(mut caret: Signal<CaretState>, note: NoteId) {
+    let eval = document::eval(
+        "const editor = document.getElementById('note-editor');\
+         return editor && document.activeElement === editor ? editor.selectionStart : null;",
+    );
+    spawn(async move {
+        if let Ok(Some(offset)) = eval.join::<Option<usize>>().await {
+            let next = (Some(note), Some(offset));
+            if *caret.peek() != next {
+                caret.set(next);
+            }
+        }
+    });
+}
+
+/// Class that paints one overlay token.
+fn segment_class(kind: SegmentKind) -> &'static str {
+    match kind {
+        SegmentKind::Link => "md-token md-link-token",
+        SegmentKind::Image => "md-token md-image-token",
+        SegmentKind::Text => "",
     }
 }
 

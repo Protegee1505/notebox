@@ -51,9 +51,33 @@ A native build can bake in the owner's Worker URL with `NBX_SERVER_URL`, while
 the login screen still offers offline use and a different server. The phone
 editor now keeps its add-tag field, its tag chips fold away while the note body
 scrolls, and no light row is left below the app when the keyboard opens.
+Write mode now tints and underlines links and images; Ctrl/Cmd+click,
+Ctrl+Enter or a footer chip opens them, with a tap-then-chip path on phones.
 
 ## Shipped
 
+- `notes-app`, `notes-core`: **Write mode paints links and images and opens
+  them**. A Markdown link or image in the source is tinted and underlined in
+  the plain textarea (solid primary for links, dashed accent for images), and a
+  bare `http(s)` address is treated as a link outside code spans and Markdown
+  tokens. Ctrl/Cmd+click or Ctrl+Enter opens the token under the pointer or
+  caret: attachment images open the existing per-note viewer at that image, and
+  `http`, `https` and `mailto` destinations open in the system browser.
+  A footer chip appears while the caret is inside a token (`Open link · host`,
+  `View image · name`), which is the phone path: tap the token, then tap the
+  chip. Closing the viewer returns focus to the editor on desktop and to the
+  chip on touch, so the keyboard does not reopen. The mirror is inert and
+  scrolls with the textarea; notes above 256 KiB or 2,000 tokens stay a plain
+  textarea. No schema, auth, sync, service-worker or newer dependency changes.
+  Verified with 262 native tests passed and one skipped, `cargo fmt --all
+  --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo deny check`, `scripts/budget-check`, a wasm check for `notes-core` and
+  `notes-app`; `web-markup.mjs` 20/20 (overlay geometry and scroll, tint
+  styles, chip, Ctrl+click, Ctrl+Enter, desktop and phone viewer focus return,
+  token cap, phone tap, 320 px footer); `web-persist.mjs` 32/32,
+  `web-a11y.mjs` 78/78, `web-perf.mjs` 7/7 (100 KB note open median 37.4 ms;
+  typing p95 9.1 ms, 0 dropped frames) and `web-budget.mjs` 1.76 MiB brotli.
+  Not deployed yet.
 - `notes-app`, `notes-core`, `notes-store`, `notes-sync`, `notes-server`:
   **browse, save and delete a note's attachments, and see cloud storage**.
   Clicking a rendered attachment image, pressing Enter or Space on it, or

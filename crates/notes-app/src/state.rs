@@ -280,6 +280,10 @@ pub struct AppState {
     pub gallery_confirm_delete: bool,
     /// How many notes link the selected attachment.
     pub gallery_note_count: u64,
+    /// Whether the gallery was opened from a token in Write mode.
+    pub gallery_from_editor: bool,
+    /// UTF-16 caret to restore after the editor-opened gallery closes.
+    pub gallery_editor_caret: Option<usize>,
     /// Attachment whose cloud copy is being deleted.
     pub attachment_deleting: Option<String>,
     /// Local attachment bytes, shown in Settings.
@@ -428,6 +432,8 @@ impl AppState {
             gallery_index: 0,
             gallery_confirm_delete: false,
             gallery_note_count: 0,
+            gallery_from_editor: false,
+            gallery_editor_caret: None,
             attachment_deleting: None,
             attachment_usage: AttachmentUsage::default(),
             card_images: HashMap::new(),
@@ -2051,6 +2057,30 @@ impl AppContext {
     /// The gallery is another view of the note's own attachment rows, not a
     /// library: removing the last reference removes the item from this list.
     pub fn open_attachment_gallery(&self, hash: Option<String>) {
+        self.open_gallery(hash, None);
+    }
+
+    /// Open an image token from Write mode.
+    ///
+    /// The hash is checked against the open note's own attachments first: a
+    /// stale Markdown link must not silently open a different image. The
+    /// caret is remembered so closing the viewer returns to the source token.
+    pub fn open_editor_attachment(&self, hash: String, caret: Option<usize>) {
+        let attached = {
+            let state = self.state.peek();
+            state
+                .attachments
+                .iter()
+                .any(|attachment| attachment.hash == hash)
+        };
+        if !attached {
+            self.toast_info("That image is no longer attached to this note");
+            return;
+        }
+        self.open_gallery(Some(hash), caret);
+    }
+
+    fn open_gallery(&self, hash: Option<String>, editor_caret: Option<usize>) {
         let (selected, count) = {
             let state = self.state.peek();
             (state.selected, state.attachments.len())
@@ -2090,6 +2120,8 @@ impl AppContext {
             state.account_open = false;
             state.color_open = false;
             state.find_open = false;
+            state.gallery_from_editor = editor_caret.is_some();
+            state.gallery_editor_caret = editor_caret;
             hide_history(&mut state);
         }
         self.runtime.borrow_mut().gallery_return_hash = return_hash;
@@ -2116,6 +2148,37 @@ impl AppContext {
     /// with the last attachment, so fall back to the app root.
     fn restore_gallery_focus(&self) {
         let hash = self.runtime.borrow_mut().gallery_return_hash.take();
+        let (from_editor, caret) = {
+            let state = self.state.peek();
+            (state.gallery_from_editor, state.gallery_editor_caret)
+        };
+        {
+            let mut state = self.state.write_unchecked();
+            state.gallery_from_editor = false;
+            state.gallery_editor_caret = None;
+        }
+        if from_editor {
+            let caret = serde_json::to_string(&caret).unwrap_or_else(|_| "null".to_string());
+            let _ = document::eval(&format!(
+                "setTimeout(() => {{\
+                   const caret = {caret};\
+                   const touch = window.matchMedia?.('(hover: none)').matches ?? false;\
+                   const editor = document.getElementById('note-editor');\
+                   const chip = document.getElementById('token-open');\
+                   if (touch) {{\
+                     (chip ?? document.getElementById('app-root'))?.focus();\
+                     return;\
+                   }}\
+                   if (editor) {{\
+                     editor.focus();\
+                     if (caret !== null) editor.setSelectionRange(caret, caret);\
+                     return;\
+                   }}\
+                   (chip ?? document.getElementById('app-root'))?.focus();\
+                 }}, 30)"
+            ));
+            return;
+        }
         let hash = serde_json::to_string(&hash).unwrap_or_else(|_| "null".to_string());
         let _ = document::eval(&format!(
             "setTimeout(() => {{\
@@ -4846,6 +4909,8 @@ fn hide_editor_overlays(state: &mut AppState) {
     state.gallery_open = false;
     state.gallery_confirm_delete = false;
     state.gallery_note_count = 0;
+    state.gallery_from_editor = false;
+    state.gallery_editor_caret = None;
 }
 
 /// Clear the history panel when the note or the list changes underneath it.

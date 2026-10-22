@@ -222,7 +222,7 @@ fn line_prefix(text: &str, start: usize, end: usize, prefix: &str) -> (String, u
 }
 
 /// Byte offset in `text` for a UTF-16 code-unit offset.
-fn utf16_to_byte(text: &str, offset: usize) -> usize {
+pub(crate) fn utf16_to_byte(text: &str, offset: usize) -> usize {
     let mut units = 0;
     for (index, character) in text.char_indices() {
         if units + character.len_utf16() > offset {

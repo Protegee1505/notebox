@@ -175,6 +175,11 @@ jobs:
           PLAYWRIGHT_MODULES: /tmp/notebox-web/node_modules
         run: node scripts/web-persist.mjs
 
+      - name: Links and images in Write mode, desktop and phone
+        env:
+          PLAYWRIGHT_MODULES: /tmp/notebox-web/node_modules
+        run: node scripts/web-markup.mjs
+
       - name: Backup export and restore round trip
         env:
           PLAYWRIGHT_MODULES: /tmp/notebox-web/node_modules

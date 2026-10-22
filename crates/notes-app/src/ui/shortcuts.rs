@@ -21,6 +21,7 @@ const GROUPS: [(&str, &[(&str, &str)]); 3] = [
         &[
             ("Ctrl F", "Find in note"),
             ("Ctrl E", "Write and preview"),
+            ("Ctrl Enter", "Open the link or image at the cursor"),
             ("Ctrl Z", "Undo"),
             ("Ctrl Shift Z", "Redo"),
         ],

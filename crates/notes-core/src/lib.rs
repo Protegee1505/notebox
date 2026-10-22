@@ -16,6 +16,7 @@ mod error;
 mod export;
 mod history;
 mod markdown;
+mod markup;
 mod note;
 mod text;
 mod version;
@@ -34,6 +35,7 @@ pub use export::{
 };
 pub use history::NoteVersion;
 pub use markdown::{render_markdown, render_markdown_with_images};
+pub use markup::{external_url, markup_spans, MarkupKind, MarkupSpan, MAX_MARKUP_SPANS};
 pub use note::{
     normalize_tags, plain_line, Note, NoteMeta, META_CONTAINER, PREVIEW_MAX_CHARS, TITLE_MAX_CHARS,
 };

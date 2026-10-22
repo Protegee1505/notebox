@@ -1884,6 +1884,7 @@ kbd {
 }
 
 .editor-body {
+  position: relative;
   display: flex;
   flex: 1;
   min-height: 0;
@@ -1906,6 +1907,52 @@ kbd {
   font-size: var(--text-md);
   line-height: 1.75;
   caret-color: var(--primary);
+}
+
+/* The textarea and the highlight mirror must break lines identically. */
+.editor-text {
+  box-sizing: border-box;
+  margin: 0;
+  padding: clamp(1.25rem, 4vw, 2.75rem) clamp(1.1rem, 4vw, 3rem) 3rem;
+  font-family: var(--font-sans);
+  font-size: var(--text-md);
+  line-height: 1.75;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+  tab-size: 4;
+}
+
+.editor-highlights {
+  position: absolute;
+  z-index: 2;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
+  background: transparent;
+}
+
+.editor-highlights-inner {
+  width: 100%;
+  min-height: 100%;
+  color: transparent;
+  background: transparent;
+  user-select: none;
+}
+
+.md-link-token,
+.md-image-token {
+  border-radius: 3px;
+}
+
+.md-link-token {
+  border-bottom: 1px solid var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.md-image-token {
+  border-bottom: 1px dashed var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .note-editor::placeholder {
@@ -2499,6 +2546,50 @@ kbd {
 .status-attachments .icon {
   width: 0.9rem;
   height: 0.9rem;
+}
+
+.status-token {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 16rem;
+  height: 1.7rem;
+  padding: 0 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border));
+  border-radius: var(--radius-sm);
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-size: var(--text-xs);
+}
+
+.status-token:hover {
+  background: color-mix(in srgb, var(--primary) 20%, var(--surface));
+}
+
+.status-token:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.status-token .icon {
+  flex: none;
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+.status-token-label {
+  flex: none;
+  font-weight: 600;
+}
+
+.status-token-detail {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--muted);
 }
 
 .status-counts {
@@ -4426,6 +4517,7 @@ kbd {
   }
 
   .note-editor,
+  .editor-highlights-inner,
   .editor-preview {
     padding: var(--space-4) var(--space-4) var(--space-6);
     font-size: var(--text-md);

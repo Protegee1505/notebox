@@ -111,6 +111,8 @@ The browser checks use Playwright:
 PLAYWRIGHT_MODULES=/path/to/node_modules \
   node scripts/web-persist.mjs
 PLAYWRIGHT_MODULES=/path/to/node_modules \
+  node scripts/web-markup.mjs
+PLAYWRIGHT_MODULES=/path/to/node_modules \
   node scripts/pwa-check.mjs
 PLAYWRIGHT_MODULES=/path/to/node_modules \
   node scripts/web-restore.mjs
@@ -123,6 +125,9 @@ PLAYWRIGHT_MODULES=/path/to/node_modules \
 ```
 
 `web-persist.mjs` restarts Chromium and checks local notes, images and history.
+`web-markup.mjs` checks Write-mode link and image highlighting, Ctrl+click and
+Ctrl+Enter, the footer chip, viewer focus return, the token cap, and the phone
+tap-then-chip path.
 `web-restore.mjs` exports a backup in one profile and restores it in a fresh
 one, including its version history. `web-a11y.mjs` runs axe-core against every
 main screen in light and dark themes, and checks the note list's arrow keys,
