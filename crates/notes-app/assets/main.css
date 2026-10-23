@@ -70,13 +70,13 @@
     radial-gradient(circle at 84% 4%, rgb(185 122 54 / 8%), transparent 26%);
 
   --note-default: #fffdf7;
-  --note-sand: #f7f1e2;
-  --note-amber: #fbeccd;
-  --note-rose: #f9e6e2;
-  --note-sage: #e9f2e8;
-  --note-sky: #e5f0f5;
-  --note-lilac: #efeaf6;
-  --note-slate: #eef0f1;
+  --note-sand: #f2e7cb;
+  --note-amber: #f7dfa3;
+  --note-rose: #f5d7d1;
+  --note-sage: #d8ead8;
+  --note-sky: #d4e8f4;
+  --note-lilac: #e3d9f0;
+  --note-slate: #e2e6e8;
 
   --tone-bg: var(--note-default);
   --tone-edge: var(--border);
@@ -899,7 +899,7 @@ kbd {
   width: 1.375rem;
   height: 1.375rem;
   border-color: color-mix(in srgb, var(--tone-edge) 60%, var(--text));
-  background: color-mix(in srgb, var(--tone-bg) 55%, var(--tone-edge));
+  background: var(--tone-bg);
 }
 
 .note-context-menu .context-menu-swatch.is-active .swatch-dot {
@@ -1513,7 +1513,7 @@ kbd {
 }
 
 .note-tag {
-  color: var(--muted);
+  color: var(--text-soft);
   font-size: var(--text-xs);
 }
 
@@ -1559,7 +1559,7 @@ kbd {
   gap: var(--space-2);
   margin-top: auto;
   padding-top: 0.35rem;
-  color: var(--muted);
+  color: var(--text-soft);
   font-size: var(--text-xs);
 }
 

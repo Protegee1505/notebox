@@ -152,6 +152,159 @@ async function tabStay(page, selector, key = "Tab", presses = 40) {
   return { ok: true, press: presses };
 }
 
+function parseRgb(value) {
+  const numbers = value.match(/[\d.]+/g)?.map(Number) ?? [];
+  if (numbers.length < 3) return null;
+  // Chromium serialises color-mix() as color(srgb 0.9 0.8 0.7) and plain
+  // hex tokens as rgb(); normalise both to 0-255 channels.
+  const scale =
+    value.trim().startsWith("color(") &&
+    Math.max(...numbers.slice(0, 3)) <= 1
+      ? 255
+      : 1;
+  return numbers.slice(0, 3).map((channel) => channel * scale);
+}
+
+function srgbToOklab([red, green, blue]) {
+  const linear = [red, green, blue].map((channel) => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  const [r, g, b] = linear;
+  const l = Math.cbrt(
+    0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b,
+  );
+  const m = Math.cbrt(
+    0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b,
+  );
+  const s = Math.cbrt(
+    0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b,
+  );
+  return [
+    0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s,
+    1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s,
+    0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s,
+  ];
+}
+
+function colorDistance(first, second) {
+  const a = parseRgb(first);
+  const b = parseRgb(second);
+  if (!a || !b) return 0;
+  const [x, y, z] = srgbToOklab(a);
+  const [u, v, w] = srgbToOklab(b);
+  return Math.hypot(x - u, y - v, z - w);
+}
+
+function relativeLuminance([red, green, blue]) {
+  const [r, g, b] = [red, green, blue].map((channel) => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function contrastRatio(first, second) {
+  const a = parseRgb(first);
+  const b = parseRgb(second);
+  if (!a || !b) return 0;
+  const [light, dark] = [relativeLuminance(a), relativeLuminance(b)].sort(
+    (left, right) => right - left,
+  );
+  return (light + 0.05) / (dark + 0.05);
+}
+
+// Every saved colour must read as a different card in the current theme, and
+// the menu chip must preview the card tint rather than a washed-out mix.
+async function checkNoteTints(page, card, theme) {
+  const names = ["sand", "amber", "rose", "sage", "sky", "lilac", "slate"];
+  const close = async () => {
+    await page.locator("#note-context-menu").waitFor({ state: "detached" });
+    await settle(page, 250);
+  };
+  const open = async () => {
+    await card.click({ button: "right" });
+    await page.locator("#note-context-menu").waitFor({ timeout: 10_000 });
+  };
+  const cardColor = () =>
+    card.evaluate((element) => getComputedStyle(element).backgroundColor);
+
+  await open();
+  await page.locator("#note-menu-color-none").click();
+  await close();
+  const defaultColor = await cardColor();
+
+  const chips = {};
+  await open();
+  for (const name of names) {
+    chips[name] = await page
+      .locator(`#note-menu-color-${name} .swatch-dot`)
+      .evaluate((element) => getComputedStyle(element).backgroundColor);
+  }
+  await page.keyboard.press("Escape");
+  await close();
+
+  const colors = {};
+  for (const name of names) {
+    await open();
+    await page.locator(`#note-menu-color-${name}`).click();
+    await close();
+    colors[name] = await cardColor();
+  }
+
+  await open();
+  await page.locator("#note-menu-color-none").click();
+  await close();
+
+  const meta = await card
+    .locator(".note-meta")
+    .evaluate((element) => getComputedStyle(element).color);
+  const minContrast = Math.min(
+    ...names.map((name) => contrastRatio(meta, colors[name])),
+  );
+  const separations = names.map((name) =>
+    colorDistance(colors[name], defaultColor),
+  );
+  const minSeparation = Math.min(...separations);
+  const floor = theme === "light" ? 0.06 : 0.01;
+  const pairFloor = theme === "light" ? 0.015 : 0.01;
+  const chipMismatch = names.filter(
+    (name) => colorDistance(chips[name], colors[name]) >= 0.002,
+  );
+  let closest = Infinity;
+  let closestPair = "";
+  for (let i = 0; i < names.length; i += 1) {
+    for (let j = i + 1; j < names.length; j += 1) {
+      const distance = colorDistance(colors[names[i]], colors[names[j]]);
+      if (distance < closest) {
+        closest = distance;
+        closestPair = `${names[i]}/${names[j]}`;
+      }
+    }
+  }
+  results.push(
+    check(
+      `${theme} note tints separate from the default card`,
+      minSeparation >= floor && closest >= pairFloor,
+      `min ${minSeparation.toFixed(3)} (floor ${floor}); closest ${closestPair} ${closest.toFixed(3)} (floor ${pairFloor})`,
+    ),
+  );
+  results.push(
+    check(
+      `${theme} menu chips preview the card tints`,
+      chipMismatch.length === 0,
+      chipMismatch.map((name) => `${name}: ${chips[name]} vs ${colors[name]}`).join("; "),
+    ),
+  );
+  results.push(
+    check(
+      `${theme} note meta text keeps AA contrast`,
+      minContrast >= 4.5,
+      `min ${minContrast.toFixed(2)}:1 (${meta})`,
+    ),
+  );
+}
+
 const results = [];
 const errors = [];
 let browser;
@@ -951,6 +1104,7 @@ try {
       `${rose} / ${roseChecked} / ${roseLabel} / ${cleared}`,
     ),
   );
+  await checkNoteTints(page, menuCard, "light");
 
   await menuCard.click({ button: "right" });
   await page.locator("#note-context-menu").waitFor({ timeout: 10_000 });
@@ -1044,6 +1198,7 @@ try {
   );
 
   await setTheme(page, "dark");
+  await checkNoteTints(page, menuCard, "dark");
   await menuCard.click({ button: "right" });
   await page.locator("#note-context-menu").waitFor({ timeout: 10_000 });
   await audit("note actions, dark");

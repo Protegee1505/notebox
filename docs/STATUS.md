@@ -29,7 +29,9 @@ deleting asks first by default, the avatar opens an account panel on desktop
 and phones, and a first theme click while the choice is System always changes
 the visible theme. Right-clicking a note card opens a clamped actions menu
 (or Shift+F10/Menu on a focused card) without changing the open note, and its
-Move to trash action reuses the editor confirmation and Cancel focus.
+Move to trash action reuses the editor confirmation and Cancel focus. Light
+mode now shows a saved note colour and the menu chips preview the true card
+tint.
 A 100 KB note opens in a median under 50 ms in the web UI and typing drops no
 frames; Linux desktop cold start is 555 ms warm. The installer budget now
 measures the `.deb` (9.9 MB), not the self-contained AppImage. The free Worker
@@ -60,6 +62,22 @@ The Write-mode reading column is centered again on wide windows.
 
 ## Shipped
 
+- `notes-app`: **light-mode note colours are visible and the menu previews the
+  real tint**. The seven light `--note-*` tints were only 0.037–0.059 OKLab
+  from `--note-default`, so a saved colour looked like no change. They are now
+  stronger pastels — sand `#f2e7cb`, amber `#f7dfa3`, rose `#f5d7d1`, sage
+  `#d8ead8`, sky `#d4e8f4`, lilac `#e3d9f0`, slate `#e2e6e8` — at 0.071–0.112
+  from the default card and at least 0.022 apart. The card menu's 22 px chips
+  now use `var(--tone-bg)` instead of a 55% tint/45% edge mix, so each chip
+  previews the card. Card meta and tag text now use `--text-soft`, keeping the
+  worst light tint at 5.77:1; the stronger tints would have fallen to 4.13:1
+  on lilac with the old `--muted` and failed AA. Dark tokens, the editor
+  picker, the save path and the stored colour names are unchanged. No server,
+  D1, sync protocol or schema change. Verified with 262 native tests passed and
+  one skipped, `cargo fmt --all --check`, `cargo clippy --workspace
+  --all-targets -- -D warnings`, `cargo deny check`, `scripts/budget-check`,
+  `web-build.sh` and `web-a11y.mjs` 107/107 (the previous 101 plus light/dark
+  tint separation, chip preview and meta contrast checks); no console errors.
 - `notes-app`: **the Write-mode reading column centers again on wide windows**.
   The `.editor-text` rule that keeps the textarea and the highlight mirror on
   the same line grid carried `margin: 0`, which reset `.note-editor`'s
@@ -878,6 +896,7 @@ The Write-mode reading column is centered again on wide windows.
 | P8 backup restore (Playwright) | 18/18 checks: fresh-profile export/import of a notebook, pinned tagged note and trashed note; text, tag, pin, trash, attachment row, decoded WebP, history peer label and idempotent second import; no console errors |
 | P8 wipe and sign-in (Playwright + local Worker) | 20/20 checks: three timed rejected logins (browser Argon2id median 122 ms), derived login key, account setup, first sync, image attachment, a second live profile appends a line that the first window receives without a reload, OPFS/localStorage/cookie/cache wipe, note gone, sign in, attachment download without a crash, note body/tag/pin/image, history labelled as the other devices, no duplicate, no console errors |
 | P8 accessibility, onboarding and search (Playwright + axe-core) | 78/78 checks: WCAG 2.0/2.1/2.2 A/AA on notes, history, palette, shortcuts, trash, Settings, Login and mobile, each in light and dark; first launch shows welcome Login with no back button, offline starts empty, optional tour adds three cards, Ctrl K focuses search, Ctrl P opens the palette, a search mark renders, opening a hit leaves Find closed with no selection and a long hit scrolls to its match, a phone tap on a hit keeps focus out of the editor, tag-only matches keep Find closed; the avatar is a button that opens an account panel, focuses it, closes on Escape with focus back on the avatar, and becomes a fixed in-viewport sheet at 390 px, the selected card ring clears the list top by 8 px, trash asks first and focuses Cancel before Escape/Cancel returns focus to the trash button, one topbar click leaves System for dark, and the delete-confirmation setting toggles off and on; note-list Arrow/Home/Enter, Tab and Shift+Tab stay inside the three dialogs, focus return after overlays, Settings/Login/dialog autofocus; image title and no list overflow at 390/360/320; card titles keep a full line at 360×420 and compact rows at 1024×420; 320 px header, scrollable toolbar and reachable Quote; colour sheet inside the viewport; the floating new-note button hidden at 1400 px and opening the editor at 390 px; tag chips fold away while the note body scrolls and return at the top; one-tap Back and phone Settings/navigation; desktop Back opens a 1160 px gallery, choosing a note returns, and Navigator collapses and restores the sidebar; the attachment viewer fits a 320 px phone and passes axe WCAG A/AA on mobile dark; no console errors |
+| P8 light note tints (Playwright) | 107/107 checks. Light tints vs the default card: OKLab ΔE 0.071–0.112 (floor 0.06), closest pair sky/slate 0.022 (floor 0.015); dark tints unchanged at 0.011 minimum (floor 0.01). Menu chips match the card tint in both themes; card meta contrast min 5.77:1 light and 7.87:1 dark; no console errors |
 | P8 local preferences, attachments and restart (Playwright) | 32/32 checks: browser storage, the attachment panel starts closed, the card shows a decoded thumbnail, note with image and history survive restart, the last note and Settings screen return without choosing them, one theme click leaves System, dark theme and list layout survive restart, a rendered image and the footer count open the viewer, arrows step it, Tab stays inside, close returns focus, download saves the selected file, delete confirmation starts on Cancel, one of two files can be removed and the last copy can be permanently deleted, the viewer then closes and focuses the app root, Settings drops the last attachment, turning delete confirmation off skips the prompt, second tab blocked by the store lock, no console errors |
 | P8 phone sign-in (one-off Playwright, 360 px touch + local Worker) | New note saved, derived login key, account setup, status `Synced`, synced note in the list, no list overflow, Settings round trip, navigation drawer, one-tap Back with the colour menu open; no console errors |
 | Web login preview | Rebuilt release at 2026-10-21: the Worker origin is read-only with no URL input, the offline action is visible, and the screen has no horizontal overflow or console errors at 1400 px and 390 px |
