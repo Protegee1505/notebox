@@ -1,6 +1,6 @@
 # Status
 
-Updated: 2026-10-22
+Updated: 2026-10-23
 Phase: 8 (polish and performance, in progress); P1–P7 complete except the
 owner-only release execution. The app can now restore a backup in Settings or
 from the command palette, and export format v2 carries each note's Loro history,
@@ -37,11 +37,12 @@ errors, and no error 1102, with the CPU-budget nuance recorded in ADR-0003.
 The full wipe/pull/history drill against the deployed Worker, the Windows and
 Android runtime checks, and the v0.1.0 release remain; the search fixes are
 deployed as 1e6bfdf, the image-card and desktop-chrome fixes as e11a0f5, the
-session, confirm-delete and theme fixes as 71e0b72, and the avatar account
-panel as 2582101, all after green CI, and all need owner acceptance before the
-release. The running app can sign
-in, restore a session, sync notes and attachments, show status, list and revoke
-devices, and keep a conflict copy. The web build is served by the Worker and
+session, confirm-delete and theme fixes as 71e0b72, the avatar account
+panel as 2582101, and the Firefox Write-mode link fix as c07cdad, all after
+green CI, and all need owner acceptance before the release. The running app
+can sign in, restore a session, sync notes and attachments, show status, list
+and revoke devices, and keep a conflict copy. The web build is served by the
+Worker and
 syncs same-origin; local notes, history and images persist in OPFS, with no
 account needed. The web build is now installable and works offline after one
 visit, and a waiting deployment updates only when the user chooses Reload. The
@@ -70,7 +71,11 @@ Ctrl+Enter or a footer chip opens them, with a tap-then-chip path on phones.
   -- -D warnings`, `cargo deny check`, `scripts/budget-check`, `web-build.sh`,
   `web-markup.mjs` 20/20, the new Firefox `web-firefox-link.mjs` 4/4 (it fails
   on the old build with `crash=true` for Ctrl+click and Ctrl+Enter), and
-  `web-budget.mjs` 1.76 MiB brotli. Not deployed yet.
+  `web-budget.mjs` 1.76 MiB brotli. Deployed as `c07cdad` after green CI run
+  39805271009; `/version.json` reports `c07cdad`. A fresh live Firefox profile
+  opened the deployed app offline, created a note, Ctrl+clicked
+  `https://example.com/live-test`, saw the popup, and showed no crash panel,
+  page errors or console errors.
 - `notes-app`, `notes-core`: **Write mode paints links and images and opens
   them**. A Markdown link or image in the source is tinted and underlined in
   the plain textarea (solid primary for links, dashed accent for images), and a
@@ -835,8 +840,8 @@ Ctrl+Enter or a footer chip opens them, with a tap-then-chip path on phones.
 | P8 local preferences, attachments and restart (Playwright) | 32/32 checks: browser storage, the attachment panel starts closed, the card shows a decoded thumbnail, note with image and history survive restart, the last note and Settings screen return without choosing them, one theme click leaves System, dark theme and list layout survive restart, a rendered image and the footer count open the viewer, arrows step it, Tab stays inside, close returns focus, download saves the selected file, delete confirmation starts on Cancel, one of two files can be removed and the last copy can be permanently deleted, the viewer then closes and focuses the app root, Settings drops the last attachment, turning delete confirmation off skips the prompt, second tab blocked by the store lock, no console errors |
 | P8 phone sign-in (one-off Playwright, 360 px touch + local Worker) | New note saved, derived login key, account setup, status `Synced`, synced note in the list, no list overflow, Settings round trip, navigation drawer, one-tap Back with the colour menu open; no console errors |
 | Web login preview | Rebuilt release at 2026-10-21: the Worker origin is read-only with no URL input, the offline action is visible, and the screen has no horizontal overflow or console errors at 1400 px and 390 px |
-| Live Worker deployment | **2026-10-22:** deployed the attachment gallery as release 0.1.0 / `73621c7`; `/version.json` reports build `73621c7` and `/` returns HTTP 200. The previous 2582101 deploy served the same release tag; a fresh live Chromium run opened offline, opened the account panel at 1400 px, saw "Sign in to sync" and "Account settings", returned focus to the avatar on Escape, and measured the fixed phone sheet inside 390×844; no console errors. The 71e0b72 deploy opened offline, saved a note, reopened Settings and the note after a reload, found the avatar a static `SPAN` with no role or tab stop, moved System to dark, and saw the trash confirmation with focus on Cancel; 7/7 checks. The e11a0f5 deploy opened the 1160 px Back gallery and decoded a card thumbnail; 1e6bfdf carried the search-open change verified by 63/63 local release checks. The ce65296 probe had shown Welcome Login with no back button, then Try it offline opened an empty library with the optional Add welcome tour and no console errors. The earlier 5fae2ef deploy checked the seeded list's title line; the e9c8e82 deploy passed a fresh sign-in and first sync; the 759971a phone probe created a local image note and exercised the colour sheet and one-tap Back |
-| Deploy guard | `./scripts/deploy-web.sh --if-needed` deployed 73621c7 after green CI run 39769649319 and verified `/version.json`; the preflight reported no pending migrations on either D1 database, `dx` 0.7.10 and `worker-build` 0.8.7. The previous guard deployed 2582101 after CI run 39733053626, and 71e0b72 after 39727904123 |
+| Live Worker deployment | **2026-10-23:** deployed the Firefox Write-mode link fix as release 0.1.0 / `c07cdad` after green CI run 39805271009; the preflight found no pending migrations and `/version.json` reports build `c07cdad`. A fresh live Firefox profile opened the deployed app offline, created a note, Ctrl+clicked `https://example.com/live-test`, saw the popup, and showed no crash panel, page errors or console errors. **2026-10-22:** deployed the attachment gallery as release 0.1.0 / `73621c7`; `/version.json` reports build `73621c7` and `/` returns HTTP 200. The previous 2582101 deploy served the same release tag; a fresh live Chromium run opened offline, opened the account panel at 1400 px, saw "Sign in to sync" and "Account settings", returned focus to the avatar on Escape, and measured the fixed phone sheet inside 390×844; no console errors. The 71e0b72 deploy opened offline, saved a note, reopened Settings and the note after a reload, found the avatar a static `SPAN` with no role or tab stop, moved System to dark, and saw the trash confirmation with focus on Cancel; 7/7 checks. The e11a0f5 deploy opened the 1160 px Back gallery and decoded a card thumbnail; 1e6bfdf carried the search-open change verified by 63/63 local release checks. The ce65296 probe had shown Welcome Login with no back button, then Try it offline opened an empty library with the optional Add welcome tour and no console errors. The earlier 5fae2ef deploy checked the seeded list's title line; the e9c8e82 deploy passed a fresh sign-in and first sync; the 759971a phone probe created a local image note and exercised the colour sheet and one-tap Back |
+| Deploy guard | `./scripts/deploy-web.sh --if-needed` deployed c07cdad after green CI run 39805271009 and verified `/version.json`; the preflight reported no pending migrations on either D1 database, `dx` 0.7.10 and `worker-build` 0.8.7. The previous guard deployed 73621c7 after CI run 39769649319, 2582101 after 39733053626, and 71e0b72 after 39727904123 |
 | Remote D1 migrations | `notebox-sync` and `notebox-blobs` each applied `0001_init.sql`; `wrangler d1 migrations list --remote` reports no pending migrations |
 | P8 large note (web UI) | 102,415 B note: final gallery build open median 40.0 ms (45.9, 40.0, 43.7, 36.2, 36.2 ms); 120 typed characters, input-to-frame p95 10.7 ms, max 24.8 ms, none over 34 ms; text survives a reload; web start 1,003 ms including the offline choice; an earlier run opened in a median 9.9 ms with a 1,195 ms start |
 | P8 desktop cold start (Linux release) | warm median 555 ms over 5 runs (547–587 ms), budget 600 ms; earlier first run 628 ms with sample seeding, 2,170 ms when WebKit's cache is cold; not remeasured since automatic seeding was removed; Xvfb with isolated XDG directories |
