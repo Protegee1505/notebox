@@ -860,30 +860,35 @@ The Write-mode reading column is centered again on wide windows.
   security patch, ADR-0014 backup history, ADR-0015 the installer budget and
   ADR-0016 the personal-server/offline-first release. `docs/API.md` documents
   the v1 endpoints the P3 engine implements.
-- Development disk: Cargo target, Rust/Cargo/npm/yarn/dx caches and Playwright
-  browsers now live under `/tmp/opencode`, which is wiped on a Cloud Shell VM
-  restart. Two compressed seeds in `~/.cache/notebox-build` restore the tree:
-  `base.tar.xz` is 460 MiB and `target.tar.xz` is 1000 MiB. A measured
-  base+target restore took 1m21s; the first `cargo nextest run --workspace`
-  took 53s and `./scripts/web-build.sh` took 23s. A real restart restored
-  automatically in 1m19s; nextest then took 36s, and the first web build took
-  84s because `web-build.sh` installed the system `clang` that the restart
-  removed (21s of build plus package install). From a base-only restore they
-  took 4m13s and 6m41s. `scripts/cloudshell-bootstrap.sh` handles boot,
+- Development disk: Cargo targets, Rust/Cargo/npm/yarn/worker-build/dx caches
+  and Playwright browsers now live under `/tmp/opencode`, which is wiped on a
+  Cloud Shell VM restart. Two compressed seeds in `~/.cache/notebox-build`
+  restore the tree: `base.tar.xz` is 460 MiB and `target.tar.xz` is 1000 MiB.
+  A measured base+target restore took 1m21s; the first `cargo nextest run
+  --workspace` took 53s and `./scripts/web-build.sh` took 23s. A real restart
+  restored automatically in 1m19s; nextest then took 36s, and the first web
+  build took 84s because `web-build.sh` installed the system `clang` that the
+  restart removed (21s of build plus package install). From a base-only restore
+  they took 4m13s and 6m41s. `scripts/cloudshell-bootstrap.sh` handles boot,
   `BASH_ENV`, fingerprint checks, atomic swaps and fallback installs, refuses
   `--force` while a build is running unless `--allow-running` is explicit, and
-  the hook now writes start/finish lines with the boot id to `boot.log`;
+  the hook writes start/finish lines with the boot id to `boot.log`;
   `scripts/cloudshell-seed.sh` saves, verifies, prunes and marks seeds
-  `current` or `stale`; `scripts/relocate-caches.sh` repairs dangling links;
-  `scripts/budget-check` fails below 512 MiB free on `/home`, and the seed
-  scripts keep a 1200 MiB reserve. `/home` kept 1860 MiB free with both seeds.
-  See `docs/DISK.md`.
+  `current` or `stale`; `scripts/relocate-caches.sh` repairs dangling links,
+  including Yarn global and worker-build caches; `scripts/budget-check` keeps a
+  1200 MiB floor and checks every worktree target. A 2.8 GiB settings-worktree
+  `target/` filled `/home` on 2026-10-23; the boot hook and `web-build.sh` now
+  run `scripts/disk-guard.sh`, and `scripts/build-guard.sh` redirects every
+  checkout's `cargo`/`dx` build to `/tmp/opencode`. The restored `bold-badger`
+  and `settings-rail` worktrees have their own target links. `/home` kept
+  1860 MiB free with both seeds. See `docs/DISK.md`.
 
 ## Measurements
 
 | Check | Result |
 | --- | --- |
 | Cloud Shell seeds and restore | base 460 MiB + target 1000 MiB (6046 MiB uncompressed); both SHA-256 verified; base+target restore 1m21s; `/home` free 1860 MiB; a real VM restart restored through the boot hook/`BASH_ENV` in 1m19s |
+| Cloud Shell worktree guard | settings worktree target 2.8 GiB (2.0 GiB debug/deps, 352 MiB incremental) moved to `/tmp/opencode/notebox-target-settings`; worker-build 360 MiB and Yarn global 282 MiB caches relocated; `/home` 4.0 GiB free before seeds; `disk-guard --check` and `budget-check` pass |
 | First build after a restore | `cargo nextest run --workspace` 53s (3.6s compile, 51.4s tests) with the target seed; `./scripts/web-build.sh` 23s when `clang` is present. Base only: nextest 4m13s, web build 6m41s. Real restart: nextest 36s, first web build 84s including on-demand `clang`, later 21s |
 | Seed save cost | base 1m6s (2103 MiB before compression); target 2m36s (6046 MiB before compression) |
 | S3 Worker CPU (production, Cloudflare analytics) | 156 invocations before the probe, 0 errors, all `success`; CPU bucket p50 median 4.618 ms, p95 26.291 ms, max 41.825 ms; 31 of 156 requests in 29 buckets above 10 ms; wall p99 median 127.2 ms, max 720.8 ms |
@@ -891,7 +896,7 @@ The Write-mode reading column is centered again on wide windows.
 | S3 Argon2id | desktop release 38.2 ms median (20 runs, max 92.1 ms); Chromium release build 119 ms median (178/119/116 ms, includes local Worker round trip); phone not measured |
 | S3 free limits | re-read 2026-10-21: 100,000 requests/day, 10 ms CPU, 50 subrequests, 50 D1 queries, 2 MB rows, 10 D1 databases; 2 databases in use |
 | Native tests | 250 passed, 1 skipped (the ignored Worker client e2e) |
-| Dependency security | `RUSTSEC-2026-0384` (race in `tokio::time::Interval` on 1.54.0) fixed by the lockfile-only bump to `tokio` 1.54.1; local `cargo deny check` is clean |
+| Dependency security | `RUSTSEC-2026-0384` (race in `tokio::time::Interval` on 1.54.0) fixed by the lockfile-only bump to `tokio` 1.54.1; `RUSTSEC-2026-0385` (`ctutils` 0.4.3) fixed by the lockfile-only bump to `ctutils` 0.4.4; local `cargo deny check` advisories, bans, licenses and sources are clean |
 | CI | Run 39769056107 on 409740c: all eight jobs green (gates, wasm, server, Windows, Android, desktop, OPFS, web), including the attachment gallery checks and the tokio security bump. Run 39733053626 on 2582101 was also green; run 39727904123 on 71e0b72 was green too. The earlier run 39637535803 on 1e6bfdf was green, though GitHub Actions briefly left it `in_progress` during its 2026-10-21 partial outage after every job had passed. The docs-only deploy tip 39769649319 on 73621c7 was green too |
 | P8 backup restore (Playwright) | 18/18 checks: fresh-profile export/import of a notebook, pinned tagged note and trashed note; text, tag, pin, trash, attachment row, decoded WebP, history peer label and idempotent second import; no console errors |
 | P8 wipe and sign-in (Playwright + local Worker) | 20/20 checks: three timed rejected logins (browser Argon2id median 122 ms), derived login key, account setup, first sync, image attachment, a second live profile appends a line that the first window receives without a reload, OPFS/localStorage/cookie/cache wipe, note gone, sign in, attachment download without a crash, note body/tag/pin/image, history labelled as the other devices, no duplicate, no console errors |
@@ -955,11 +960,12 @@ The Write-mode reading column is centered again on wide windows.
   at the live URL; native Windows/Linux login and sync still need a live run.
   Once signed in, Settings can change the username or password; there is no
   reset if both the password and every signed-in device are lost.
-- **Cloud Shell boot hook**: the hook now writes a `boot-hook start` marker and
-  boot id to `~/.cache/notebox-build/boot.log`, but the marker was added after
-  the last restart. A controlled full-VM reboot is still needed to prove the
-  boot path; the first-shell `BASH_ENV` restore and a manual `--force` restore
-  are proven. `--force` now refuses while a build is running.
+- **Cloud Shell boot hook**: the 2026-10-23 boot completed with `ready=yes`
+  and wrote matching `boot-hook start`/`finish` lines with boot id
+  `03e411d1-fbf9-45e3-8532-421e41ba7ef1`; the first-shell `BASH_ENV` restore
+  and a manual `--force` restore are also proven. Owner acceptance of the next
+  full reboot and a fresh seed save remain. `--force` refuses while a build is
+  running.
 - **Android runtime**: no `/dev/kvm` and no Android SDK, so S2/S5 cannot be run
   on a device or emulator locally, and the P4/P6 Android screenshot, camera and
   boot checks are still missing. The local `aarch64-linux-android` check also
