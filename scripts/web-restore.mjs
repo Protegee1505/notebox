@@ -138,9 +138,23 @@ async function openApp(browser, profile, url, errors) {
   return { context, page };
 }
 
-async function openSettings(page) {
-  await page.locator(".nav-row", { hasText: "Settings" }).click();
-  await page.getByRole("heading", { name: "Local data" }).waitFor();
+async function settingsSection(page, name) {
+  const indexRow = page.locator(".settings-index-row", { hasText: name });
+  if (await indexRow.isVisible().catch(() => false)) {
+    await indexRow.click();
+  } else {
+    await page.locator(".settings-nav-item", { hasText: name }).click();
+  }
+  await page.getByRole("heading", { name, exact: true }).waitFor();
+}
+
+async function openSettings(page, name = "Local data") {
+  const pane = page.locator(".settings-pane");
+  if (!(await pane.isVisible().catch(() => false))) {
+    await page.locator(".nav-row", { hasText: "Settings" }).click();
+    await pane.waitFor();
+  }
+  await settingsSection(page, name);
 }
 
 async function chooseBackup(page, zipPath) {
@@ -275,7 +289,7 @@ try {
     ),
   );
 
-  await page.locator(".sidebar-nav .nav-row", { hasText: "Notes" }).click();
+  await page.getByRole("button", { name: "Back to notes" }).click();
   await page.locator(".note-card", { hasText: title }).first().waitFor({
     timeout: 30_000,
   });
@@ -381,7 +395,7 @@ try {
     ),
   );
   await confirmRestore(page);
-  await page.locator(".sidebar-nav .nav-row", { hasText: "Notes" }).click();
+  await page.getByRole("button", { name: "Back to notes" }).click();
   await page.locator(".note-card", { hasText: title }).first().waitFor();
   results.push(
     check(

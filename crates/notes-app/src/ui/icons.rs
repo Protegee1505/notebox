@@ -217,6 +217,19 @@ pub fn Icon(name: &'static str) -> Element {
                     path { d: "M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5" }
                     path { d: "M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6" }
                 },
+                "cloud" => rsx! {
+                    path { d: "M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z" }
+                },
+                "key" => rsx! {
+                    circle { cx: "7.5", cy: "15.5", r: "5.5" }
+                    path { d: "M21 2l-9.6 9.6" }
+                    path { d: "M15.5 7.5l3 3L22 7l-3-3" }
+                },
+                "info" => rsx! {
+                    circle { cx: "12", cy: "12", r: "9" }
+                    path { d: "M12 16v-4" }
+                    path { d: "M12 8h.01" }
+                },
                 "image" => rsx! {
                     rect { x: "3", y: "4", width: "18", height: "16", rx: "2" }
                     circle { cx: "9", cy: "10", r: "2" }

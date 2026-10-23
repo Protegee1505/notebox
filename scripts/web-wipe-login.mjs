@@ -201,9 +201,23 @@ async function openApp(errors) {
   return page;
 }
 
-async function openSettings(page) {
-  await page.locator(".nav-row", { hasText: "Settings" }).click();
-  await page.getByRole("heading", { name: "Local data" }).waitFor();
+async function settingsSection(page, name) {
+  const indexRow = page.locator(".settings-index-row", { hasText: name });
+  if (await indexRow.isVisible().catch(() => false)) {
+    await indexRow.click();
+  } else {
+    await page.locator(".settings-nav-item", { hasText: name }).click();
+  }
+  await page.getByRole("heading", { name, exact: true }).waitFor();
+}
+
+async function openSettings(page, name = "Account") {
+  const pane = page.locator(".settings-pane");
+  if (!(await pane.isVisible().catch(() => false))) {
+    await page.locator(".nav-row", { hasText: "Settings" }).click();
+    await pane.waitFor();
+  }
+  await settingsSection(page, name);
 }
 
 async function openLogin(page) {
@@ -535,7 +549,7 @@ try {
   await page.getByLabel("Username").fill(NEW_USERNAME);
   await page.getByLabel("New password (optional)").fill(NEW_PASSWORD);
   await page.getByLabel("Confirm new password").fill(NEW_PASSWORD);
-  await page.getByRole("button", { name: "Update sign-in details" }).click();
+  await page.getByRole("button", { name: "Update username or password" }).click();
   await page
     .locator(".toast.is-success", { hasText: "Sign-in details updated" })
     .waitFor({ timeout: 30_000 });

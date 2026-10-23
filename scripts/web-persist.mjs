@@ -143,11 +143,30 @@ async function openApp(browser, profile, url, errors) {
   return { context, page };
 }
 
+async function settingsSection(page, name) {
+  const indexRow = page.locator(".settings-index-row", { hasText: name });
+  if (await indexRow.isVisible().catch(() => false)) {
+    await indexRow.click();
+  } else {
+    await page.locator(".settings-nav-item", { hasText: name }).click();
+  }
+  await page.getByRole("heading", { name, exact: true }).waitFor();
+}
+
+async function openSettings(page, name = "Account") {
+  const pane = page.locator(".settings-pane");
+  if (!(await pane.isVisible().catch(() => false))) {
+    await page.locator(".nav-row", { hasText: "Settings" }).click();
+    await pane.waitFor();
+  }
+  await settingsSection(page, name);
+}
+
 async function storageCard(page) {
-  await page.locator(".nav-row", { hasText: "Settings" }).click();
-  await page.getByRole("heading", { name: "Local data" }).waitFor();
+  await openSettings(page, "Local data");
   const text = await page.locator(".storage-card").innerText();
-  await page.locator(".nav-row", { hasText: "Notes" }).click();
+  await page.getByRole("button", { name: "Back to notes" }).click();
+  await page.locator(".nav-row", { hasText: "Settings" }).waitFor();
   return text;
 }
 
@@ -574,8 +593,7 @@ try {
 
   // Leave Settings open; the next launch must return to it, then Back must
   // reveal the note that was open before the restart.
-  await page.locator(".nav-row", { hasText: "Settings" }).click();
-  await page.getByRole("heading", { name: "Local data" }).waitFor();
+  await openSettings(page, "Local data");
   await context.close();
   context = undefined;
 
@@ -598,8 +616,7 @@ try {
   );
 
   // The opt-out must remove the prompt, not only persist a pressed button.
-  await page.locator(".nav-row", { hasText: "Settings" }).click();
-  await page.getByRole("heading", { name: "Local data" }).waitFor();
+  await openSettings(page, "Appearance");
   await page
     .getByRole("group", { name: "Confirm before moving notes to trash" })
     .getByRole("button", { name: "Off" })

@@ -55,6 +55,38 @@ scrolls, and no light row is left below the app when the keyboard opens.
 Write mode now tints and underlines links and images; Ctrl/Cmd+click,
 Ctrl+Enter or a footer chip opens them, with a tap-then-chip path on phones.
 
+## Unreleased
+
+- `notes-app`: **Settings rail, phone index and quiet visual polish**. The
+  desktop Settings screen keeps a six-section rail with icons and a version
+  footer; a phone opens a Settings index with icon tiles and a
+  signed-in/offline profile card, then drills into one section with a back
+  button. Phone index rows and section headers omit descriptions; the
+  signed-out Account keeps its status and sign-in action only. Account gets a
+  soft identity panel, a Security group with explicit
+  "Change username or password" and "Sign out" rows, the credentials form,
+  and a device list with an icon refresh button. The account-menu avatar now
+  uses the same soft circular badge as Settings and never shrinks in the flex
+  row. Its sync detail stays on one line: `Offline · last synced …`, or
+  `Offline, will retry` before the first sync. The full error remains in
+  Settings → Account, and the warn dot has a softer ring aligned to the first
+  text line. Appearance uses theme and layout icons, Notebooks uses book and
+  trash icons, Local data has fact tiles and a storage row, Cloud storage
+  keeps its meters, and About has a brand block. No setting or action was
+  removed. Verified with 262 native tests passed and one skipped, `cargo fmt
+  --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo deny check`, `scripts/budget-check` (4048 MiB free on
+  `/home/kinfuny`), `web-build.sh`, and `web-a11y.mjs` passing in both themes
+  on desktop and phone, including the new settings index and color contrast.
+  A targeted Playwright account-menu check passed 12/12: it signed in to the
+  local Worker, confirmed the green Synced dot, forced a failed sync, and
+  checked the compact Offline line, warn ring and dot alignment at desktop and
+  390 px, and captured the dark theme. A local Worker test account was created
+  and signed in through the same-origin 8083 preview; sign out, sign back in,
+  the credentials form and the device list were exercised. Pushed for owner
+  preview as `settings-rail`; not deployed. The branch is based on `1b94bf2`,
+  four commits behind `main`, so the note-actions menu merge is still pending.
+
 ## Shipped
 
 - `notes-app`: **Firefox survives opening a Write-mode link**. Ctrl+click,

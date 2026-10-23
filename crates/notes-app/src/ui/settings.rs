@@ -8,6 +8,72 @@ use crate::state::{AppContext, Layout, Screen, Theme};
 use crate::time::relative_time;
 use crate::ui::icons::Icon;
 
+/// One settings pane. The desktop rail and the phone index share this list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SettingsSection {
+    Account,
+    Appearance,
+    Notebooks,
+    LocalData,
+    CloudStorage,
+    About,
+}
+
+impl SettingsSection {
+    const ALL: [Self; 6] = [
+        Self::Account,
+        Self::Appearance,
+        Self::Notebooks,
+        Self::LocalData,
+        Self::CloudStorage,
+        Self::About,
+    ];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Account => "Account",
+            Self::Appearance => "Appearance",
+            Self::Notebooks => "Notebooks",
+            Self::LocalData => "Local data",
+            Self::CloudStorage => "Cloud storage",
+            Self::About => "About",
+        }
+    }
+
+    const fn subtitle(self) -> &'static str {
+        match self {
+            Self::Account => "Sync, devices and sign-in.",
+            Self::Appearance => "Theme, list layout and delete confirmation.",
+            Self::Notebooks => "Group notes without moving them into folders.",
+            Self::LocalData => "What this device stores, and how to back it up.",
+            Self::CloudStorage => "Usage on your Worker's free plan.",
+            Self::About => "Version and keyboard help.",
+        }
+    }
+
+    const fn attr(self) -> &'static str {
+        match self {
+            Self::Account => "account",
+            Self::Appearance => "appearance",
+            Self::Notebooks => "notebooks",
+            Self::LocalData => "local-data",
+            Self::CloudStorage => "cloud-storage",
+            Self::About => "about",
+        }
+    }
+
+    const fn icon(self) -> &'static str {
+        match self {
+            Self::Account => "user",
+            Self::Appearance => "palette",
+            Self::Notebooks => "book",
+            Self::LocalData => "database",
+            Self::CloudStorage => "cloud",
+            Self::About => "info",
+        }
+    }
+}
+
 #[component]
 pub fn SettingsPane() -> Element {
     let context = use_context::<AppContext>();
@@ -15,6 +81,8 @@ pub fn SettingsPane() -> Element {
         let _ = document::eval("document.getElementById('app-root')?.focus();");
     });
     let mut new_notebook = use_signal(String::new);
+    let mut section = use_signal(|| SettingsSection::Account);
+    let mut mobile_index = use_signal(|| true);
     let state = context.state.read();
     let theme = state.theme;
     let layout = state.layout;
@@ -32,6 +100,8 @@ pub fn SettingsPane() -> Element {
     let credentials = state.credentials.clone();
     drop(state);
     let now = crate::time::now();
+    let active = section();
+    let show_index = mobile_index();
 
     let initial = username
         .chars()
@@ -53,64 +123,169 @@ pub fn SettingsPane() -> Element {
         .unwrap_or_else(|| "Not checked yet".to_string());
 
     rsx! {
-        main { class: "settings-pane", aria_label: "Settings",
-            header { class: "settings-header",
+        main {
+            class: if show_index { "settings-pane is-index" } else { "settings-pane is-detail" },
+            aria_label: "Settings",
+            onmounted: move |_| {
+                let _ = document::eval(
+                    "setTimeout(() => {\
+                     const button = [...document.querySelectorAll('[data-settings-back]')]\
+                         .find((item) => item.offsetParent !== null);\
+                     button?.focus();\
+                     }, 0);",
+                );
+            },
+
+            aside { class: "settings-rail",
                 button {
-                    id: "settings-back",
-                    class: "icon-button back-button",
+                    class: "settings-back",
                     r#type: "button",
                     aria_label: "Back to notes",
                     title: "Back to notes",
-                    autofocus: true,
-                    onmounted: move |_| {
-                        let _ = document::eval(
-                            "document.getElementById('settings-back')?.focus();",
-                        );
-                    },
+                    "data-settings-back": "true",
                     onclick: {
                         let context = context.clone();
                         move |_| context.go(Screen::Notes)
                     },
                     Icon { name: "arrow-left" }
+                    span { "Back to notes" }
                 }
-                div {
-                    h1 { "Settings" }
-                    p { "Preferences stay on this device." }
+
+                nav { class: "settings-nav", aria_label: "Settings",
+                    for item in SettingsSection::ALL.iter().copied() {
+                        button {
+                            key: "{item.attr()}",
+                            class: if active == item { "settings-nav-item is-active" } else { "settings-nav-item" },
+                            r#type: "button",
+                            aria_current: if active == item { "page" } else { "false" },
+                            "data-settings-section": item.attr(),
+                            onclick: move |_| {
+                                section.set(item);
+                                mobile_index.set(false);
+                            },
+                            Icon { name: item.icon() }
+                            span { "{item.label()}" }
+                        }
+                    }
+                }
+
+                div { class: "settings-rail-foot",
+                    span { class: "settings-rail-dot" }
+                    span { "Local-first" }
+                    span { class: "settings-rail-version", "v{build_info::VERSION}" }
                 }
             }
 
-            div { class: "settings-grid",
-                section { class: "settings-card account-card",
-                    div { class: "card-heading",
-                        h2 { "Account" }
+            section { class: "settings-index", aria_label: "Settings",
+                header { class: "settings-index-head",
+                    button {
+                        class: "settings-index-back",
+                        r#type: "button",
+                        aria_label: "Back to notes",
+                        title: "Back to notes",
+                        "data-settings-back": "true",
+                        onclick: {
+                            let context = context.clone();
+                            move |_| context.go(Screen::Notes)
+                        },
+                        Icon { name: "arrow-left" }
+                    }
+                    div {
+                        h1 { "Settings" }
+                        p { "Preferences stay on this device." }
+                    }
+                }
+
+                div { class: "settings-index-profile",
+                    div { class: "avatar large", "{initial}" }
+                    div { class: "account-copy",
+                        strong { if sync_connected { "{username}" } else { "Local only" } }
+                        span {
+                            if sync_connected {
+                                "{last_synced}"
+                            } else {
+                                "No account connected"
+                            }
+                        }
+                    }
+                }
+
+                nav { class: "settings-index-nav", aria_label: "Settings",
+                    for item in SettingsSection::ALL.iter().copied() {
+                        button {
+                            key: "{item.attr()}",
+                            class: "settings-index-row",
+                            r#type: "button",
+                            "data-settings-section": item.attr(),
+                            onclick: move |_| {
+                                section.set(item);
+                                mobile_index.set(false);
+                                let _ = document::eval(
+                                    "setTimeout(() => document.querySelector('[data-settings-detail-back]')?.focus(), 0);",
+                                );
+                            },
+                            span { class: "settings-index-icon", Icon { name: item.icon() } }
+                            span { class: "settings-index-copy",
+                                strong { "{item.label()}" }
+                            }
+                            Icon { name: "chevron-right" }
+                        }
+                    }
+                }
+            }
+
+            div { class: "settings-content",
+                h1 { class: "visually-hidden", "Settings" }
+                button {
+                    class: "settings-detail-back",
+                    r#type: "button",
+                    aria_label: "Back to settings",
+                    title: "Back to settings",
+                    "data-settings-detail-back": "true",
+                    onclick: move |_| {
+                        mobile_index.set(true);
+                        let attr = active.attr();
+                        let _ = document::eval(&format!(
+                            "setTimeout(() => document.querySelector('.settings-index-row[data-settings-section=\"{attr}\"]')?.focus(), 0);"
+                        ));
+                    },
+                    Icon { name: "arrow-left" }
+                    span { "Settings" }
+                }
+
+                section {
+                    id: "settings-account",
+                    class: if active == SettingsSection::Account { "settings-section is-active" } else { "settings-section" },
+                    aria_labelledby: "settings-account-title",
+                    header { class: "settings-section-head",
+                        div { class: "settings-section-title",
+                            span { class: "settings-section-icon", Icon { name: SettingsSection::Account.icon() } }
+                            div {
+                                h2 { id: "settings-account-title", "Account" }
+                                p { "{SettingsSection::Account.subtitle()}" }
+                            }
+                        }
                         span { class: "sync-state {status.tone()}",
                             span { class: "status-dot" }
                             "{status.label()}"
                         }
                     }
-                    div { class: "account-row",
-                        div { class: "avatar large", "{initial}" }
-                        div { class: "account-copy",
-                            strong { if sync_connected { "{username}" } else { "Local only" } }
-                            span {
-                                if sync_connected {
-                                    "{last_synced}"
-                                } else {
-                                    "No account connected"
+
+                    div { class: "settings-account",
+                        div { class: "settings-account-identity",
+                            div { class: "avatar large", "{initial}" }
+                            div { class: "account-copy",
+                                strong { if sync_connected { "{username}" } else { "Local only" } }
+                                span {
+                                    if sync_connected {
+                                        "{last_synced}"
+                                    } else {
+                                        "No account connected"
+                                    }
                                 }
                             }
                         }
-                    }
-                    if let Some(error) = sync.error.clone() {
-                        div { class: "form-error", role: "status",
-                            span { "{error}" }
-                        }
-                    }
-                    if sync_connected {
-                        p { class: "card-note",
-                            "Your Worker keeps a copy and passes updates between your devices. Notes stay readable when it cannot be reached."
-                        }
-                        div { class: "button-row",
+                        if sync_connected {
                             button {
                                 class: "primary-button",
                                 r#type: "button",
@@ -122,17 +297,32 @@ pub fn SettingsPane() -> Element {
                                 Icon { name: "refresh" }
                                 span { if status.busy() { "Syncing…" } else { "Sync now" } }
                             }
+                        } else {
                             button {
-                                class: "secondary-button",
+                                class: "primary-button",
                                 r#type: "button",
-                                disabled: status.busy() || credentials.busy,
                                 onclick: {
                                     let context = context.clone();
-                                    move |_| context.sign_out()
+                                    move |_| context.go(Screen::Login)
                                 },
-                                Icon { name: "logout" }
-                                span { "Sign out" }
+                                Icon { name: "user" }
+                                span { "Sign in to sync" }
                             }
+                        }
+                    }
+
+                    if let Some(error) = sync.error.clone() {
+                        div { class: "form-error", role: "status",
+                            span { "{error}" }
+                        }
+                    }
+
+                    if sync_connected {
+                        p { class: "card-note",
+                            "Your Worker keeps a copy and passes updates between your devices. Notes stay readable when it cannot be reached."
+                        }
+                        div { class: "settings-subhead",
+                            h3 { "Security" }
                         }
                         if credentials.open {
                             form {
@@ -148,7 +338,7 @@ pub fn SettingsPane() -> Element {
                                     }
                                 },
                                 div { class: "credentials-heading",
-                                    strong { "Change sign-in details" }
+                                    strong { "Change username or password" }
                                     span { "Your current device stays signed in. Other devices are signed out." }
                                 }
                                 if let Some(message) = credentials.error.clone() {
@@ -221,7 +411,7 @@ pub fn SettingsPane() -> Element {
                                         class: "primary-button",
                                         r#type: "submit",
                                         disabled: credentials.busy,
-                                        if credentials.busy { "Updating…" } else { "Update sign-in details" }
+                                        if credentials.busy { "Updating…" } else { "Update username or password" }
                                     }
                                     button {
                                         class: "text-button",
@@ -236,39 +426,42 @@ pub fn SettingsPane() -> Element {
                                 }
                             }
                         } else {
-                            button {
-                                class: "secondary-button",
-                                r#type: "button",
-                                disabled: status.busy(),
-                                onclick: {
-                                    let context = context.clone();
-                                    move |_| context.open_credentials()
-                                },
-                                Icon { name: "user" }
-                                span { "Change username or password" }
+                            div { class: "settings-action-list",
+                                button {
+                                    class: "settings-action-row",
+                                    r#type: "button",
+                                    disabled: status.busy(),
+                                    onclick: {
+                                        let context = context.clone();
+                                        move |_| context.open_credentials()
+                                    },
+                                    span { class: "settings-action-icon", Icon { name: "key" } }
+                                    span { class: "settings-action-copy",
+                                        strong { "Change username or password" }
+                                        span { "Signs out other devices" }
+                                    }
+                                    Icon { name: "chevron-right" }
+                                }
+                                button {
+                                    class: "settings-action-row is-danger",
+                                    r#type: "button",
+                                    disabled: status.busy() || credentials.busy,
+                                    onclick: {
+                                        let context = context.clone();
+                                        move |_| context.sign_out()
+                                    },
+                                    span { class: "settings-action-icon", Icon { name: "logout" } }
+                                    span { class: "settings-action-copy",
+                                        strong { "Sign out" }
+                                        span { "Keep local notes on this device" }
+                                    }
+                                    Icon { name: "chevron-right" }
+                                }
                             }
                         }
-                    } else {
-                        p { class: "card-note",
-                            "Sign in with the account you set up on your Worker. Every note is copied to the server and merged with the other devices. You can keep working offline at any time."
-                        }
-                        button {
-                            class: "primary-button",
-                            r#type: "button",
-                            onclick: {
-                                let context = context.clone();
-                                move |_| context.go(Screen::Login)
-                            },
-                            Icon { name: "user" }
-                            span { "Sign in to sync" }
-                        }
-                    }
-                }
 
-                if sync_connected {
-                    section { class: "settings-card devices-card",
-                        div { class: "card-heading",
-                            h2 { "Devices" }
+                        div { class: "settings-subhead",
+                            h3 { "Devices" }
                             button {
                                 class: "icon-button small",
                                 r#type: "button",
@@ -297,9 +490,12 @@ pub fn SettingsPane() -> Element {
                             div { class: "device-list",
                                 for device in sync.devices.iter() {
                                     div { key: "{device.id}", class: "device-row",
-                                        div { class: "device-copy",
-                                            strong { "{device.name}" }
-                                            span { "Last active {relative_time(now, device.last_seen)}" }
+                                        div { class: "settings-device-main",
+                                            span { class: "settings-device-icon", Icon { name: "monitor" } }
+                                            div { class: "device-copy",
+                                                strong { "{device.name}" }
+                                                span { "Last active {relative_time(now, device.last_seen)}" }
+                                            }
                                         }
                                         if device.current {
                                             span { class: "device-pill", "This device" }
@@ -330,9 +526,18 @@ pub fn SettingsPane() -> Element {
                     }
                 }
 
-                section { class: "settings-card",
-                    div { class: "card-heading",
-                        h2 { "Appearance" }
+                section {
+                    id: "settings-appearance",
+                    class: if active == SettingsSection::Appearance { "settings-section is-active" } else { "settings-section" },
+                    aria_labelledby: "settings-appearance-title",
+                    header { class: "settings-section-head",
+                        div { class: "settings-section-title",
+                            span { class: "settings-section-icon", Icon { name: SettingsSection::Appearance.icon() } }
+                            div {
+                                h2 { id: "settings-appearance-title", "Appearance" }
+                                p { "{SettingsSection::Appearance.subtitle()}" }
+                            }
+                        }
                     }
                     div { class: "setting-row",
                         span { class: "setting-label", "Theme" }
@@ -393,16 +598,28 @@ pub fn SettingsPane() -> Element {
                             }
                         }
                     }
+                    p { class: "card-note", "Changes apply immediately and stay on this device." }
                 }
 
-                section { class: "settings-card notebooks-card",
-                    div { class: "card-heading",
-                        h2 { "Notebooks" }
-                        span { class: "muted-label", "{notebooks.len()}" }
+                section {
+                    id: "settings-notebooks",
+                    class: if active == SettingsSection::Notebooks { "settings-section is-active" } else { "settings-section" },
+                    aria_labelledby: "settings-notebooks-title",
+                    header { class: "settings-section-head",
+                        div { class: "settings-section-title",
+                            span { class: "settings-section-icon", Icon { name: SettingsSection::Notebooks.icon() } }
+                            div {
+                                h2 { id: "settings-notebooks-title", "Notebooks" }
+                                p { "{SettingsSection::Notebooks.subtitle()}" }
+                            }
+                        }
+                        span { class: "muted-label",
+                            "{plural_count(notebooks.len() as u64, \"notebook\", \"notebooks\")}"
+                        }
                     }
                     for notebook in notebooks.iter() {
                         div { key: "{notebook.id}", class: "notebook-row",
-                            span { class: "notebook-dot" }
+                            span { class: "settings-notebook-icon", Icon { name: "book" } }
                             input {
                                 class: "rename-input",
                                 r#type: "text",
@@ -429,7 +646,7 @@ pub fn SettingsPane() -> Element {
                         }
                     }
                     if notebooks.is_empty() {
-                        p { class: "card-note", "Create a notebook to group notes. Deleting one never deletes its notes." }
+                        p { class: "card-note", "No notebooks yet. Create one below." }
                     }
                     form {
                         class: "notebook-add",
@@ -457,12 +674,21 @@ pub fn SettingsPane() -> Element {
                             span { "Add" }
                         }
                     }
+                    p { class: "card-note", "Deleting a notebook never deletes its notes." }
                 }
 
-                section { class: "settings-card storage-card",
-                    div { class: "card-heading",
-                        h2 { "Local data" }
-                        span { class: "muted-label", "{storage.label}" }
+                section {
+                    id: "settings-local-data",
+                    class: if active == SettingsSection::LocalData { "settings-section is-active storage-card" } else { "settings-section storage-card" },
+                    aria_labelledby: "settings-local-data-title",
+                    header { class: "settings-section-head",
+                        div { class: "settings-section-title",
+                            span { class: "settings-section-icon", Icon { name: SettingsSection::LocalData.icon() } }
+                            div {
+                                h2 { id: "settings-local-data-title", "Local data" }
+                                p { "{SettingsSection::LocalData.subtitle()}" }
+                            }
+                        }
                     }
                     dl { class: "facts",
                         div { dt { "Notes" } dd { "{note_count}" } }
@@ -471,10 +697,22 @@ pub fn SettingsPane() -> Element {
                         div { dt { "Images & files" } dd { "{attachment_usage.count}" } }
                         div { dt { "Attachment size" } dd { "{format_size(attachment_usage.bytes)}" } }
                     }
-                    p { class: if storage.temporary { "storage-path is-temporary" } else { "storage-path" },
-                        "{storage.detail}"
+                    div { class: "settings-value-row",
+                        span { class: "settings-value-icon", Icon { name: "database" } }
+                        div { class: "settings-value-copy",
+                            span { class: "setting-label", "Storage" }
+                            span { class: "card-note", "{storage.detail}" }
+                        }
+                        span { class: "settings-value", "{storage.label}" }
                     }
-                    div { class: "button-row",
+                    if storage.temporary {
+                        p { class: "settings-warning", role: "status",
+                            "Notes reset when this page reloads. Export a backup to keep them."
+                        }
+                    }
+
+                    div { class: "settings-subhead", h3 { "Backup" } }
+                    div { class: "settings-inline-actions",
                         button {
                             class: "secondary-button",
                             r#type: "button",
@@ -496,16 +734,6 @@ pub fn SettingsPane() -> Element {
                             },
                             Icon { name: "upload" }
                             span { "Restore from backup" }
-                        }
-                        button {
-                            class: "secondary-button",
-                            r#type: "button",
-                            onclick: {
-                                let context = context.clone();
-                                move |_| context.show_shortcuts()
-                            },
-                            Icon { name: "command" }
-                            span { "Shortcuts" }
                         }
                     }
                     input {
@@ -551,7 +779,8 @@ pub fn SettingsPane() -> Element {
                                         let context = context.clone();
                                         move |_| context.confirm_restore()
                                     },
-                                    "Restore backup"
+                                    Icon { name: "upload" }
+                                    span { "Restore backup" }
                                 }
                                 button {
                                     class: "text-button",
@@ -565,11 +794,62 @@ pub fn SettingsPane() -> Element {
                             }
                         }
                     }
+
+                    div { class: "settings-subhead", h3 { "Trash" } }
+                    p { class: "card-note",
+                        "Deleted notes stay in the trash until you empty it. Nothing is erased automatically."
+                    }
+                    if confirm_empty {
+                        div { class: "confirm-row",
+                            p { "Erase every trashed note? This cannot be undone." }
+                            div { class: "button-row",
+                                button {
+                                    class: "danger-button",
+                                    r#type: "button",
+                                    onclick: {
+                                        let context = context.clone();
+                                        move |_| context.empty_trash()
+                                    },
+                                    Icon { name: "trash" }
+                                    span { "Empty trash" }
+                                }
+                                button {
+                                    class: "text-button",
+                                    r#type: "button",
+                                    onclick: {
+                                        let context = context.clone();
+                                        move |_| context.state.write_unchecked().confirm_empty_trash = false
+                                    },
+                                    "Cancel"
+                                }
+                            }
+                        }
+                    } else {
+                        button {
+                            class: "text-button danger-text",
+                            r#type: "button",
+                            onclick: {
+                                let context = context.clone();
+                                move |_| context.state.write_unchecked().confirm_empty_trash = true
+                            },
+                            Icon { name: "trash" }
+                            span { "Empty trash" }
+                        }
+                    }
                 }
 
-                section { class: "settings-card cloud-card",
-                    div { class: "card-heading",
-                        h2 { "Cloud storage" }
+                section {
+                    id: "settings-cloud-storage",
+                    class: if active == SettingsSection::CloudStorage { "settings-section is-active" } else { "settings-section" },
+                    aria_labelledby: "settings-cloud-storage-title",
+                    header { class: "settings-section-head",
+                        div { class: "settings-section-title",
+                            span { class: "settings-section-icon", Icon { name: SettingsSection::CloudStorage.icon() } }
+                            div {
+                                h2 { id: "settings-cloud-storage-title", "Cloud storage" }
+                                p { "{SettingsSection::CloudStorage.subtitle()}" }
+                            }
+                        }
                         span { class: "muted-label",
                             if sync_connected { "500 MB per database" } else { "Local only" }
                         }
@@ -612,9 +892,9 @@ pub fn SettingsPane() -> Element {
                         }
                     }
                     if sync_connected {
-                        div { class: "button-row cloud-actions",
+                        div { class: "settings-inline-actions cloud-actions",
                             button {
-                                class: "secondary-button",
+                                class: "text-button",
                                 r#type: "button",
                                 disabled: usage_loading,
                                 onclick: {
@@ -629,59 +909,45 @@ pub fn SettingsPane() -> Element {
                     }
                 }
 
-                section { class: "settings-card danger-card",
-                    div { class: "card-heading",
-                        h2 { "Trash" }
-                    }
-                    p { class: "card-note",
-                        "Deleted notes stay in the trash until you empty it. Nothing is erased automatically."
-                    }
-                    if confirm_empty {
-                        div { class: "confirm-row",
-                            p { "Erase every trashed note? This cannot be undone." }
-                            div { class: "button-row",
-                                button {
-                                    class: "danger-button",
-                                    r#type: "button",
-                                    onclick: {
-                                        let context = context.clone();
-                                        move |_| context.empty_trash()
-                                    },
-                                    "Empty trash"
-                                }
-                                button {
-                                    class: "text-button",
-                                    r#type: "button",
-                                    onclick: {
-                                        let context = context.clone();
-                                        move |_| context.state.write_unchecked().confirm_empty_trash = false
-                                    },
-                                    "Cancel"
-                                }
+                section {
+                    id: "settings-about",
+                    class: if active == SettingsSection::About { "settings-section is-active" } else { "settings-section" },
+                    aria_labelledby: "settings-about-title",
+                    header { class: "settings-section-head",
+                        div { class: "settings-section-title",
+                            span { class: "settings-section-icon", Icon { name: SettingsSection::About.icon() } }
+                            div {
+                                h2 { id: "settings-about-title", "About" }
+                                p { "{SettingsSection::About.subtitle()}" }
                             }
                         }
-                    } else {
-                        button {
-                            class: "secondary-button",
-                            r#type: "button",
-                            onclick: {
-                                let context = context.clone();
-                                move |_| context.state.write_unchecked().confirm_empty_trash = true
-                            },
-                            Icon { name: "trash" }
-                            span { "Empty trash" }
+                    }
+                    div { class: "settings-about-brand",
+                        span { class: "brand-mark", "nb" }
+                        div { class: "about-copy",
+                            strong { "Notebox" }
+                            span { "Local-first notes, made in Rust." }
                         }
                     }
-                }
-
-                section { class: "settings-card about-card",
-                    div { class: "card-heading",
-                        h2 { "About" }
+                    dl { class: "settings-kv-list",
+                        div { dt { "Version" } dd { "{build_info::label()}" } }
+                        div { dt { "Phase" } dd { "Phase 8 · polish" } }
+                        div { dt { "Help" } dd {
+                            button {
+                                class: "text-button",
+                                r#type: "button",
+                                onclick: {
+                                    let context = context.clone();
+                                    move |_| context.show_shortcuts()
+                                },
+                                Icon { name: "command" }
+                                span { "Keyboard shortcuts" }
+                            }
+                        } }
                     }
                     p { class: "card-note",
-                        "{build_info::label()}. Local-first notes in Rust. One codebase for web, desktop and Android; Loro history; SQLite storage; a Cloudflare Worker for sync."
+                        "Local-first notes in Rust. One codebase for web, desktop and Android; Loro history; SQLite storage; a Cloudflare Worker for sync."
                     }
-                    div { class: "phase-pill", "Phase 7 \u{00b7} packaging" }
                 }
             }
         }
@@ -714,7 +980,7 @@ fn UsageMeter(
                 span {
                     "{count_label}"
                     if approximate {
-                        " \u{00b7} approximate"
+                        " · approximate"
                     }
                 }
             }

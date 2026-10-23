@@ -40,13 +40,16 @@ pub fn TopBar() -> Element {
         });
     let account_detail = if !sync_connected {
         "Notes stay on this device".to_string()
-    } else if let Some(error) = sync_error.as_deref() {
-        error.to_string()
     } else {
         match (sync, last_synced) {
             (SyncStatus::Idle, Some(at)) => {
                 format!("Last synced {}", relative_time(crate::time::now(), at))
             }
+            (SyncStatus::Offline, Some(at)) => format!(
+                "Offline · last synced {}",
+                relative_time(crate::time::now(), at)
+            ),
+            (SyncStatus::Offline, None) => "Offline, will retry".to_string(),
             (SyncStatus::Connecting, _) => "Connecting…".to_string(),
             (SyncStatus::Syncing, _) => "Syncing…".to_string(),
             _ => sync.label().to_string(),
@@ -61,29 +64,31 @@ pub fn TopBar() -> Element {
     rsx! {
         header { class: if account_open { "topbar has-account" } else { "topbar" },
             div { class: "topbar-start",
-                button {
-                    class: "icon-button menu-button menu-button-mobile",
-                    r#type: "button",
-                    aria_label: "Open navigation",
-                    aria_expanded: if sidebar_open { "true" } else { "false" },
-                    title: "Navigation",
-                    onclick: {
-                        let context = context.clone();
-                        move |_| context.state.write_unchecked().sidebar_open = true
-                    },
-                    Icon { name: "menu" }
-                }
-                button {
-                    class: "icon-button menu-button menu-button-desktop",
-                    r#type: "button",
-                    aria_label: if sidebar_collapsed { "Show navigation" } else { "Hide navigation" },
-                    aria_expanded: if sidebar_collapsed { "false" } else { "true" },
-                    title: "Navigation",
-                    onclick: {
-                        let context = context.clone();
-                        move |_| context.toggle_sidebar_collapsed()
-                    },
-                    Icon { name: "menu" }
+                if screen != Screen::Settings {
+                    button {
+                        class: "icon-button menu-button menu-button-mobile",
+                        r#type: "button",
+                        aria_label: "Open navigation",
+                        aria_expanded: if sidebar_open { "true" } else { "false" },
+                        title: "Navigation",
+                        onclick: {
+                            let context = context.clone();
+                            move |_| context.state.write_unchecked().sidebar_open = true
+                        },
+                        Icon { name: "menu" }
+                    }
+                    button {
+                        class: "icon-button menu-button menu-button-desktop",
+                        r#type: "button",
+                        aria_label: if sidebar_collapsed { "Show navigation" } else { "Hide navigation" },
+                        aria_expanded: if sidebar_collapsed { "false" } else { "true" },
+                        title: "Navigation",
+                        onclick: {
+                            let context = context.clone();
+                            move |_| context.toggle_sidebar_collapsed()
+                        },
+                        Icon { name: "menu" }
+                    }
                 }
                 button {
                     class: "brand",

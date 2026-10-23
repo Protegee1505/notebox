@@ -120,6 +120,27 @@ async function setTheme(page, theme) {
   throw new Error(`could not switch to the ${theme} theme`);
 }
 
+// Settings opens on the rail on desktop and on the category index on a phone.
+async function settingsSection(page, name) {
+  const indexRow = page.locator(".settings-index-row", { hasText: name });
+  if (await indexRow.isVisible().catch(() => false)) {
+    await indexRow.click();
+  } else {
+    await page.locator(".settings-nav-item", { hasText: name }).click();
+  }
+  await page.getByRole("heading", { name, exact: true }).waitFor();
+  await settle(page, 150);
+}
+
+async function leaveSettings(page) {
+  const detailBack = page.getByRole("button", { name: "Back to settings" });
+  if (await detailBack.isVisible().catch(() => false)) {
+    await detailBack.click();
+    await page.getByRole("heading", { name: "Settings" }).waitFor();
+  }
+  await page.getByRole("button", { name: "Back to notes" }).click();
+}
+
 function axeSummary(violations) {
   return violations
     .map((violation) => {
@@ -681,15 +702,15 @@ try {
   await setTheme(page, "light");
 
   // ---- Settings, both themes, and autofocus. ----
-  await page.locator(".sidebar-nav .nav-row", { hasText: "Notes" }).click();
   await page.locator(".nav-row", { hasText: "Settings" }).click();
-  await page.getByRole("heading", { name: "Local data" }).waitFor();
+  await page.locator(".settings-pane").waitFor();
   await settle(page);
   const settingsFocus = await page.evaluate(
     () => document.activeElement?.getAttribute("aria-label") === "Back to notes",
   );
   results.push(check("Settings focuses its back button", settingsFocus));
 
+  await settingsSection(page, "Appearance");
   const themeGroup = page.getByRole("group", { name: "Theme" });
   await themeGroup.getByRole("button", { name: "System" }).click();
   await settle(page);
@@ -737,6 +758,7 @@ try {
 
   // ---- Login form and its first field. ----
   await setTheme(page, "light");
+  await settingsSection(page, "Account");
   await page.getByRole("button", { name: "Sign in to sync" }).click();
   await page.getByRole("heading", { name: "Sign in" }).waitFor();
   await settle(page);
@@ -749,7 +771,8 @@ try {
   await page.locator("#note-editor").waitFor();
 
   await page.locator(".nav-row", { hasText: "Settings" }).click();
-  await page.getByRole("heading", { name: "Local data" }).waitFor();
+  await page.locator(".settings-pane").waitFor();
+  await settingsSection(page, "Account");
   await setTheme(page, "dark");
   await page.getByRole("button", { name: "Sign in to sync" }).click();
   await page.getByRole("heading", { name: "Sign in" }).waitFor();
@@ -804,23 +827,23 @@ try {
   await page.getByRole("button", { name: "Open navigation" }).click();
   await page.locator(".sidebar.is-open").waitFor();
   await page.locator(".nav-row", { hasText: "Settings" }).click();
-  await page.getByRole("heading", { name: "Local data" }).waitFor();
-  await settle(page);
+  await page.locator(".settings-pane").waitFor();
+  await settingsSection(page, "Appearance");
   await audit("settings, mobile light");
 
-  await page.getByRole("button", { name: "Back to notes" }).click();
+  await leaveSettings(page);
   await page.locator("#note-editor").waitFor();
   await setTheme(page, "dark");
   await audit("notes, mobile dark");
   await page.getByRole("button", { name: "Open navigation" }).click();
   await page.locator(".sidebar.is-open").waitFor();
   await page.locator(".nav-row", { hasText: "Settings" }).click();
-  await page.getByRole("heading", { name: "Local data" }).waitFor();
-  await settle(page);
+  await page.locator(".settings-pane").waitFor();
+  await settingsSection(page, "Appearance");
   await audit("settings, mobile dark");
 
   // ---- Phone regression: long image titles, narrow chrome, one-tap Back. ----
-  await page.getByRole("button", { name: "Back to notes" }).click();
+  await leaveSettings(page);
   await page.locator("#note-editor").waitFor();
   await page.getByRole("button", { name: "Back to notes" }).click();
   await page.locator(".workspace.show-list").waitFor();
@@ -831,6 +854,21 @@ try {
       await phoneFab.isVisible(),
     ),
   );
+
+  // Settings remembers the sidebar view it was opened from. This run opened it
+  // from Trash, so return to Notes explicitly before checking phone search.
+  await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.locator(".sidebar.is-open").waitFor();
+  await page.locator(".sidebar-nav .nav-row", { hasText: "Notes" }).click();
+  await page.locator(".workspace.show-list").waitFor();
+  const notesScrim = await page.locator(".scrim").boundingBox();
+  if (notesScrim) {
+    await page.mouse.click(
+      notesScrim.x + notesScrim.width - 12,
+      notesScrim.y + notesScrim.height / 2,
+    );
+  }
+  await settle(page, 200);
 
   await page.locator("#global-search").fill("zebralanding");
   await page.waitForFunction(
@@ -1275,7 +1313,8 @@ try {
   await page.getByRole("button", { name: "Open navigation" }).click();
   await page.locator(".sidebar.is-open").waitFor();
   await page.locator(".nav-row", { hasText: "Settings" }).click();
-  await page.getByRole("heading", { name: "Local data" }).waitFor();
+  await page.locator(".settings-pane").waitFor();
+  await page.getByRole("heading", { name: "Settings" }).waitFor();
   await page.getByRole("button", { name: "Back to notes" }).click();
   await page.locator(".workspace.show-list").waitFor();
   await page.locator(".note-card").first().click();
