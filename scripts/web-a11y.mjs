@@ -693,6 +693,29 @@ try {
       items: [...(menu?.querySelectorAll('[role="menuitem"]') ?? [])].map(
         (item) => item.textContent?.trim() ?? "",
       ),
+      palette: (() => {
+        const row = menu?.querySelector(".context-menu-swatches");
+        const chips = [
+          ...(row?.querySelectorAll(".context-menu-swatch") ?? []),
+        ];
+        const boxes = chips.map((chip) => chip.getBoundingClientRect());
+        const checked = chips.find(
+          (chip) => chip.getAttribute("aria-checked") === "true",
+        );
+        const current = menu?.querySelector(".context-menu-current");
+        return {
+          count: chips.length,
+          rows: new Set(boxes.map((box) => Math.round(box.top))).size,
+          checked: chips.filter(
+            (chip) => chip.getAttribute("aria-checked") === "true",
+          ).length,
+          label: current?.textContent?.trim() ?? "",
+          active: checked?.getAttribute("title") ?? "No colour",
+          minTarget: boxes.length
+            ? Math.min(...boxes.map((box) => Math.min(box.width, box.height)))
+            : 0,
+        };
+      })(),
     };
   });
   const menuFits =
@@ -726,6 +749,17 @@ try {
         menuOpen.items.some((label) => label === "Pin note" || label === "Unpin note") &&
         menuOpen.items.some((label) => label.startsWith("Move to notebook")),
       menuOpen.items.join(" | "),
+    ),
+  );
+  results.push(
+    check(
+      "the colour picker is one row with a named active chip",
+      menuOpen.palette.count === 8 &&
+        menuOpen.palette.rows === 1 &&
+        menuOpen.palette.checked === 1 &&
+        menuOpen.palette.label === menuOpen.palette.active &&
+        menuOpen.palette.minTarget >= 23.5,
+      JSON.stringify(menuOpen.palette),
     ),
   );
   results.push(
@@ -903,6 +937,9 @@ try {
   const roseChecked =
     (await page.locator("#note-menu-color-rose").getAttribute("aria-checked")) ===
     "true";
+  const roseLabel = (
+    await page.locator("#note-context-menu .context-menu-current").textContent()
+  )?.trim();
   await page.locator("#note-menu-color-none").click();
   await page.locator("#note-context-menu").waitFor({ state: "detached" });
   await settle(page, 250);
@@ -910,8 +947,8 @@ try {
   results.push(
     check(
       "the menu sets and clears a card colour",
-      rose && roseChecked && cleared,
-      `${rose} / ${roseChecked} / ${cleared}`,
+      rose && roseChecked && roseLabel === "Rose" && cleared,
+      `${rose} / ${roseChecked} / ${roseLabel} / ${cleared}`,
     ),
   );
 

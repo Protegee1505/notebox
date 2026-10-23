@@ -763,11 +763,11 @@ kbd {
 .note-context-menu {
   position: fixed;
   z-index: 66;
-  width: min(16.5rem, calc(100vw - var(--space-4)));
+  width: min(14.5rem, calc(100vw - var(--space-4)));
   max-height: calc(var(--app-height, 100dvh) - var(--space-4));
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: var(--space-2);
+  padding: var(--space-1);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
   background: var(--surface);
@@ -780,8 +780,8 @@ kbd {
   align-items: center;
   gap: var(--space-2);
   width: 100%;
-  min-height: 2.35rem;
-  padding: var(--space-2);
+  min-height: 2rem;
+  padding: 0 var(--space-2);
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -798,7 +798,6 @@ kbd {
 
 .context-menu-item:focus-visible,
 .context-menu-swatch:focus-visible,
-.context-menu-color-none:focus-visible,
 .context-menu-back:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: -2px;
@@ -854,29 +853,39 @@ kbd {
 }
 
 .context-menu-group {
-  padding: var(--space-1) var(--space-1) var(--space-2);
+  padding: var(--space-1) 0 var(--space-2);
 }
 
-.context-menu-label {
+.context-menu-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
   padding: 0 var(--space-2) var(--space-1);
   color: var(--muted);
   font-size: var(--text-xs);
 }
 
+.context-menu-current {
+  overflow: hidden;
+  color: var(--text-soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .context-menu-swatches {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: var(--space-1);
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   justify-items: center;
 }
 
 .context-menu-swatch {
   display: grid;
   place-items: center;
-  width: 1.8rem;
-  height: 1.8rem;
+  width: 1.5rem;
+  height: 1.5rem;
   padding: 0;
-  border: 1px solid transparent;
+  border: none;
   border-radius: var(--radius-sm);
   background: transparent;
   cursor: pointer;
@@ -886,39 +895,50 @@ kbd {
   background: var(--surface-2);
 }
 
-.context-menu-swatch.is-active {
+.note-context-menu .swatch-dot {
+  width: 1.375rem;
+  height: 1.375rem;
+  border-color: color-mix(in srgb, var(--tone-edge) 60%, var(--text));
+  background: color-mix(in srgb, var(--tone-bg) 55%, var(--tone-edge));
+}
+
+.note-context-menu .context-menu-swatch.is-active .swatch-dot {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
   border-color: var(--primary);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 22%, transparent);
 }
 
-.context-menu-color-none {
-  grid-column: 1 / -1;
-  justify-self: stretch;
-  padding: var(--space-1) var(--space-2);
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: var(--text-xs);
-  text-align: left;
-  cursor: pointer;
+.context-menu-none-dot {
+  position: relative;
+  display: block;
+  width: 1.375rem;
+  height: 1.375rem;
+  border: 1px dashed var(--border-strong);
+  border-radius: 0.35rem;
 }
 
-.context-menu-color-none:hover {
-  background: var(--surface-2);
-  color: var(--text);
+.context-menu-none-dot::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 1px;
+  height: 0.95rem;
+  background: var(--muted);
+  transform: translate(-50%, -50%) rotate(45deg);
 }
 
-.context-menu-color-none.is-active {
-  color: var(--primary);
+.note-context-menu .context-menu-swatch.is-active .context-menu-none-dot {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+  border-color: var(--primary);
 }
 
 .context-menu-heading {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-1) var(--space-2) var(--space-2);
+  padding: var(--space-1) var(--space-2);
   font-size: var(--text-sm);
   font-weight: 600;
 }

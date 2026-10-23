@@ -34,6 +34,11 @@ pub fn NoteContextMenu(menu: NoteMenu) -> Element {
     let pinned = summary.pinned;
     let archived = summary.archived;
     let color = summary.color.clone();
+    let active_color = color
+        .as_deref()
+        .and_then(|value| COLORS.iter().find(|(name, _)| *name == value))
+        .map(|(_, label)| *label)
+        .unwrap_or("No colour");
     let current_notebook = summary.notebook_id.and_then(|id| {
         notebooks
             .iter()
@@ -207,7 +212,10 @@ pub fn NoteContextMenu(menu: NoteMenu) -> Element {
                         class: "context-menu-group",
                         role: "group",
                         aria_label: "Colour",
-                        div { class: "context-menu-label", aria_hidden: "true", "Colour" }
+                        div { class: "context-menu-head", aria_hidden: "true",
+                            span { "Colour" }
+                            span { class: "context-menu-current", "{active_color}" }
+                        }
                         div { class: "context-menu-swatches",
                             for (value, label) in COLORS {
                                 button {
@@ -233,9 +241,9 @@ pub fn NoteContextMenu(menu: NoteMenu) -> Element {
                             button {
                                 id: "note-menu-color-none",
                                 class: if color.is_none() {
-                                    "context-menu-color-none is-active"
+                                    "context-menu-swatch is-active"
                                 } else {
-                                    "context-menu-color-none"
+                                    "context-menu-swatch"
                                 },
                                 r#type: "button",
                                 role: "menuitemradio",
@@ -245,7 +253,7 @@ pub fn NoteContextMenu(menu: NoteMenu) -> Element {
                                     let context = context.clone();
                                     move |_| context.set_color_from_menu(id, None)
                                 },
-                                "No colour"
+                                span { class: "context-menu-none-dot", aria_hidden: "true" }
                             }
                         }
                     }

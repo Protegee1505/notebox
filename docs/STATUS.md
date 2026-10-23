@@ -70,13 +70,17 @@ Ctrl+Enter or a footer chip opens them, with a tap-then-chip path on phones.
   End, Escape and Tab work, and Escape/Tab return focus to the card. It closes
   on an outside click, list scroll, view/filter/search changes, opening another
   panel, or a reload that removes its target; the editor keeps its native text
-  menu. Position is clamped to the visual viewport. No server, D1, sync
-  protocol or schema change. Verified with 262 native tests passed and one
-  skipped, `cargo fmt --all --check`, workspace and desktop clippy, `cargo deny
-  check`, `scripts/budget-check`, `web-build.sh`, `web-a11y.mjs` 100/100
-  (right-click, keyboard, clamp, actions, trash confirmation, light/dark and
-  320 px WCAG A/AA), `web-markup.mjs` 20/20, `web-budget.mjs` 1.77 MiB brotli,
-  and a 20-second Xvfb desktop boot smoke. Not deployed yet.
+  menu. Position is clamped to the visual viewport. The compact menu is 14.5 rem
+  wide with 2 rem rows. Its eight colour choices sit in one row with the active
+  colour named beside “Colour”; light-theme chips use a tone-tinted fill, a
+  darker keyline, 22 px dots and a 2 px inner selection ring, without changing
+  the card colours or the editor picker. No server, D1, sync protocol or schema
+  change. Verified with 262 native tests passed and one skipped, `cargo fmt
+  --all --check`, workspace and desktop clippy, wasm build check, `cargo deny
+  check`, `scripts/budget-check`, `web-build.sh`, `web-a11y.mjs` 101/101
+  (right-click, keyboard, clamp, actions, trash confirmation, one-row palette,
+  light/dark and 320 px WCAG A/AA), `web-markup.mjs` 20/20, `web-budget.mjs`
+  1.77 MiB brotli, and a 20-second Xvfb desktop boot smoke. Not deployed yet.
 - `notes-app`: **Firefox survives opening a Write-mode link**. Ctrl+click,
   Ctrl+Enter and the footer chip now open a destination by clicking a temporary
   hidden `<a target="_blank" rel="noopener noreferrer">` instead of calling
