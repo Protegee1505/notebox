@@ -1,5 +1,6 @@
 //! Screens and reusable pieces of the shell.
 
+pub mod context_menu;
 pub mod editor;
 pub mod focus;
 pub mod gallery;
@@ -15,6 +16,7 @@ pub mod toast;
 pub mod topbar;
 pub mod update;
 
+pub use context_menu::NoteContextMenu;
 pub use editor::EditorPane;
 pub use gallery::AttachmentGallery;
 pub use history::HistoryPanel;

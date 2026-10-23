@@ -637,6 +637,382 @@ try {
     { timeout: 10_000 },
   );
 
+  // ---- Note card context menu, both themes and its keyboard contract. ----
+  await setTheme(page, "light");
+  await page.locator(".sidebar-nav .nav-row", { hasText: "Notes" }).click();
+  const menuCard = page.locator(".note-card", {
+    hasText: "Welcome to Notebox",
+  });
+  const selectedBeforeMenu = page.locator(".note-card", {
+    hasText: "Weekend ideas",
+  });
+  await selectedBeforeMenu.click();
+  await page.locator("#note-editor").waitFor({ timeout: 10_000 });
+  await settle(page);
+  const beforeMenu = await page.evaluate(() => ({
+    selected: document.querySelector(".note-card.is-selected")?.id ?? "",
+    draft: document.getElementById("note-editor")?.value ?? "",
+  }));
+  const menuCardId = await menuCard.getAttribute("id");
+  await page.evaluate(() => {
+    window.__contextMenuDefault = "unset";
+    document.addEventListener("contextmenu", (event) => {
+      setTimeout(() => {
+        window.__contextMenuDefault = event.defaultPrevented;
+      }, 0);
+    });
+  });
+
+  await menuCard.click({ button: "right" });
+  await page.locator("#note-context-menu").waitFor({ timeout: 10_000 });
+  await settle(page, 100);
+  const menuOpen = await page.evaluate(() => {
+    const menu = document.getElementById("note-context-menu");
+    const target = document.querySelector(".note-card.is-menu-target");
+    const selected = document.querySelector(".note-card.is-selected");
+    const box = menu?.getBoundingClientRect();
+    return {
+      role: menu?.getAttribute("role"),
+      label: menu?.getAttribute("aria-label"),
+      focused: document.activeElement?.id,
+      target: target?.id,
+      targetRing: document.querySelectorAll(".note-card.is-menu-target").length,
+      selected: selected?.id,
+      draft: document.getElementById("note-editor")?.value ?? "",
+      hasPopup: target?.getAttribute("aria-haspopup"),
+      keyshortcuts: target?.getAttribute("aria-keyshortcuts"),
+      box: box
+        ? {
+            left: box.left,
+            top: box.top,
+            right: box.right,
+            bottom: box.bottom,
+          }
+        : null,
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      items: [...(menu?.querySelectorAll('[role="menuitem"]') ?? [])].map(
+        (item) => item.textContent?.trim() ?? "",
+      ),
+    };
+  });
+  const menuFits =
+    menuOpen.box &&
+    menuOpen.box.left >= 8 &&
+    menuOpen.box.top >= 8 &&
+    menuOpen.box.right <= menuOpen.viewport.width - 8 &&
+    menuOpen.box.bottom <= menuOpen.viewport.height - 8;
+  results.push(
+    check(
+      "right-click opens the note actions menu without opening the note",
+      menuOpen.role === "menu" &&
+        menuOpen.label?.startsWith("Note actions for ") &&
+        menuOpen.focused === "note-menu-open" &&
+        menuOpen.target === menuCardId &&
+        menuOpen.targetRing === 1 &&
+        menuOpen.selected === beforeMenu.selected &&
+        menuOpen.draft === beforeMenu.draft &&
+        menuOpen.hasPopup === "menu" &&
+        menuOpen.keyshortcuts === "Shift+F10" &&
+        menuFits,
+      JSON.stringify(menuOpen),
+    ),
+  );
+  results.push(
+    check(
+      "the note menu lists the card actions",
+      ["Open note", "Archive note", "History", "Move to trash"].every(
+        (label) => menuOpen.items.includes(label),
+      ) &&
+        menuOpen.items.some((label) => label === "Pin note" || label === "Unpin note") &&
+        menuOpen.items.some((label) => label.startsWith("Move to notebook")),
+      menuOpen.items.join(" | "),
+    ),
+  );
+  results.push(
+    check(
+      "the browser's own menu is suppressed on a card",
+      await page.evaluate(() => window.__contextMenuDefault === true),
+    ),
+  );
+  await audit("note actions, light");
+
+  await page.keyboard.press("End");
+  const menuEnd = await page.evaluate(() => document.activeElement?.id);
+  await page.keyboard.press("ArrowDown");
+  const menuWrap = await page.evaluate(() => document.activeElement?.id);
+  await page.keyboard.press("Home");
+  const menuHome = await page.evaluate(() => document.activeElement?.id);
+  await page.keyboard.press("ArrowDown");
+  const menuDown = await page.evaluate(() => document.activeElement?.id);
+  results.push(
+    check(
+      "arrow, Home and End keys move through the menu",
+      menuEnd === "note-menu-trash" &&
+        menuWrap === "note-menu-open" &&
+        menuHome === "note-menu-open" &&
+        menuDown === "note-menu-pin",
+      `${menuEnd} / ${menuWrap} / ${menuHome} / ${menuDown}`,
+    ),
+  );
+
+  await page.keyboard.press("Tab");
+  await page.locator("#note-context-menu").waitFor({ state: "detached" });
+  await page.waitForFunction(
+    (card) => document.activeElement?.id === card,
+    menuCardId,
+    { timeout: 10_000 },
+  );
+  results.push(check("Tab closes the menu and returns focus to its card", true));
+
+  await page.keyboard.press("Shift+F10");
+  await page.locator("#note-context-menu").waitFor({ timeout: 10_000 });
+  await page.waitForFunction(
+    () => document.activeElement?.id === "note-menu-open",
+    null,
+    { timeout: 10_000 },
+  );
+  results.push(check("Shift+F10 opens the focused card's menu", true));
+  await page.keyboard.press("Escape");
+  await page.locator("#note-context-menu").waitFor({ state: "detached" });
+  await page.waitForFunction(
+    (card) => document.activeElement?.id === card,
+    menuCardId,
+    { timeout: 10_000 },
+  );
+  results.push(check("Escape closes the menu and returns focus to its card", true));
+
+  await page.keyboard.press("ContextMenu");
+  await page.locator("#note-context-menu").waitFor({ timeout: 10_000 });
+  results.push(check("the Menu key opens the focused card's menu", true));
+  await page.keyboard.press("Escape");
+
+  await page.evaluate((card) => {
+    document.getElementById(card)?.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        button: 2,
+        clientX: window.innerWidth - 2,
+        clientY: window.innerHeight - 2,
+      }),
+    );
+  }, menuCardId);
+  await page.locator("#note-context-menu").waitFor({ timeout: 10_000 });
+  await settle(page, 100);
+  const clamped = await page.evaluate(() => {
+    const menu = document.getElementById("note-context-menu");
+    const box = menu?.getBoundingClientRect();
+    return box
+      ? {
+          left: box.left,
+          top: box.top,
+          right: box.right,
+          bottom: box.bottom,
+          width: window.innerWidth,
+          height: window.innerHeight,
+        }
+      : null;
+  });
+  results.push(
+    check(
+      "the menu is clamped inside the viewport",
+      Boolean(
+        clamped &&
+          clamped.left >= 8 &&
+          clamped.top >= 8 &&
+          clamped.right <= clamped.width - 8 &&
+          clamped.bottom <= clamped.height - 8,
+      ),
+      JSON.stringify(clamped),
+    ),
+  );
+  await page.keyboard.press("Escape");
+
+  await menuCard.click({ button: "right" });
+  await page.locator("#note-context-menu").waitFor({ timeout: 10_000 });
+  await page.locator(".note-list").evaluate((element) => {
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await page.locator("#note-context-menu").waitFor({ state: "detached" });
+  results.push(check("scrolling the note list closes the menu", true));
+
+  await menuCard.click({ button: "right" });
+  await page.locator("#note-context-menu").waitFor({ timeout: 10_000 });
+  await page.locator("#global-search").click();
+  await page.locator("#note-context-menu").waitFor({ state: "detached" });
+  results.push(check("clicking outside closes the menu", true));
+
+  await page.evaluate(() => {
+    window.__contextMenuDefault = "unset";
+  });
+  await page.locator("#note-editor").click({
+    button: "right",
+    position: { x: 20, y: 20 },
+  });
+  await settle(page, 100);
+  const editorContext = await page.evaluate(() => ({
+    menu: Boolean(document.querySelector("#note-context-menu")),
+    prevented: window.__contextMenuDefault,
+  }));
+  results.push(
+    check(
+      "the editor keeps its native text menu",
+      !editorContext.menu && editorContext.prevented === false,
+      JSON.stringify(editorContext),
+    ),
+  );
+
+  // Pin, colour and notebook actions use the card id, not the open note.
+  const pinnedBefore = await menuCard.locator(".pin-mark").count();
+  await menuCard.click({ button: "right" });
+  await page.locator("#note-context-menu").waitFor({ timeout: 10_000 });
+  const pinLabelBefore = (await page.locator("#note-menu-pin").textContent())?.trim();
+  await page.locator("#note-menu-pin").click();
+  await page.locator("#note-context-menu").waitFor({ state: "detached" });
+  await settle(page, 250);
+  const pinnedAfter = await menuCard.locator(".pin-mark").count();
+  await menuCard.click({ button: "right" });
+  await page.locator("#note-context-menu").waitFor({ timeout: 10_000 });
+  const pinLabelAfter = (await page.locator("#note-menu-pin").textContent())?.trim();
+  await page.locator("#note-menu-pin").click();
+  await page.locator("#note-context-menu").waitFor({ state: "detached" });
+  await settle(page, 250);
+  const pinnedRestored = await menuCard.locator(".pin-mark").count();
+  const pinExpected = pinnedBefore === 1 ? 0 : 1;
+  results.push(
+    check(
+      "the menu pins and unpins a card",
+      pinnedAfter === pinExpected &&
+        pinnedRestored === pinnedBefore &&
+        pinLabelBefore ===
+          (pinnedBefore === 1 ? "Unpin note" : "Pin note") &&
+        pinLabelAfter ===
+          (pinnedAfter === 1 ? "Unpin note" : "Pin note"),
+      `${pinnedBefore} / ${pinLabelBefore} / ${pinnedAfter} / ${pinLabelAfter} / ${pinnedRestored}`,
+    ),
+  );
+
+  await menuCard.click({ button: "right" });
+  await page.locator("#note-context-menu").waitFor({ timeout: 10_000 });
+  await page.locator("#note-menu-color-rose").click();
+  await page.locator("#note-context-menu").waitFor({ state: "detached" });
+  await settle(page, 250);
+  const rose = (await menuCard.getAttribute("class"))?.includes("tone-rose");
+  await menuCard.click({ button: "right" });
+  await page.locator("#note-context-menu").waitFor({ timeout: 10_000 });
+  const roseChecked =
+    (await page.locator("#note-menu-color-rose").getAttribute("aria-checked")) ===
+    "true";
+  await page.locator("#note-menu-color-none").click();
+  await page.locator("#note-context-menu").waitFor({ state: "detached" });
+  await settle(page, 250);
+  const cleared = (await menuCard.getAttribute("class"))?.includes("tone-default");
+  results.push(
+    check(
+      "the menu sets and clears a card colour",
+      rose && roseChecked && cleared,
+      `${rose} / ${roseChecked} / ${cleared}`,
+    ),
+  );
+
+  await menuCard.click({ button: "right" });
+  await page.locator("#note-context-menu").waitFor({ timeout: 10_000 });
+  await page.locator("#note-menu-notebook").click();
+  await page.locator("#note-menu-back").waitFor({ timeout: 10_000 });
+  const checkedNotebook = (
+    await page
+      .locator('#note-context-menu [role="menuitemradio"][aria-checked="true"]')
+      .first()
+      .textContent()
+  )?.trim();
+  const targetNotebook = checkedNotebook === "Projects" ? "Personal" : "Projects";
+  await audit("note actions notebook, light");
+  await page
+    .locator("#note-context-menu")
+    .getByRole("menuitemradio", { name: targetNotebook, exact: true })
+    .click();
+  await page.locator("#note-context-menu").waitFor({ state: "detached" });
+  await settle(page, 250);
+  await menuCard.click({ button: "right" });
+  await page.locator("#note-context-menu").waitFor({ timeout: 10_000 });
+  const notebookValue = (await page.locator("#note-menu-notebook").textContent())
+    ?.trim();
+  await page.keyboard.press("Escape");
+  await page.locator("#note-context-menu").waitFor({ state: "detached" });
+  await settle(page, 250);
+  results.push(
+    check(
+      "the menu moves a card to a notebook",
+      Boolean(
+        checkedNotebook &&
+          targetNotebook &&
+          notebookValue?.endsWith(targetNotebook),
+      ),
+      `${checkedNotebook} -> ${targetNotebook}: ${notebookValue}`,
+    ),
+  );
+
+  await menuCard.click({ button: "right" });
+  await page.locator("#note-context-menu").waitFor({ timeout: 10_000 });
+  await page.locator("#note-menu-archive").click();
+  await page.locator("#note-context-menu").waitFor({ state: "detached" });
+  await settle(page, 300);
+  const archivedInActive = await menuCard.count();
+  await page.locator(".sidebar-nav .nav-row", { hasText: "Archive" }).click();
+  await menuCard.waitFor({ timeout: 10_000 });
+  await menuCard.click({ button: "right" });
+  await page.locator("#note-context-menu").waitFor({ timeout: 10_000 });
+  const unarchiveLabel = (
+    await page.locator("#note-menu-archive").textContent()
+  )?.trim();
+  await page.locator("#note-menu-archive").click();
+  await page.locator("#note-context-menu").waitFor({ state: "detached" });
+  await settle(page, 300);
+  await page.locator(".sidebar-nav .nav-row", { hasText: "Notes" }).click();
+  await menuCard.waitFor({ timeout: 10_000 });
+  results.push(
+    check(
+      "the menu archives and unarchives a card",
+      archivedInActive === 0 && unarchiveLabel === "Unarchive note",
+      `${archivedInActive} / ${unarchiveLabel}`,
+    ),
+  );
+
+  // Trash goes through the editor's existing confirmation and Cancel focus.
+  await menuCard.click();
+  await page.locator("#note-editor").waitFor({ timeout: 10_000 });
+  await settle(page);
+  const trashTarget = page.locator(".note-card", { hasText: "Weekend ideas" });
+  await trashTarget.click({ button: "right" });
+  await page.locator("#note-context-menu").waitFor({ timeout: 10_000 });
+  await page.locator("#note-menu-trash").click();
+  await page.locator("#note-context-menu").waitFor({ state: "detached" });
+  await page.locator("#delete-confirm").waitFor({ timeout: 10_000 });
+  await page.waitForFunction(
+    () => document.activeElement?.id === "confirm-trash-cancel",
+    null,
+    { timeout: 10_000 },
+  );
+  const menuTrashTarget = await page.evaluate(
+    () => document.querySelector(".note-card.is-selected .note-title")?.textContent,
+  );
+  await page.locator("#confirm-trash-cancel").click();
+  await page.locator("#delete-confirm").waitFor({ state: "detached" });
+  results.push(
+    check(
+      "the menu reuses the editor's trash confirmation",
+      menuTrashTarget === "Weekend ideas",
+      String(menuTrashTarget),
+    ),
+  );
+
+  await setTheme(page, "dark");
+  await menuCard.click({ button: "right" });
+  await page.locator("#note-context-menu").waitFor({ timeout: 10_000 });
+  await audit("note actions, dark");
+  await page.keyboard.press("Escape");
+  await setTheme(page, "light");
+
   // ---- Trash view, both themes, and the delete confirmation. ----
   await setTheme(page, "light");
   const trashButton = page.getByRole("button", { name: "Move note to trash" });
@@ -938,6 +1314,50 @@ try {
   // The note list is also its scroll container. A short viewport makes it
   // overflow; the grid rows must still size to their cards, or flex children
   // shrink and the title clamp slices glyphs.
+  await page.evaluate(() => {
+    document.querySelector(".note-card")?.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        button: 2,
+        clientX: window.innerWidth - 2,
+        clientY: window.innerHeight - 2,
+      }),
+    );
+  });
+  await page.locator("#note-context-menu").waitFor({ timeout: 10_000 });
+  await settle(page, 100);
+  const phoneMenu = await page.evaluate(() => {
+    const menu = document.getElementById("note-context-menu");
+    const box = menu?.getBoundingClientRect();
+    return box
+      ? {
+          left: box.left,
+          top: box.top,
+          right: box.right,
+          bottom: box.bottom,
+          width: window.innerWidth,
+          height: window.innerHeight,
+        }
+      : null;
+  });
+  results.push(
+    check(
+      "the note actions menu fits a 320px phone",
+      Boolean(
+        phoneMenu &&
+          phoneMenu.left >= 8 &&
+          phoneMenu.top >= 8 &&
+          phoneMenu.right <= phoneMenu.width - 8 &&
+          phoneMenu.bottom <= phoneMenu.height - 8,
+      ),
+      JSON.stringify(phoneMenu),
+    ),
+  );
+  await audit("note actions, mobile dark");
+  await page.keyboard.press("Escape");
+  await page.locator("#note-context-menu").waitFor({ state: "detached" });
+
   await page.setViewportSize({ width: 360, height: 420 });
   await settle(page, 350);
   const overflowingCards = await page.evaluate(() => {

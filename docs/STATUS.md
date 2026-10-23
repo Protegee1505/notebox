@@ -27,7 +27,9 @@ sidebar. Relaunching now returns to the last note and screen, a visible device
 sees another device's edit on its next ten-second poll without a reload,
 deleting asks first by default, the avatar opens an account panel on desktop
 and phones, and a first theme click while the choice is System always changes
-the visible theme.
+the visible theme. Right-clicking a note card opens a clamped actions menu
+(or Shift+F10/Menu on a focused card) without changing the open note, and its
+Move to trash action reuses the editor confirmation and Cancel focus.
 A 100 KB note opens in a median under 50 ms in the web UI and typing drops no
 frames; Linux desktop cold start is 555 ms warm. The installer budget now
 measures the `.deb` (9.9 MB), not the self-contained AppImage. The free Worker
@@ -57,6 +59,24 @@ Ctrl+Enter or a footer chip opens them, with a tap-then-chip path on phones.
 
 ## Shipped
 
+- `notes-app`: **right-click a note card for note actions**. A card opens one
+  HTML/CSS menu on desktop and web with Open, Pin/Unpin, Archive/Unarchive,
+  History, colour, notebook drill-in and Move to trash; a trashed card offers
+  Open, History and Restore. The menu acts on the card id, so right-clicking
+  does not open or select the note, and the target card keeps a ring while the
+  menu is open. Move to trash closes the menu, selects the target and calls the
+  existing `trash_selected`, keeping its inline confirmation and Cancel focus.
+  Shift+F10 and the Menu key open the menu from a focused card; Arrow, Home,
+  End, Escape and Tab work, and Escape/Tab return focus to the card. It closes
+  on an outside click, list scroll, view/filter/search changes, opening another
+  panel, or a reload that removes its target; the editor keeps its native text
+  menu. Position is clamped to the visual viewport. No server, D1, sync
+  protocol or schema change. Verified with 262 native tests passed and one
+  skipped, `cargo fmt --all --check`, workspace and desktop clippy, `cargo deny
+  check`, `scripts/budget-check`, `web-build.sh`, `web-a11y.mjs` 100/100
+  (right-click, keyboard, clamp, actions, trash confirmation, light/dark and
+  320 px WCAG A/AA), `web-markup.mjs` 20/20, `web-budget.mjs` 1.77 MiB brotli,
+  and a 20-second Xvfb desktop boot smoke. Not deployed yet.
 - `notes-app`: **Firefox survives opening a Write-mode link**. Ctrl+click,
   Ctrl+Enter and the footer chip now open a destination by clicking a temporary
   hidden `<a target="_blank" rel="noopener noreferrer">` instead of calling

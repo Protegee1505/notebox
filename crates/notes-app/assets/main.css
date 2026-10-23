@@ -758,6 +758,202 @@ kbd {
   outline-offset: -2px;
 }
 
+/* ---------- note card context menu ---------- */
+
+.note-context-menu {
+  position: fixed;
+  z-index: 66;
+  width: min(16.5rem, calc(100vw - var(--space-4)));
+  max-height: calc(var(--app-height, 100dvh) - var(--space-4));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  visibility: hidden;
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 2.35rem;
+  padding: var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.context-menu-item:hover {
+  background: var(--surface-2);
+}
+
+.context-menu-item:focus-visible,
+.context-menu-swatch:focus-visible,
+.context-menu-color-none:focus-visible,
+.context-menu-back:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.context-menu-item .icon {
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+  color: var(--muted);
+}
+
+.context-menu-item.is-danger {
+  color: var(--danger);
+}
+
+.context-menu-item.is-danger .icon {
+  color: var(--danger);
+}
+
+.context-menu-item.is-danger:hover {
+  background: var(--danger-soft);
+}
+
+.context-menu-check {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  margin-left: auto;
+  color: var(--primary);
+}
+
+.context-menu-check .icon {
+  width: 0.95rem;
+  height: 0.95rem;
+  color: var(--primary);
+}
+
+.context-menu-value {
+  max-width: 55%;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-menu-sep {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background: var(--border);
+}
+
+.context-menu-group {
+  padding: var(--space-1) var(--space-1) var(--space-2);
+}
+
+.context-menu-label {
+  padding: 0 var(--space-2) var(--space-1);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.context-menu-swatches {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-1);
+  justify-items: center;
+}
+
+.context-menu-swatch {
+  display: grid;
+  place-items: center;
+  width: 1.8rem;
+  height: 1.8rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+}
+
+.context-menu-swatch:hover {
+  background: var(--surface-2);
+}
+
+.context-menu-swatch.is-active {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 22%, transparent);
+}
+
+.context-menu-color-none {
+  grid-column: 1 / -1;
+  justify-self: stretch;
+  padding: var(--space-1) var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--text-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.context-menu-color-none:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.context-menu-color-none.is-active {
+  color: var(--primary);
+}
+
+.context-menu-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2) var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.context-menu-back {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 1.8rem;
+  height: 1.8rem;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.context-menu-back:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.context-menu-back .icon {
+  width: 1rem;
+  height: 1rem;
+}
+
+.context-menu-label-row {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .account-action:disabled {
   cursor: default;
   opacity: 0.6;
@@ -1216,6 +1412,11 @@ kbd {
 .note-card.is-selected {
   border-color: var(--primary);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 30%, transparent);
+}
+
+.note-card.is-menu-target {
+  outline: 2px solid color-mix(in srgb, var(--primary) 55%, transparent);
+  outline-offset: 2px;
 }
 
 .note-card.is-trashed {

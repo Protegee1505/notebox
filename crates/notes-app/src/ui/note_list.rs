@@ -18,6 +18,7 @@ pub fn NoteList() -> Element {
     let notes = state.notes.clone();
     let snippets = state.snippets.clone();
     let selected = state.selected;
+    let menu_target = state.note_menu.map(|menu| menu.note_id);
     let confirm_empty = state.confirm_empty_trash;
     let tag = state.tag.clone();
     let notebook = state.notebook.and_then(|id| {
@@ -225,6 +226,14 @@ pub fn NoteList() -> Element {
                     role: "listbox",
                     aria_label: "Notes",
                     aria_multiselectable: "false",
+                    onscroll: {
+                        let context = context.clone();
+                        move |_| {
+                            if context.state.peek().note_menu.is_some() {
+                                context.close_note_menu(false);
+                            }
+                        }
+                    },
                     for note in notes {
                         NoteCard {
                             key: "{note.id}",
@@ -232,6 +241,7 @@ pub fn NoteList() -> Element {
                             snippet: snippets.iter().find(|(id, _)| *id == note.id).map(|(_, text)| text.clone()),
                             query: search.clone(),
                             selected: selected == Some(note.id),
+                            menu_open: menu_target == Some(note.id),
                             trash_view: view == NoteView::Trash,
                         }
                     }
@@ -262,6 +272,7 @@ fn NoteCard(
     snippet: Option<String>,
     query: String,
     selected: bool,
+    menu_open: bool,
     trash_view: bool,
 ) -> Element {
     let context = use_context::<AppContext>();
@@ -305,11 +316,28 @@ fn NoteCard(
     };
     let edited = edited_label(stamp);
     let class = format!(
-        "note-card {color}{}{}{}",
+        "note-card {color}{}{}{}{}",
         if has_image { " has-image" } else { "" },
         if selected { " is-selected" } else { "" },
+        if menu_open { " is-menu-target" } else { "" },
         if trash_view { " is-trashed" } else { "" }
     );
+    let card_id = format!("note-card-{id}");
+    let keyboard_card_id = card_id.clone();
+    let open_menu_from_keyboard = move || {
+        let _ = document::eval(&format!(
+            r#"const card = document.getElementById('{keyboard_card_id}');
+            if (!card) return;
+            const box = card.getBoundingClientRect();
+            card.dispatchEvent(new MouseEvent('contextmenu', {{
+                bubbles: true,
+                cancelable: true,
+                button: 2,
+                clientX: box.right - 12,
+                clientY: box.top + 24,
+            }}));"#
+        ));
+    };
     let activate = {
         let context = context.clone();
         let query = query.clone();
@@ -324,16 +352,29 @@ fn NoteCard(
 
     rsx! {
         article {
+            id: "{card_id}",
             class: "{class}",
             role: "option",
             tabindex: "0",
             aria_selected: if selected { "true" } else { "false" },
+            aria_haspopup: "menu",
+            aria_keyshortcuts: "Shift+F10",
             onclick: {
                 let activate = activate.clone();
                 move |_| activate()
             },
+            oncontextmenu: {
+                let context = context.clone();
+                move |event| {
+                    event.prevent_default();
+                    event.stop_propagation();
+                    let point = event.client_coordinates();
+                    context.open_note_menu(id, point.x, point.y);
+                }
+            },
             onkeydown: {
                 let activate = activate.clone();
+                let open_menu_from_keyboard = open_menu_from_keyboard.clone();
                 move |event| {
                     match event.key() {
                         Key::Enter => {
@@ -367,6 +408,14 @@ fn NoteCard(
                             let _ = document::eval(
                                 "document.activeElement?.parentElement?.lastElementChild?.focus();",
                             );
+                        }
+                        Key::F10 if event.modifiers().contains(Modifiers::SHIFT) => {
+                            event.prevent_default();
+                            open_menu_from_keyboard();
+                        }
+                        Key::ContextMenu => {
+                            event.prevent_default();
+                            open_menu_from_keyboard();
                         }
                         _ => {}
                     }

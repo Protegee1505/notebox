@@ -9,8 +9,8 @@ use notes_store::NoteView;
 use crate::commands::filtered;
 use crate::state::{AppContext, Screen};
 use crate::ui::{
-    CommandPalette, EditorPane, LoginScreen, NoteList, SettingsPane, ShortcutSheet, Sidebar,
-    ToastView, TopBar, UpdateBanner,
+    CommandPalette, EditorPane, LoginScreen, NoteContextMenu, NoteList, SettingsPane,
+    ShortcutSheet, Sidebar, ToastView, TopBar, UpdateBanner,
 };
 
 const STYLE: Asset = asset!("/assets/main.css");
@@ -67,6 +67,7 @@ pub fn App() -> Element {
     let sidebar_collapsed = state.sidebar_collapsed;
     let palette_open = state.palette_open;
     let shortcuts_open = state.shortcuts_open;
+    let note_menu = state.note_menu;
     let storage_error = state.storage_error.clone();
     let starting = state.starting;
     let storage_blocked = state.storage_blocked.clone();
@@ -116,6 +117,19 @@ pub fn App() -> Element {
                     }
                     if state.account_open {
                         state.account_open = false;
+                    }
+                    if state.note_menu.is_some() {
+                        state.note_menu = None;
+                    }
+                }
+            },
+            oncontextmenu: {
+                let context = context.clone();
+                move |_| {
+                    // A secondary click outside a card closes a menu that is
+                    // already open, then lets the platform handle the click.
+                    if context.state.peek().note_menu.is_some() {
+                        context.close_note_menu(false);
                     }
                 }
             },
@@ -179,6 +193,9 @@ pub fn App() -> Element {
                 }
             }
 
+            if let Some(menu) = note_menu {
+                NoteContextMenu { key: "{menu.note_id}-{menu.x}-{menu.y}", menu }
+            }
             if palette_open {
                 CommandPalette {}
             }
@@ -206,6 +223,9 @@ fn handle_shortcut(context: &AppContext, event: &KeyboardEvent) {
     if !command {
         return;
     }
+    // Every command changes the view or the document, so a card menu must not
+    // stay open while its target may be moving.
+    context.close_note_menu(false);
     let shift = modifiers.contains(Modifiers::SHIFT);
     match key {
         Key::Character(value) => match value.to_lowercase().as_str() {

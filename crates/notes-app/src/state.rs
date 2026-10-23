@@ -183,6 +183,17 @@ impl PendingRestore {
     }
 }
 
+/// Note actions opened from a card with the secondary mouse button.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NoteMenu {
+    /// Note the menu acts on.
+    pub note_id: NoteId,
+    /// Viewport coordinate of the pointer.
+    pub x: f64,
+    /// Viewport coordinate of the pointer.
+    pub y: f64,
+}
+
 /// The local profile badge. Sync details live in [`SyncUi`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Profile {
@@ -334,6 +345,8 @@ pub struct AppState {
     pub browsing: bool,
     /// Account panel under the avatar.
     pub account_open: bool,
+    /// Note actions menu opened from a card.
+    pub note_menu: Option<NoteMenu>,
     /// Colour menu under the editor header.
     pub color_open: bool,
     /// History panel over the editor.
@@ -459,6 +472,7 @@ impl AppState {
             mobile_list: true,
             browsing: false,
             account_open: false,
+            note_menu: None,
             color_open: false,
             history_open: false,
             history_versions: Vec::new(),
@@ -995,6 +1009,13 @@ impl AppContext {
         state.tags = tags;
         state.note_count = note_count;
         state.attachment_usage = attachment_usage;
+        if state
+            .note_menu
+            .as_ref()
+            .is_some_and(|menu| !state.notes.iter().any(|note| note.id == menu.note_id))
+        {
+            state.note_menu = None;
+        }
         if let Some(notebook) = state.notebook {
             if !state.notebooks.iter().any(|item| item.id == notebook) {
                 state.notebook = None;
@@ -1008,6 +1029,7 @@ impl AppContext {
             let mut state = self.state.write_unchecked();
             state.search = text;
             state.mobile_list = true;
+            state.note_menu = None;
             hide_history(&mut state);
         }
         self.reload();
@@ -1021,6 +1043,7 @@ impl AppContext {
             state.mobile_list = true;
             state.screen = Screen::Notes;
             state.confirm_empty_trash = false;
+            state.note_menu = None;
             hide_history(&mut state);
         }
         self.reload();
@@ -1035,6 +1058,7 @@ impl AppContext {
             state.tag = None;
             state.mobile_list = true;
             state.screen = Screen::Notes;
+            state.note_menu = None;
             hide_history(&mut state);
         }
         self.reload();
@@ -1049,6 +1073,7 @@ impl AppContext {
             state.notebook = None;
             state.mobile_list = true;
             state.screen = Screen::Notes;
+            state.note_menu = None;
             hide_history(&mut state);
         }
         self.reload();
@@ -1565,6 +1590,7 @@ impl AppContext {
             if open {
                 state.editor_mode = EditorMode::Write;
                 state.account_open = false;
+                state.note_menu = None;
             } else {
                 state.find_query.clear();
                 state.find_index = 0;
@@ -1701,6 +1727,119 @@ impl AppContext {
         ));
     }
 
+    /// Open a note chosen from its card menu.
+    pub fn open_note_from_menu(&self, id: NoteId) {
+        self.close_note_menu(false);
+        self.select_note(id);
+        if self.state.peek().selected == Some(id) {
+            self.focus_note_card(id);
+        }
+    }
+
+    /// Open a note and its history panel from the card menu.
+    pub fn open_history_from_menu(&self, id: NoteId) {
+        self.close_note_menu(false);
+        self.select_note(id);
+        if self.state.peek().selected == Some(id) {
+            self.open_history();
+        }
+    }
+
+    /// Open the card menu at a viewport point.
+    pub fn open_note_menu(&self, id: NoteId, x: f64, y: f64) {
+        let mut state = self.state.write_unchecked();
+        state.note_menu = Some(NoteMenu { note_id: id, x, y });
+        state.account_open = false;
+        state.color_open = false;
+        state.sidebar_open = false;
+    }
+
+    /// Close the card menu, optionally returning focus to its card.
+    pub fn close_note_menu(&self, return_focus: bool) {
+        let menu = self.state.write_unchecked().note_menu.take();
+        if return_focus {
+            if let Some(menu) = menu {
+                self.focus_note_card(menu.note_id);
+            }
+        }
+    }
+
+    fn focus_note_card(&self, id: NoteId) {
+        let _ = document::eval(&format!(
+            "setTimeout(() => {{\
+             const target = document.getElementById('note-card-{id}')\
+                 || document.getElementById('app-root');\
+             target?.focus();\
+             }}, 0);"
+        ));
+    }
+
+    /// Toggle pin from a card menu.
+    pub fn toggle_pin_from_menu(&self, id: NoteId) {
+        self.close_note_menu(false);
+        self.mutate_note(id, |note| {
+            let pinned = note.meta().pinned;
+            note.set_pinned(!pinned)?;
+            Ok(true)
+        });
+        self.focus_note_card(id);
+    }
+
+    /// Toggle archive from a card menu.
+    pub fn toggle_archive_from_menu(&self, id: NoteId) {
+        self.close_note_menu(false);
+        self.mutate_note(id, |note| {
+            let archived = note.meta().archived;
+            note.set_archived(!archived)?;
+            Ok(true)
+        });
+        self.focus_note_card(id);
+    }
+
+    /// Set or clear a note's colour from its card menu.
+    pub fn set_color_from_menu(&self, id: NoteId, color: Option<&str>) {
+        self.close_note_menu(false);
+        let color = color.map(str::to_string);
+        self.mutate_note(id, move |note| {
+            note.set_color(color.as_deref())?;
+            Ok(true)
+        });
+        self.focus_note_card(id);
+    }
+
+    /// Move a note to a notebook from its card menu.
+    pub fn set_notebook_from_menu(&self, id: NoteId, notebook_id: Option<NotebookId>) {
+        self.close_note_menu(false);
+        self.mutate_note(id, move |note| {
+            note.set_notebook(notebook_id)?;
+            Ok(true)
+        });
+        self.focus_note_card(id);
+    }
+
+    /// Move a note to the trash from its card menu.
+    ///
+    /// The existing delete preference and inline confirmation stay the only
+    /// path, so the menu does not add a second confirmation UI.
+    pub fn trash_from_menu(&self, id: NoteId) {
+        self.close_note_menu(false);
+        if self.state.peek().selected != Some(id) {
+            self.select_note(id);
+        }
+        if self.state.peek().selected == Some(id) {
+            self.trash_selected();
+        }
+    }
+
+    /// Restore a trashed note from its card menu.
+    pub fn restore_from_menu(&self, id: NoteId) {
+        self.close_note_menu(false);
+        self.restore_note(id);
+        if self.state.peek().selected == Some(id) {
+            self.focus_note_card(id);
+        }
+    }
+
     /// Toggle pin on the open note.
     pub fn toggle_pin(&self) {
         self.mutate_selected(|note| {
@@ -1787,6 +1926,7 @@ impl AppContext {
 
     fn trash_note(&self, id: NoteId) {
         self.save_now();
+        let was_selected = self.state.peek().selected == Some(id);
         let Some(store) = self.store() else {
             return;
         };
@@ -1794,10 +1934,12 @@ impl AppContext {
             Ok(true) => {
                 self.state.write_unchecked().pending_delete = None;
                 self.reload();
-                let next = self.state.peek().notes.first().map(|note| note.id);
-                match next {
-                    Some(next) => self.select_note(next),
-                    None => self.clear_selection(),
+                if was_selected {
+                    let next = self.state.peek().notes.first().map(|note| note.id);
+                    match next {
+                        Some(next) => self.select_note(next),
+                        None => self.clear_selection(),
+                    }
                 }
                 self.toast_info("Moved to trash");
             }
@@ -1914,10 +2056,18 @@ impl AppContext {
     }
 
     fn mutate_selected(&self, edit: impl FnOnce(&Note) -> Result<bool, notes_core::NoteError>) {
-        self.save_now();
         let Some(id) = self.state.peek().selected else {
             return;
         };
+        self.mutate_note(id, edit);
+    }
+
+    fn mutate_note(
+        &self,
+        id: NoteId,
+        edit: impl FnOnce(&Note) -> Result<bool, notes_core::NoteError>,
+    ) {
+        self.save_now();
         let Some(store) = self.store() else {
             return;
         };
@@ -2853,6 +3003,7 @@ impl AppContext {
             state.find_open = false;
             state.color_open = false;
             state.account_open = false;
+            state.note_menu = None;
         }
         if let Some(version_id) = selected {
             self.load_history_version(&version_id);
@@ -2994,6 +3145,7 @@ impl AppContext {
         if open {
             state.sidebar_open = false;
             state.color_open = false;
+            state.note_menu = None;
         }
     }
 
@@ -3013,6 +3165,7 @@ impl AppContext {
     /// Close overlays, or leave the editor on a phone.
     pub fn escape(&self) {
         let mut return_to_account = false;
+        let mut return_to_menu_card = None;
         let close_gallery = self.state.peek().gallery_open;
         if close_gallery {
             self.close_attachment_gallery();
@@ -3020,7 +3173,9 @@ impl AppContext {
         }
         {
             let mut state = self.state.write_unchecked();
-            if state.pending_delete.is_some() {
+            if let Some(menu) = state.note_menu.take() {
+                return_to_menu_card = Some(menu.note_id);
+            } else if state.pending_delete.is_some() {
                 state.pending_delete = None;
             } else if state.palette_open {
                 state.palette_open = false;
@@ -3047,6 +3202,9 @@ impl AppContext {
                 state.mobile_list = true;
             }
         }
+        if let Some(id) = return_to_menu_card {
+            self.focus_note_card(id);
+        }
         if return_to_account {
             let _ = document::eval("document.getElementById('account-button')?.focus();");
         }
@@ -3061,6 +3219,7 @@ impl AppContext {
             state.palette_query.clear();
             state.palette_index = 0;
             state.account_open = false;
+            state.note_menu = None;
         }
         self.focus_palette();
     }
@@ -3093,6 +3252,7 @@ impl AppContext {
             state.palette_open = false;
             state.shortcuts_open = false;
             state.sidebar_open = false;
+            state.note_menu = None;
         }
         let _ = document::eval(
             "setTimeout(() => { const el = document.getElementById('global-search'); if (el) { el.focus(); el.select(); } }, 30);",
@@ -3117,6 +3277,7 @@ impl AppContext {
         state.shortcuts_open = true;
         state.palette_open = false;
         state.account_open = false;
+        state.note_menu = None;
     }
 
     /// Expand the sign-in details form with the current username.
@@ -4901,6 +5062,7 @@ fn attachment_set_changed(draft: &str, attachments: &[Attachment]) -> bool {
 /// menu but every tap would still land on its backdrop.
 fn hide_editor_overlays(state: &mut AppState) {
     state.account_open = false;
+    state.note_menu = None;
     state.color_open = false;
     state.find_open = false;
     state.find_query.clear();
