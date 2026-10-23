@@ -56,8 +56,22 @@ editor now keeps its add-tag field, its tag chips fold away while the note body
 scrolls, and no light row is left below the app when the keyboard opens.
 Write mode now tints and underlines links and images; Ctrl/Cmd+click,
 Ctrl+Enter or a footer chip opens them, with a tap-then-chip path on phones.
+The Write-mode reading column is centered again on wide windows.
 
 ## Shipped
+
+- `notes-app`: **the Write-mode reading column centers again on wide windows**.
+  The `.editor-text` rule that keeps the textarea and the highlight mirror on
+  the same line grid carried `margin: 0`, which reset `.note-editor`'s
+  `margin: 0 auto` at equal specificity. The 52 rem column therefore stayed
+  against the left edge of a wide editor pane, leaving the right side empty
+  beside the textarea's scrollbar. The margin reset now sits on the mirror
+  `<pre>` only, and the highlight sync watches the editor body so collapsing
+  the sidebar repositions the mirror without a resize. Preview mode was never
+  affected. No auth, sync, schema or dependency change. Verified with 262
+  native tests passed and one skipped, `cargo fmt --all --check`, `cargo clippy
+  --workspace --all-targets -- -D warnings`, `cargo deny check` and
+  `scripts/budget-check`.
 
 - `notes-app`: **right-click a note card for note actions**. A card opens one
   HTML/CSS menu on desktop and web with Open, Pin/Unpin, Archive/Unarchive,

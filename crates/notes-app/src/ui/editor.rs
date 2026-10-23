@@ -68,6 +68,20 @@ const EDITOR_SYNC_SCRIPT: &str = r#"
       editor.__noteboxMirrorObserver = observer;
       observer.observe(editor);
     }
+    // Centering the reading column ties the mirror to the pane's left edge as
+    // well as the textarea's size. Collapsing the sidebar moves the column
+    // without resizing it, so watch the offset parent too.
+    if (!editor.__noteboxMirrorPaneObserver && 'ResizeObserver' in window) {
+      const paneObserver = new ResizeObserver(() => {
+        if (!editor.isConnected) {
+          paneObserver.disconnect();
+          return;
+        }
+        schedule();
+      });
+      editor.__noteboxMirrorPaneObserver = paneObserver;
+      if (editor.offsetParent) paneObserver.observe(editor.offsetParent);
+    }
   };
   const schedule = () => {
     if (window.__noteboxSyncFrame) return;
