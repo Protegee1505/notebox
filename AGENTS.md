@@ -50,9 +50,13 @@ shells use `~/.config/notebox/bash-env.sh` through `BASH_ENV`.
   running: `./scripts/cloudshell-seed.sh save --all`.
 - `./scripts/cloudshell-seed.sh status` marks a seed `current` or
   `stale: ...`; save again after a `Cargo.lock`, toolchain or dx change.
-- Keep 1200 MiB free on `/home`; `scripts/budget-check` keeps a 512 MiB hard
-  floor. If space is tight, `./scripts/cloudshell-seed.sh prune --target`
-  removes the target seed first.
+- Keep 1200 MiB free on `/home`; `scripts/budget-check` keeps a 1200 MiB hard
+  floor and checks every worktree target. If space is tight,
+  `./scripts/cloudshell-seed.sh prune --target` removes the target seed first.
+- Every worktree and clone must have its `target` under `/tmp/opencode`.
+  `scripts/build-guard.sh` redirects new `cargo`/`dx` builds; check with
+  `./scripts/disk-guard.sh --status`. If a real target is in `/home`, stop the
+  build and run `./scripts/disk-guard.sh --fix`.
 - The boot hook writes start/finish lines with the boot id to
   `~/.cache/notebox-build/boot.log`. A missing start line means the hook did
   not run; the `BASH_ENV` path still repairs on the first shell.

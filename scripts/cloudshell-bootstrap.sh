@@ -154,6 +154,9 @@ show_status() {
   else
     printf 'build: idle\n'
   fi
+  if [ -f "$ROOT/scripts/disk-guard.sh" ]; then
+    bash "$ROOT/scripts/disk-guard.sh" --status 2>/dev/null || true
+  fi
 }
 
 if [ "$status_mode" -eq 1 ]; then
@@ -196,6 +199,14 @@ fi
 # Remove leftovers from an interrupted extraction. No other bootstrap can be
 # using them while this process holds the lock.
 rm -rf "$STORE"/.restore-base.* "$STORE"/.restore-target.* 2>/dev/null || true
+
+# A git worktree does not inherit the main checkout's untracked
+# .cargo/config.toml. Sweep every checkout before the early-exit path below;
+# this is what catches a target that a new worktree wrote into /home.
+if [ -f "$ROOT/scripts/disk-guard.sh" ]; then
+  bash "$ROOT/scripts/disk-guard.sh" --fix --quiet ||
+    log "warning: disk guard could not repair a target on /home"
+fi
 
 if [ "$force" -eq 0 ] && layout_ok; then
   exit 0

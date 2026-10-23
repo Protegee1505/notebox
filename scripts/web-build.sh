@@ -16,6 +16,24 @@ unset BASH_ENV
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
+# A worktree does not share this checkout's untracked .cargo/config.toml. On
+# Cloud Shell, keep this checkout's target on the overlay disk; a worktree
+# target once grew to 2.8 GB inside the 4.8 GB /home.
+guard="$root/scripts/disk-guard.sh"
+if [ -d "${NOTEBOX_BUILD_HOME:-/tmp/opencode}" ] && [ -f "$guard" ]; then
+  bash "$guard" --ensure --quiet --root "$root"
+  bash "$guard" --check --strict --quiet --root "$root"
+
+  if [ -n "${CARGO_TARGET_DIR:-}" ]; then
+    case "$(readlink -f "$CARGO_TARGET_DIR" 2>/dev/null || printf '%s' "$CARGO_TARGET_DIR")" in
+      "$HOME"/*)
+        echo "web-build: CARGO_TARGET_DIR is on /home; run scripts/disk-guard.sh --fix" >&2
+        exit 1
+        ;;
+    esac
+  fi
+fi
+
 target="${CARGO_TARGET_DIR:-$root/target}"
 
 ensure_clang() {

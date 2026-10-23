@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Keep Cargo, Rust, npm, yarn, dx and Playwright caches off a small /home
-# partition. This workspace's home partition is 4.8 GB while the overlay disk
-# has tens of GB free.
+# Keep Cargo, Rust, npm, yarn, worker-build, dx and Playwright caches off a small
+# /home partition. This workspace's home partition is 4.8 GB while the overlay
+# disk has tens of GB free.
 #
 # Usage:
 #   scripts/relocate-caches.sh [--repair] [--force] [STORE]
@@ -78,8 +78,8 @@ target_store=$(cd "$target_store" && pwd)
 needs_repair=0
 for src in \
   "$HOME/.cargo" "$HOME/.rustup" "$HOME/.npm" "$HOME/.dx" \
-  "$HOME/.local/share/.dx" "$HOME/.cache/yarn" \
-  "$HOME/.cache/ms-playwright" "$root/target"; do
+  "$HOME/.local/share/.dx" "$HOME/.cache/yarn" "$HOME/.config/yarn" \
+  "$HOME/.cache/worker-build" "$HOME/.cache/ms-playwright" "$root/target"; do
   if [ -L "$src" ] && [ ! -e "$src" ]; then
     needs_repair=1
   elif [ ! -e "$src" ] && [ ! -L "$src" ]; then
@@ -147,6 +147,8 @@ link_dir "$HOME/.npm" "$store/npm"
 link_dir "$HOME/.dx" "$store/dx"
 link_dir "$HOME/.local/share/.dx" "$store/dx-tools"
 link_dir "$HOME/.cache/yarn" "$store/yarn"
+link_dir "$HOME/.config/yarn" "$store/yarn-config"
+link_dir "$HOME/.cache/worker-build" "$store/worker-build"
 
 # Browser downloads are large and are only needed for local web checks. Create
 # the target even when it is empty so Playwright can install into it later.

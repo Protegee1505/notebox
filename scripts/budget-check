@@ -10,6 +10,7 @@ ran so a green result cannot be mistaken for a performance pass.
 from __future__ import annotations
 
 import shutil
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -19,8 +20,9 @@ BUDGETS = ROOT / "docs" / "budgets.toml"
 
 # Building must not fill the home partition: on this workspace it is only
 # 4.8 GB, while the overlay disk is much larger. Caches and the Cargo target
-# directory live outside home; see docs/DISK.md.
-HOME_FREE_FLOOR = 512 * 1024 * 1024
+# directory live outside home; see docs/DISK.md. Keep enough headroom for a
+# seed restore or a new worktree before the target guard can move it.
+HOME_FREE_FLOOR = 1200 * 1024 * 1024
 
 # Ceilings from PLAN.md, "Starting budgets".
 CEILINGS = {
@@ -54,6 +56,26 @@ def main() -> int:
             "free; move build caches off it (see docs/DISK.md)"
         )
 
+    guard = ROOT / "scripts" / "disk-guard.sh"
+    guard_checked = False
+    if guard.is_file():
+        result = subprocess.run(
+            ["bash", str(guard), "--check", "--quiet"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        guard_checked = True
+        if result.returncode != 0:
+            detail = " ".join(
+                line
+                for line in (result.stderr or result.stdout).splitlines()
+                if line.strip()
+            )
+            failures.append(
+                detail or "a Cargo target is still on the home partition"
+            )
+
     for (section, key), ceiling in CEILINGS.items():
         value = data.get(section, {}).get(key)
         if value is None:
@@ -68,8 +90,10 @@ def main() -> int:
         return 1
 
     print(
-        "budget-check: PASS (static ceilings only; runtime measurements not "
-        f"collected yet); {home_free // (1024 * 1024)} MiB free on {home}"
+        "budget-check: PASS (static ceilings"
+        f"{' and home target guard' if guard_checked else ''}; runtime "
+        f"measurements not collected yet); {home_free // (1024 * 1024)} MiB "
+        f"free on {home}"
     )
     return 0
 
