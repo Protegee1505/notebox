@@ -19,6 +19,8 @@ capture() {
     mkdir -p "$ARTIFACTS_DIR"
     adb exec-out screencap -p >"$ARTIFACTS_DIR/android-smoke.png" 2>/dev/null || true
     adb logcat -d >"$ARTIFACTS_DIR/android-logcat.txt" 2>/dev/null || true
+    adb shell dumpsys activity activities \
+        >"$ARTIFACTS_DIR/android-activities.txt" 2>&1 || true
     adb shell run-as "$PACKAGE" ls -l files \
         >"$ARTIFACTS_DIR/android-files.txt" 2>&1 || true
 }
@@ -72,8 +74,11 @@ start_and_wait() {
 }
 
 start_and_wait
-sleep 20
+sleep 10
+adb exec-out screencap -p >"$ARTIFACTS_DIR/android-smoke-launch.png"
+sleep 10
 adb shell run-as "$PACKAGE" ls -l files >"$ARTIFACTS_DIR/android-files.txt" 2>&1 || true
+adb shell dumpsys activity activities >"$ARTIFACTS_DIR/android-activities.txt" 2>&1 || true
 adb exec-out screencap -p >"$ARTIFACTS_DIR/android-smoke.png"
 adb logcat -d >"$ARTIFACTS_DIR/android-logcat.txt"
 
