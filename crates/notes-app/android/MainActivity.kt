@@ -8,11 +8,11 @@ import android.content.ContentValues
 import android.content.Intent
 import android.database.Cursor
 import android.database.MatrixCursor
-import android.media.MediaStore
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.system.Os
 import android.view.KeyEvent
@@ -21,6 +21,7 @@ import android.webkit.WebView
 import android.widget.Toast
 import org.json.JSONObject
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.InputStream
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
@@ -479,9 +480,17 @@ class CameraOutputProvider : ContentProvider() {
         selectionArgs: Array<out String>?,
         sortOrder: String?,
     ): Cursor {
-        val file = cameraFile(uri)
         val columns = projection
             ?: arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE)
+        val cursor = MatrixCursor(columns, 1)
+        // Some camera apps ask for metadata before they open the output. An
+        // empty cursor is friendlier than an exception and the capture still
+        // writes the file when it opens it.
+        val file = try {
+            cameraFile(uri)
+        } catch (_: FileNotFoundException) {
+            return cursor
+        }
         val row = columns.map { column ->
             when (column) {
                 OpenableColumns.DISPLAY_NAME -> file.name
@@ -489,7 +498,8 @@ class CameraOutputProvider : ContentProvider() {
                 else -> null
             }
         }
-        return MatrixCursor(columns, 1).apply { addRow(row) }
+        cursor.addRow(row)
+        return cursor
     }
 
     override fun getType(uri: Uri): String = "image/jpeg"
@@ -510,7 +520,7 @@ class CameraOutputProvider : ContentProvider() {
         val root = File(requireNotNull(context).cacheDir, "camera").canonicalFile
         val file = File(root, name).canonicalFile
         if (file.parentFile != root) throw SecurityException("Camera path escapes the cache")
-        if (!file.isFile) throw java.io.FileNotFoundException("No such camera file")
+        if (!file.isFile) throw FileNotFoundException("No such camera file")
         return file
     }
 }
