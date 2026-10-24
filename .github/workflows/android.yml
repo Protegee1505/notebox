@@ -221,10 +221,10 @@ jobs:
           retention-days: 7
 
   smoke:
-    name: Emulator smoke
+    name: Emulator smoke and sync drill
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -232,6 +232,29 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cache worker-build
+        id: worker-build-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/worker-build
+            ~/.cargo/bin/worker-codegen
+          key: worker-build-0.8.7-${{ runner.os }}
+
+      - name: Install worker-build
+        if: steps.worker-build-cache.outputs.cache-hit != 'true'
+        run: cargo install worker-build --version 0.8.7 --locked
 
       - uses: actions/download-artifact@v4
         with:
@@ -248,7 +271,7 @@ jobs:
           sudo udevadm trigger --name-match=kvm
           ls -l /dev/kvm
 
-      - name: Boot, install and launch the APK
+      - name: Boot, install, smoke and sync
         uses: ReactiveCircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -261,7 +284,8 @@ jobs:
           emulator-options: >-
             -no-window -no-audio -no-boot-anim -no-snapshot
             -gpu swiftshader_indirect -camera-back none -camera-front none
-          script: bash scripts/android-smoke.sh
+          # One line so a failed smoke test stops the job before the drill.
+          script: bash scripts/android-smoke.sh && APK=dist/android/notebox-debug-x86_64.apk node scripts/android-sync.mjs
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -275,5 +299,11 @@ jobs:
             android-files.txt
             android-providers.txt
             android-logcat.txt
+            android-sync.png
+            android-sync-logcat.txt
+            android-sync-report.json
+            android-sync-proxy.log
+            android-sync-worker.log
+            android-sync.log
           if-no-files-found: ignore
           retention-days: 7
