@@ -168,10 +168,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          apk="$(find target/dx/notebox/bundle/android -type f -name 'app-debug.apk' -print -quit)"
+          apk="$(find target/dx/notebox -type f -name 'app-debug.apk' -print -quit)"
           if [ -z "$apk" ]; then
             echo "::error::dx did not produce app-debug.apk."
-            find target/dx/notebox/bundle/android -type f -name '*.apk' -print || true
+            find target/dx/notebox -type f -name '*.apk' -print || true
             exit 1
           fi
 

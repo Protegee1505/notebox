@@ -432,10 +432,10 @@ jobs:
           set -euo pipefail
           dx bundle -p notes-app --platform android --release --features mobile \
             --package-types apk
-          apk="$(find target/dx/notebox/bundle/android -type f -name 'app-release.apk' -print -quit)"
+          apk="$(find target/dx/notebox -type f -name 'app-release.apk' -print -quit)"
           if [ -z "$apk" ]; then
             echo "::error::dx did not produce app-release.apk. Refusing to publish a debug build."
-            find target/dx/notebox/bundle/android -type f -name '*.apk' -print || true
+            find target/dx/notebox -type f -name '*.apk' -print || true
             exit 1
           fi
 
