@@ -83,6 +83,12 @@ class MainActivity : WryActivity() {
 
     override fun onWebViewCreate(webView: WebView) {
         this.webView = webView
+        // The emulator sync drill attaches over CDP. wry enables this for
+        // devtools builds already; making it explicit keeps the debug gate in
+        // this activity instead of a dependency default.
+        if (BuildConfig.DEBUG) {
+            WebView.setWebContentsDebuggingEnabled(true)
+        }
         webView.addJavascriptInterface(Bridge(), "NoteboxAndroid")
     }
 
