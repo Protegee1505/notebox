@@ -230,6 +230,20 @@ pub(crate) fn database_path() -> std::path::PathBuf {
     data_directory().join("notebox.db")
 }
 
+/// Scratch space for files handed to the Android document picker.
+///
+/// Android cannot read the app's private database from the system file UI, so
+/// exports are written here first and Kotlin copies the chosen file out.
+#[cfg(target_os = "android")]
+pub(crate) fn cache_directory() -> std::path::PathBuf {
+    let directory = match std::env::var_os("NOTEBOX_CACHE_DIR") {
+        Some(value) => std::path::PathBuf::from(value),
+        None => data_directory().join("cache"),
+    };
+    let _ = std::fs::create_dir_all(&directory);
+    directory
+}
+
 /// The device token file. Only the owner can read it.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn session_path() -> std::path::PathBuf {

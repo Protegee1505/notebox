@@ -489,10 +489,9 @@ pub fn SettingsPane() -> Element {
                             class: "secondary-button",
                             r#type: "button",
                             aria_label: "Restore from backup",
-                            onclick: move |_| {
-                                let _ = document::eval(
-                                    "document.getElementById('restore-backup-input')?.click();",
-                                );
+                            onclick: {
+                                let context = context.clone();
+                                move |_| context.pick_restore()
                             },
                             Icon { name: "upload" }
                             span { "Restore from backup" }

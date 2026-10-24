@@ -59,6 +59,24 @@ pub fn App() -> Element {
         }
     });
 
+    // Android's WebView owns the file pickers and the system Back gesture.
+    // Keep one eval alive so Kotlin can send results and lifecycle events to
+    // Rust without a JNI callback or unsafe code.
+    #[cfg(target_os = "android")]
+    {
+        let bridge_context = context.clone();
+        use_future(move || {
+            let context = bridge_context.clone();
+            async move {
+                crate::android::listen(context).await;
+            }
+        });
+        let back_context = context.clone();
+        use_effect(move || {
+            crate::android::set_can_go_back(back_context.can_go_back());
+        });
+    }
+
     let state = context.state.read();
     let screen = state.screen;
     let theme = state.theme;

@@ -78,6 +78,10 @@ sleep 10
 adb exec-out screencap -p >"$ARTIFACTS_DIR/android-smoke-launch.png"
 sleep 10
 adb shell run-as "$PACKAGE" ls -l files >"$ARTIFACTS_DIR/android-files.txt" 2>&1 || true
+if ! grep -q "notebox.db" "$ARTIFACTS_DIR/android-files.txt"; then
+    log "The app did not create its database in app-private files"
+    exit 1
+fi
 adb shell dumpsys activity activities >"$ARTIFACTS_DIR/android-activities.txt" 2>&1 || true
 adb exec-out screencap -p >"$ARTIFACTS_DIR/android-smoke.png"
 adb logcat -d >"$ARTIFACTS_DIR/android-logcat.txt"

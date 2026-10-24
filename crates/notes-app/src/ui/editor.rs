@@ -622,10 +622,9 @@ pub fn EditorPane() -> Element {
                     ToolButton {
                         icon: "image",
                         label: "Add image",
-                        onpick: move |_| {
-                            let _ = document::eval(
-                                "document.getElementById('note-image-input')?.click();",
-                            );
+                        onpick: {
+                            let context = context.clone();
+                            move |_| context.pick_image()
                         },
                     }
                 }

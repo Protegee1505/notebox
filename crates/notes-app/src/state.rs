@@ -1458,84 +1458,130 @@ impl AppContext {
         if files.is_empty() {
             return;
         }
-        if self.state.peek().selected.is_none() {
-            self.toast_info("Open a note before adding an image");
+        let count = files.len();
+        if !self.begin_attach(count) {
             return;
         }
-        let count = files.len();
-        self.state.write_unchecked().attaching += count;
 
         let context = self.clone();
         spawn(async move {
-            let mut snippets = Vec::new();
+            let mut named = Vec::new();
             let mut failures = Vec::new();
             for file in files {
                 let name = file.name();
-                let bytes = match read_file_bytes(&file).await {
-                    Ok(bytes) => bytes,
-                    Err(error) => {
-                        failures.push(format!("{name}: {error}"));
-                        continue;
-                    }
-                };
-                let image = match images::ingest(&name, &bytes) {
-                    Ok(image) => image,
-                    Err(error) => {
-                        failures.push(format!("{name}: {error}"));
-                        continue;
-                    }
-                };
-                let Some(store) = context.store() else {
-                    failures.push("storage is not open".to_string());
-                    break;
-                };
-                let stored =
-                    match store.put_attachment(&image.name, image.mime, &image.bytes, now()) {
-                        Ok(stored) => stored,
-                        Err(error) => {
-                            failures.push(format!("{name}: could not store it: {error}"));
-                            continue;
-                        }
-                    };
-                let url = notes_core::attachment_url(&stored.hash, &stored.mime);
-                snippets.push(format!("![{}]({url})", attachment_label(&stored.name)));
+                match read_file_bytes(&file).await {
+                    Ok(bytes) => named.push((name, bytes)),
+                    Err(error) => failures.push(format!("{name}: {error}")),
+                }
             }
-
-            if !snippets.is_empty() {
-                let fallback = context.state.peek().draft.encode_utf16().count();
-                let (start, end) = selected_range(fallback).await;
-                let block = snippets.join("\n\n");
-                let text = context.state.peek().draft.clone();
-                let edit = markdown_ops::insert_block(&text, start, end, &block);
-                context.note_input(edit.text);
-                context.restore_selection(edit.selection);
-                context.save_now();
-                context.toast_success(format!(
-                    "Added {}{}",
-                    snippets.len(),
-                    if snippets.len() == 1 {
-                        " image"
-                    } else {
-                        " images"
-                    }
-                ));
-            }
-            if !failures.is_empty() {
-                let message = if failures.len() == 1 {
-                    failures.remove(0)
-                } else {
-                    format!(
-                        "{} images could not be added. {}",
-                        failures.len(),
-                        failures.remove(0)
-                    )
-                };
-                context.toast_danger(message);
-            }
-
-            let mut state = context.state.write_unchecked();
-            state.attaching = state.attaching.saturating_sub(count);
+            context.store_attachments(count, named, failures).await;
         });
+    }
+
+    /// Add images that Android copied into the app cache for us.
+    ///
+    /// The cache file is removed after it is read; it is not a second copy of
+    /// the attachment. The normal compression and insertion path follows.
+    #[cfg(target_os = "android")]
+    pub fn attach_image_paths(&self, files: Vec<(String, std::path::PathBuf)>) {
+        if files.is_empty() {
+            return;
+        }
+        let count = files.len();
+        if !self.begin_attach(count) {
+            return;
+        }
+
+        let context = self.clone();
+        spawn(async move {
+            let mut named = Vec::new();
+            let mut failures = Vec::new();
+            for (name, path) in files {
+                match std::fs::read(&path) {
+                    Ok(bytes) => {
+                        named.push((name, bytes));
+                        let _ = std::fs::remove_file(path);
+                    }
+                    Err(error) => failures.push(format!("{name}: {error}")),
+                }
+            }
+            context.store_attachments(count, named, failures).await;
+        });
+    }
+
+    fn begin_attach(&self, count: usize) -> bool {
+        if self.state.peek().selected.is_none() {
+            self.toast_info("Open a note before adding an image");
+            return false;
+        }
+        self.state.write_unchecked().attaching += count;
+        true
+    }
+
+    async fn store_attachments(
+        &self,
+        count: usize,
+        files: Vec<(String, Vec<u8>)>,
+        mut failures: Vec<String>,
+    ) {
+        let mut snippets = Vec::new();
+        for (name, bytes) in files {
+            let image = match images::ingest(&name, &bytes) {
+                Ok(image) => image,
+                Err(error) => {
+                    failures.push(format!("{name}: {error}"));
+                    continue;
+                }
+            };
+            let Some(store) = self.store() else {
+                failures.push("storage is not open".to_string());
+                break;
+            };
+            let stored = match store.put_attachment(&image.name, image.mime, &image.bytes, now()) {
+                Ok(stored) => stored,
+                Err(error) => {
+                    failures.push(format!("{name}: could not store it: {error}"));
+                    continue;
+                }
+            };
+            let url = notes_core::attachment_url(&stored.hash, &stored.mime);
+            snippets.push(format!("![{}]({url})", attachment_label(&stored.name)));
+        }
+
+        if !snippets.is_empty() {
+            let fallback = self.state.peek().draft.encode_utf16().count();
+            let (start, end) = selected_range(fallback).await;
+            let block = snippets.join("\n\n");
+            let text = self.state.peek().draft.clone();
+            let edit = markdown_ops::insert_block(&text, start, end, &block);
+            self.note_input(edit.text);
+            self.restore_selection(edit.selection);
+            self.save_now();
+            self.toast_success(format!(
+                "Added {}{}",
+                snippets.len(),
+                if snippets.len() == 1 {
+                    " image"
+                } else {
+                    " images"
+                }
+            ));
+        }
+        if !failures.is_empty() {
+            let message = if failures.len() == 1 {
+                failures.remove(0)
+            } else {
+                format!(
+                    "{} images could not be added. {}",
+                    failures.len(),
+                    failures.remove(0)
+                )
+            };
+            self.toast_danger(message);
+        }
+
+        let mut state = self.state.write_unchecked();
+        state.attaching = state.attaching.saturating_sub(count);
     }
 
     /// Insert an existing attachment's Markdown at the caret.
@@ -2791,7 +2837,26 @@ impl AppContext {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(target_os = "android")]
+    fn deliver_attachment(&self, name: &str, mime: &str, bytes: Vec<u8>) {
+        let directory = storage::cache_directory();
+        let path = unique_download_path(&directory, name);
+        let result = std::fs::create_dir_all(&directory).and_then(|_| std::fs::write(&path, bytes));
+        match result {
+            Ok(()) => {
+                let display = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(name)
+                    .to_string();
+                self.toast_info("Choose where to save the file.");
+                crate::android::save_file(&path, &display, mime, "attachment");
+            }
+            Err(error) => self.toast_danger(format!("Could not prepare the file: {error}")),
+        }
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
     fn deliver_attachment(&self, name: &str, _mime: &str, bytes: Vec<u8>) {
         let directory = storage::export_directory();
         let path = unique_download_path(&directory, name);
@@ -3209,6 +3274,38 @@ impl AppContext {
             let _ = document::eval("document.getElementById('account-button')?.focus();");
         }
         self.save_preferences();
+    }
+
+    /// Whether Android Back should close something instead of leaving the app.
+    ///
+    /// This mirrors [`Self::escape`]'s priority. Login's first run has no safe
+    /// place to go back to, so Back leaves the app there.
+    #[cfg(target_os = "android")]
+    pub fn can_go_back(&self) -> bool {
+        let state = self.state.read();
+        if state.gallery_open
+            || state.note_menu.is_some()
+            || state.pending_delete.is_some()
+            || state.palette_open
+            || state.shortcuts_open
+            || state.account_open
+            || state.find_open
+            || state.sidebar_open
+            || state.color_open
+            || state.history_open
+        {
+            return true;
+        }
+        if state.screen == Screen::Login {
+            return !state.login_first_run;
+        }
+        state.screen == Screen::Settings || !state.mobile_list
+    }
+
+    /// Handle the Android system Back gesture through the normal Escape path.
+    #[cfg(target_os = "android")]
+    pub fn android_back(&self) {
+        self.escape();
     }
 
     /// Open the command palette.
@@ -4710,6 +4807,45 @@ impl AppContext {
         });
     }
 
+    /// Read a backup that Android copied into the app cache.
+    #[cfg(target_os = "android")]
+    pub fn choose_restore_path(&self, name: String, path: std::path::PathBuf) {
+        let context = self.clone();
+        spawn(async move {
+            match std::fs::read(&path) {
+                Ok(bytes) => {
+                    let _ = std::fs::remove_file(path);
+                    context.inspect_restore(name, bytes);
+                }
+                Err(error) => context.toast_danger(format!("Could not read {name}: {error}")),
+            }
+        });
+    }
+
+    /// Open the native Android image picker, or the browser file input elsewhere.
+    pub fn pick_image(&self) {
+        #[cfg(target_os = "android")]
+        {
+            crate::android::pick_image();
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = document::eval("document.getElementById('note-image-input')?.click();");
+        }
+    }
+
+    /// Open the native Android backup picker, or the browser file input elsewhere.
+    pub fn pick_restore(&self) {
+        #[cfg(target_os = "android")]
+        {
+            crate::android::pick_backup();
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = document::eval("document.getElementById('restore-backup-input')?.click();");
+        }
+    }
+
     fn inspect_restore(&self, name: String, bytes: Vec<u8>) {
         if bytes.is_empty() {
             self.toast_danger(format!("{name} is empty"));
@@ -4802,7 +4938,22 @@ impl AppContext {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(target_os = "android")]
+    fn deliver_export(&self, bytes: Vec<u8>) {
+        let directory = storage::cache_directory();
+        let name = format!("notebox-export-{}.zip", crate::time::iso_date(now()));
+        let path = unique_download_path(&directory, &name);
+        let result = std::fs::create_dir_all(&directory).and_then(|_| std::fs::write(&path, bytes));
+        match result {
+            Ok(()) => {
+                self.toast_info("Choose where to save the export.");
+                crate::android::save_file(&path, &name, "application/zip", "export");
+            }
+            Err(error) => self.toast_danger(format!("Could not prepare the export: {error}")),
+        }
+    }
+
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
     fn deliver_export(&self, bytes: Vec<u8>) {
         let directory = storage::export_directory();
         let name = format!("notebox-export-{}.zip", crate::time::iso_date(now()));
