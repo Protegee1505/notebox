@@ -238,7 +238,8 @@ jobs:
             -no-window -no-audio -no-boot-anim -no-snapshot
             -gpu swiftshader_indirect -camera-back none -camera-front none
           script: |
-            set -euo pipefail
+            # android-emulator-runner runs this script with /bin/sh, not bash.
+            set -eu
             adb install -r dist/android/notebox-debug-x86_64.apk
             adb shell am start -W \
               -n app.notebox/dev.dioxus.main.MainActivity
