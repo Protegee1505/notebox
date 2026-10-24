@@ -23,6 +23,8 @@ capture() {
         >"$ARTIFACTS_DIR/android-activities.txt" 2>&1 || true
     adb shell run-as "$PACKAGE" ls -l files \
         >"$ARTIFACTS_DIR/android-files.txt" 2>&1 || true
+    adb shell dumpsys activity providers \
+        >"$ARTIFACTS_DIR/android-providers.txt" 2>&1 || true
 }
 
 status=0
@@ -80,6 +82,13 @@ sleep 10
 adb shell run-as "$PACKAGE" ls -l files >"$ARTIFACTS_DIR/android-files.txt" 2>&1 || true
 if ! grep -q "notebox.db" "$ARTIFACTS_DIR/android-files.txt"; then
     log "The app did not create its database in app-private files"
+    exit 1
+fi
+if ! adb shell dumpsys activity providers 2>/dev/null \
+    | grep -F "$PACKAGE.cameraout" >/dev/null; then
+    log "The camera output provider is not registered"
+    adb shell dumpsys activity providers \
+        >"$ARTIFACTS_DIR/android-providers.txt" 2>&1 || true
     exit 1
 fi
 adb shell dumpsys activity activities >"$ARTIFACTS_DIR/android-activities.txt" 2>&1 || true

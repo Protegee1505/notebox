@@ -187,6 +187,28 @@ jobs:
           grep -q "native-code:.*'${{ matrix.abi }}'" android-badging.txt
           grep -q 'application-debuggable' android-badging.txt
 
+          # Notebox uses the system picker and a camera app, so it must never
+          # ship a camera or storage permission.
+          "$aapt" dump permissions "$apk" | tee android-permissions.txt
+          grep -q "android.permission.INTERNET" android-permissions.txt
+          if grep -Eq \
+            "android.permission.(CAMERA|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|MANAGE_EXTERNAL_STORAGE)" \
+            android-permissions.txt; then
+            echo "::error::The APK asks for a camera or storage permission."
+            exit 1
+          fi
+
+          # The camera provider and the package-visibility queries are the
+          # parts Dioxus has to preserve from the custom manifest.
+          aapt2="$build_tools/aapt2"
+          test -x "$aapt2"
+          "$aapt2" dump xmltree --file AndroidManifest.xml "$apk" > android-manifest.txt
+          grep -q "dev.dioxus.main.CameraOutputProvider" android-manifest.txt
+          grep -q "app.notebox.cameraout" android-manifest.txt
+          grep -q "grantUriPermissions" android-manifest.txt
+          grep -q "android.media.action.IMAGE_CAPTURE" android-manifest.txt
+          grep -q "android.provider.action.PICK_IMAGES" android-manifest.txt
+
           mkdir -p dist/android
           cp "$apk" "dist/android/notebox-debug-${{ matrix.abi }}.apk"
           sha256sum "dist/android/notebox-debug-${{ matrix.abi }}.apk"
@@ -251,6 +273,7 @@ jobs:
             android-smoke-relaunch.png
             android-activities.txt
             android-files.txt
+            android-providers.txt
             android-logcat.txt
           if-no-files-found: ignore
           retention-days: 7
