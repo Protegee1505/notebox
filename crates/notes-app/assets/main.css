@@ -1427,6 +1427,15 @@ kbd {
     transform: none;
     box-shadow: var(--shadow-sm);
   }
+
+  /* A long-press opens the card menu. Without this, Android also starts a
+     native text selection and shows its handles under the menu. The Select
+     text action opts one card back in below. */
+  .note-card {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
 }
 
 .note-card.is-selected {
@@ -1441,6 +1450,15 @@ kbd {
 
 .note-card.is-trashed {
   border-style: dashed;
+}
+
+.note-card.is-text-selectable {
+  outline: 2px dashed var(--primary);
+  outline-offset: 2px;
+  cursor: text;
+  -webkit-touch-callout: default;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .note-media {

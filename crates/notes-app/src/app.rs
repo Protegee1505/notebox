@@ -111,15 +111,22 @@ pub fn App() -> Element {
                     // panel dismisses it and still reaches the control under
                     // the finger. There is no full-screen backdrop that could
                     // swallow the tap.
-                    let mut state = context.state.write_unchecked();
-                    if state.color_open {
-                        state.color_open = false;
-                    }
-                    if state.account_open {
-                        state.account_open = false;
-                    }
-                    if state.note_menu.is_some() {
-                        state.note_menu = None;
+                    let cleared_text_selection = {
+                        let mut state = context.state.write_unchecked();
+                        if state.color_open {
+                            state.color_open = false;
+                        }
+                        if state.account_open {
+                            state.account_open = false;
+                        }
+                        if state.note_menu.is_some() {
+                            state.note_menu = None;
+                        }
+                        state.text_select_note.take().is_some()
+                    };
+                    if cleared_text_selection {
+                        let _ =
+                            document::eval("window.getSelection()?.removeAllRanges();");
                     }
                 }
             },
@@ -226,6 +233,7 @@ fn handle_shortcut(context: &AppContext, event: &KeyboardEvent) {
     // Every command changes the view or the document, so a card menu must not
     // stay open while its target may be moving.
     context.close_note_menu(false);
+    context.end_text_selection();
     let shift = modifiers.contains(Modifiers::SHIFT);
     match key {
         Key::Character(value) => match value.to_lowercase().as_str() {

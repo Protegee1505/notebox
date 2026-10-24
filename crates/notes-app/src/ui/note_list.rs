@@ -19,6 +19,7 @@ pub fn NoteList() -> Element {
     let snippets = state.snippets.clone();
     let selected = state.selected;
     let menu_target = state.note_menu.map(|menu| menu.note_id);
+    let text_select_note = state.text_select_note;
     let confirm_empty = state.confirm_empty_trash;
     let tag = state.tag.clone();
     let notebook = state.notebook.and_then(|id| {
@@ -242,6 +243,7 @@ pub fn NoteList() -> Element {
                             query: search.clone(),
                             selected: selected == Some(note.id),
                             menu_open: menu_target == Some(note.id),
+                            select_text: text_select_note == Some(note.id),
                             trash_view: view == NoteView::Trash,
                         }
                     }
@@ -273,6 +275,7 @@ fn NoteCard(
     query: String,
     selected: bool,
     menu_open: bool,
+    select_text: bool,
     trash_view: bool,
 ) -> Element {
     let context = use_context::<AppContext>();
@@ -316,10 +319,15 @@ fn NoteCard(
     };
     let edited = edited_label(stamp);
     let class = format!(
-        "note-card {color}{}{}{}{}",
+        "note-card {color}{}{}{}{}{}",
         if has_image { " has-image" } else { "" },
         if selected { " is-selected" } else { "" },
         if menu_open { " is-menu-target" } else { "" },
+        if select_text {
+            " is-text-selectable"
+        } else {
+            ""
+        },
         if trash_view { " is-trashed" } else { "" }
     );
     let card_id = format!("note-card-{id}");
@@ -361,11 +369,25 @@ fn NoteCard(
             aria_keyshortcuts: "Shift+F10",
             onclick: {
                 let activate = activate.clone();
-                move |_| activate()
+                let context = context.clone();
+                move |event| {
+                    if context.state.peek().text_select_note == Some(id) {
+                        event.prevent_default();
+                        event.stop_propagation();
+                        context.end_text_selection();
+                        return;
+                    }
+                    activate()
+                }
             },
             oncontextmenu: {
                 let context = context.clone();
                 move |event| {
+                    if context.state.peek().text_select_note == Some(id) {
+                        // Let the platform start or extend its text selection
+                        // instead of replacing it with the card menu.
+                        return;
+                    }
                     event.prevent_default();
                     event.stop_propagation();
                     let point = event.client_coordinates();

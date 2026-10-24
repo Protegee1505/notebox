@@ -134,6 +134,22 @@ pub fn NoteContextMenu(menu: NoteMenu) -> Element {
                     Icon { name: "note" }
                     span { "Open note" }
                 }
+                button {
+                    id: "note-menu-select-text",
+                    class: "context-menu-item",
+                    r#type: "button",
+                    role: "menuitem",
+                    onclick: {
+                        let context = context.clone();
+                        move |event| {
+                            // The root click handler clears the mode it just set.
+                            event.stop_propagation();
+                            context.begin_text_selection(id);
+                        }
+                    },
+                    Icon { name: "select-text" }
+                    span { "Select text" }
+                }
                 if trashed {
                     button {
                         id: "note-menu-history",

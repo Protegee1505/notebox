@@ -347,6 +347,8 @@ pub struct AppState {
     pub account_open: bool,
     /// Note actions menu opened from a card.
     pub note_menu: Option<NoteMenu>,
+    /// Card temporarily made selectable from its actions menu.
+    pub text_select_note: Option<NoteId>,
     /// Colour menu under the editor header.
     pub color_open: bool,
     /// History panel over the editor.
@@ -473,6 +475,7 @@ impl AppState {
             browsing: false,
             account_open: false,
             note_menu: None,
+            text_select_note: None,
             color_open: false,
             history_open: false,
             history_versions: Vec::new(),
@@ -1016,6 +1019,12 @@ impl AppContext {
         {
             state.note_menu = None;
         }
+        if state
+            .text_select_note
+            .is_some_and(|id| !state.notes.iter().any(|note| note.id == id))
+        {
+            state.text_select_note = None;
+        }
         if let Some(notebook) = state.notebook {
             if !state.notebooks.iter().any(|item| item.id == notebook) {
                 state.notebook = None;
@@ -1082,6 +1091,7 @@ impl AppContext {
 
     /// Open a note in the editor, saving the current one first.
     pub fn select_note(&self, id: NoteId) {
+        self.end_text_selection();
         self.save_now();
         let Some(store) = self.store() else {
             return;
@@ -1747,6 +1757,7 @@ impl AppContext {
 
     /// Open the card menu at a viewport point.
     pub fn open_note_menu(&self, id: NoteId, x: f64, y: f64) {
+        self.end_text_selection();
         let mut state = self.state.write_unchecked();
         state.note_menu = Some(NoteMenu { note_id: id, x, y });
         state.account_open = false;
@@ -1761,6 +1772,27 @@ impl AppContext {
             if let Some(menu) = menu {
                 self.focus_note_card(menu.note_id);
             }
+        }
+    }
+
+    /// Make one card's text selectable so it can be copied without opening it.
+    pub fn begin_text_selection(&self, id: NoteId) {
+        self.close_note_menu(false);
+        self.state.write_unchecked().text_select_note = Some(id);
+        self.focus_note_card(id);
+        self.toast_info("Select the text you need. Tap outside when done.");
+    }
+
+    /// Leave select-text mode and drop the browser's selection handles.
+    pub fn end_text_selection(&self) {
+        let active = self
+            .state
+            .write_unchecked()
+            .text_select_note
+            .take()
+            .is_some();
+        if active {
+            let _ = document::eval("window.getSelection()?.removeAllRanges();");
         }
     }
 
@@ -3166,6 +3198,7 @@ impl AppContext {
     pub fn escape(&self) {
         let mut return_to_account = false;
         let mut return_to_menu_card = None;
+        let mut clear_text_selection = false;
         let close_gallery = self.state.peek().gallery_open;
         if close_gallery {
             self.close_attachment_gallery();
@@ -3192,6 +3225,8 @@ impl AppContext {
                 state.color_open = false;
             } else if state.history_open {
                 hide_history(&mut state);
+            } else if state.text_select_note.take().is_some() {
+                clear_text_selection = true;
             } else if state.screen == Screen::Login && state.login_first_run {
                 // The first launch needs an account or an explicit offline choice.
             } else if state.screen == Screen::Settings || state.screen == Screen::Login {
@@ -3207,6 +3242,9 @@ impl AppContext {
         }
         if return_to_account {
             let _ = document::eval("document.getElementById('account-button')?.focus();");
+        }
+        if clear_text_selection {
+            let _ = document::eval("window.getSelection()?.removeAllRanges();");
         }
         self.save_preferences();
     }

@@ -1,6 +1,6 @@
 # Status
 
-Updated: 2026-10-23
+Updated: 2026-10-24
 Phase: 8 (polish and performance, in progress); P1–P7 complete except the
 owner-only release execution. The app can now restore a backup in Settings or
 from the command palette, and export format v2 carries each note's Loro history,
@@ -62,6 +62,20 @@ The Write-mode reading column is centered again on wide windows.
 
 ## Shipped
 
+- `notes-app`: **a card menu offers Select text instead of a competing native
+  highlight**. On a touch screen a long-press on a note card now opens only the
+  actions menu: under `@media (hover: none)` cards suppress native text
+  selection and the iOS callout, so Android no longer paints its selection
+  handles beneath the menu. The menu's new Select text action opts that one
+  card back in (dashed outline), where a long-press starts the platform
+  selection and the native Copy toolbar instead of the card menu; tapping the
+  card, tapping outside, Escape or any command ends the mode and drops the
+  selection. Desktop drag-selection is unchanged. Verified on 2026-10-24 with
+  two green `web-a11y.mjs` runs (108/108 checks, including the new select-mode
+  check) and `cargo fmt`, clippy, nextest (262 passed, 1 skipped), `cargo deny`
+  and `budget-check`. The card-menu test now centers the card before a click,
+  because Playwright's pre-click scroll could otherwise arrive after the menu
+  opened and close it. No Worker, D1, sync protocol or schema change.
 - `notes-app`: **light-mode note colours are visible and the menu previews the
   real tint**. The seven light `--note-*` tints were only 0.037–0.059 OKLab
   from `--note-default`, so a saved colour looked like no change. They are now

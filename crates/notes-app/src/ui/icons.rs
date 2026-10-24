@@ -203,6 +203,14 @@ pub fn Icon(name: &'static str) -> Element {
                     path { d: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" }
                     path { d: "M14 2v6h6M8 13h8M8 17h5" }
                 },
+                "select-text" => rsx! {
+                    path { d: "M5 3a2 2 0 0 0-2 2" }
+                    path { d: "M19 3a2 2 0 0 1 2 2" }
+                    path { d: "M21 19a2 2 0 0 1-2 2" }
+                    path { d: "M5 21a2 2 0 0 1-2-2" }
+                    path { d: "M9 3h1M9 21h1M14 3h1M14 21h1" }
+                    path { d: "M3 9v1M21 9v1M3 14v1M21 14v1" }
+                },
                 "more" => rsx! {
                     circle { cx: "5", cy: "12", r: "1" }
                     circle { cx: "12", cy: "12", r: "1" }
