@@ -80,8 +80,11 @@ crates? What can CI verify without a phone?
 - The earlier run 40062174145 built Rust successfully and failed only at
   `Logger.kt:86:14 Unresolved reference 'BuildConfig'`, which identified the
   alias as the single blocker.
-- The camera, photo picker and manifest assertions are covered by the run for
-  `01a2757` on this branch (see `docs/STATUS.md` for the recorded numbers).
+- Run [40070186351](https://github.com/Protegee1505/notebox/actions/runs/40070186351)
+  (`f1dc52d`) is green for arm64, x86_64 and the emulator: cold launch 1190 ms,
+  relaunch 700 ms, `dumpsys activity providers` listed
+  `app.notebox.cameraout`, and the packaged manifest kept the provider, both
+  `<queries>` intents and only `INTERNET` as a permission.
 
 Not verified, and deliberately not claimed:
 

@@ -35,7 +35,10 @@ tint.
 A 100 KB note opens in a median under 50 ms in the web UI and typing drops no
 frames; Linux desktop cold start is 555 ms warm. The installer budget now
 measures the `.deb` (9.9 MB), not the self-contained AppImage. The free Worker
-is deployed and a fresh browser signed in and synced. S3 now has production
+is deployed and a fresh browser signed in and synced. The CI-built Android debug
+APK now carries private storage, SAF backup export/restore, camera and photo
+picker images, Back handling and a pause save; the hardware-only checks still
+wait on the owner's phone. S3 now has production
 analytics and a 100-request tail probe: 156 production invocations, zero
 errors, and no error 1102, with the CPU-budget nuance recorded in ADR-0003.
 The full wipe/pull/history drill against the deployed Worker, the Windows
@@ -62,6 +65,28 @@ Ctrl+Enter or a footer chip opens them, with a tap-then-chip path on phones.
 The Write-mode reading column is centered again on wide windows.
 
 ## Shipped
+
+- `feat(android)`: **the native runtime is complete: private storage, SAF
+  backup export/restore, camera capture and the system photo picker**. The
+  activity sets `NOTEBOX_DATA_DIR` and `NOTEBOX_CACHE_DIR` before Rust starts, so
+  the SQLite database and attachments stay in app-private storage and
+  auto-backup stays off. The image action opens a native chooser: Android 13+
+  uses `ACTION_PICK_IMAGES`, older releases fall back to `ACTION_OPEN_DOCUMENT`,
+  and camera output goes through `CameraOutputProvider`
+  (`${applicationId}.cameraout`, not exported, one URI grant per capture), so
+  the app needs no `CAMERA` permission and no storage permission; `INTERNET` is
+  the only one. The provider resolves names only inside `cacheDir/camera`, image
+  copies stop at 25 MiB before the cache (`images::ingest` still enforces the
+  same limit), and `save` refuses paths outside the cache. The Android workflow
+  now fails if `CAMERA`, `READ_EXTERNAL_STORAGE`, `WRITE_EXTERNAL_STORAGE` or
+  `MANAGE_EXTERNAL_STORAGE` is packaged, and the emulator asserts the provider
+  is registered. A custom activity must also restore Dioxus's `BuildConfig`
+  typealias or the generated `Logger.kt` does not compile. Run 40070186351
+  (`f1dc52d`): arm64, x86_64 and emulator jobs green; arm64 APK 115,655,819
+  bytes (110.3 MiB), SHA-256
+  `6cb33509e2b9eb40e34d2d63a2e5feb491fc888f6b9f068d3f8aa71706144f2c`, cold
+  launch 1190 ms and relaunch 700 ms. ADR-0023. No Worker, D1, sync protocol or
+  schema change.
 
 - `ci(android)`: **the full Android app builds and boots without a local SDK**.
   A new `Android` workflow (ADR-0022) builds arm64-v8a and x86_64 debug APKs on
@@ -964,7 +989,8 @@ The Write-mode reading column is centered again on wide windows.
 | Linux desktop boot (CI) | stayed up 20 s under Xvfb; P4 local build also stayed up 20 s (`exit 124`) |
 | Windows desktop build (CI) | `notebox.exe` built and uploaded |
 | Android headless compile (CI) | NDK r27c, four crates |
-| Android debug build (CI) | run 40058399384, 5m44s: arm64 APK 111 MiB, x86_64 APK 114 MiB, AOSP API 34 cold launch 1534 ms, relaunch 897 ms, zero fatal exceptions |
+| Android debug build (CI) | run 40070186351, 6m: arm64 APK 110.3 MiB, x86_64 APK 114 MiB, AOSP API 34 cold launch 1190 ms, relaunch 700 ms, zero fatal exceptions |
+| Android runtime (CI) | provider `app.notebox.cameraout` registered on the emulator; packaged manifest keeps both `<queries>` intents; only `INTERNET` permission |
 
 ## Blocked
 
@@ -979,14 +1005,16 @@ The Write-mode reading column is centered again on wide windows.
   the last restart. A controlled full-VM reboot is still needed to prove the
   boot path; the first-shell `BASH_ENV` restore and a manual `--force` restore
   are proven. `--force` now refuses while a build is running.
-- **Android runtime**: the full app now builds for arm64 and x86_64 and boots
-  on an API 34 AOSP CI emulator; the screenshot, cold launch and relaunch are
-  recorded. This workspace still has no `/dev/kvm`, Android SDK or NDK, so no
-  local device or emulator run is possible, and the iQOO Z9 Turbo has not been
-  used. App-private storage and SAF export/restore, the native camera/gallery
-  picker, back handling, lifecycle save, keyboard/safe-area behavior and the
-  in-app login/sync loop are not implemented yet. Argon2id timing on a
-  mid-range phone is still unmeasured.
+- **Android hardware checks**: private storage, SAF backup export/restore,
+  camera capture, the Android 13+ photo picker, Back handling and the pause save
+  are implemented and pass the CI build, manifest assertions and AOSP API 34
+  emulator smoke. Still hardware-only: real camera-app interop (the emulator has
+  no camera), Gboard composition and resize, OEM SAF and picker quirks, live
+  native login/sync (one account, no in-app signup) and Argon2id timing on a
+  phone. This workspace has no `/dev/kvm`, Android SDK or NDK, so no local
+  device or emulator run is possible, and the iQOO Z9 Turbo has not been used.
+  The arm64 debug APK is the deliverable for the owner to install; it is not a
+  release artifact.
 - **Release execution**: `.github/workflows/release.yml` has not run. Android
   is now opt-in through `RELEASE_ANDROID=true`; enabling it needs the owner to
   create a keystore and set `ANDROID_KEYSTORE_BASE64`,
@@ -1060,10 +1088,11 @@ The Write-mode reading column is centered again on wide windows.
    photo, a version restore and an installed PWA update. S3's desktop and
    browser CPU and Argon2 evidence is closed; the phone Argon2 number comes with
    the Android runtime work below.
-6. Continue the Android runtime work on the CI emulator and, once available,
-   the iQOO Z9 Turbo: app-private storage and SAF export/restore, the native
-   camera/gallery picker, back handling, lifecycle save, keyboard/safe-area
-   behavior, Gboard composition and the in-app login/sync loop. The build and
-   boot gate is green; these user-facing checks are not.
+6. Install the CI arm64 debug APK on the iQOO Z9 Turbo and run the hardware
+   checks that CI cannot: camera and gallery insert, backup export and restore
+   through an OEM file manager, Gboard composition and resize, Back from an
+   overlay and the note screen, and a live native sign-in against the deployed
+   Worker. Record phone Argon2id timing at the same time. The build, manifest
+   and emulator gates are green; these user-facing checks are not.
 7. Measure an OPFS image write on 1,000 notes and 50 images; if it exceeds
    roughly 100 ms, schedule the worker-backed `SqliteStore` from ADR-0004.
