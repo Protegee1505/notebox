@@ -88,6 +88,19 @@ The Write-mode reading column is centered again on wide windows.
   launch 1190 ms and relaunch 700 ms. ADR-0023. No Worker, D1, sync protocol or
   schema change.
 
+- `test(android)`: **the emulator job now exercises native login and sync end to
+  end; its first run is pending**. `scripts/android-sync.mjs` starts a local
+  Worker on 8788, a loopback proxy on 8787 and `adb reverse`, then drives the
+  real UI over CDP. The proxy bootstraps the account from the app-derived login
+  key, so the host never derives Argon2id. The drill fills the sign-in form,
+  waits for `Synced`, creates a note, runs Sync now, reads `files/session.json`
+  through `run-as`, and signs in a second `e2e-reader` device that pulls the
+  note update from the Worker. A debug-only
+  `WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)` hook in the
+  activity keeps the DevTools socket available. Green CI evidence replaces this
+  "pending" note after the next Android run; hardware still covers OEM behavior
+  and phone Argon2id timing. No Worker, D1, sync protocol or schema change.
+
 - `ci(android)`: **the full Android app builds and boots without a local SDK**.
   A new `Android` workflow (ADR-0022) builds arm64-v8a and x86_64 debug APKs on
   standard GitHub-hosted Ubuntu runners with the preinstalled SDK, JDK 17,
@@ -991,6 +1004,7 @@ The Write-mode reading column is centered again on wide windows.
 | Android headless compile (CI) | NDK r27c, four crates |
 | Android debug build (CI) | run 40070186351, 6m: arm64 APK 110.3 MiB, x86_64 APK 114 MiB, AOSP API 34 cold launch 1190 ms, relaunch 700 ms, zero fatal exceptions |
 | Android runtime (CI) | provider `app.notebox.cameraout` registered on the emulator; packaged manifest keeps both `<queries>` intents; only `INTERNET` permission |
+| Android native sync (CI) | wired into the emulator job: local Worker, `adb reverse`, CDP login, note push and a second-device pull; first run pending |
 
 ## Blocked
 
@@ -1008,13 +1022,14 @@ The Write-mode reading column is centered again on wide windows.
 - **Android hardware checks**: private storage, SAF backup export/restore,
   camera capture, the Android 13+ photo picker, Back handling and the pause save
   are implemented and pass the CI build, manifest assertions and AOSP API 34
-  emulator smoke. Still hardware-only: real camera-app interop (the emulator has
-  no camera), Gboard composition and resize, OEM SAF and picker quirks, live
-  native login/sync (one account, no in-app signup) and Argon2id timing on a
-  phone. This workspace has no `/dev/kvm`, Android SDK or NDK, so no local
-  device or emulator run is possible, and the iQOO Z9 Turbo has not been used.
-  The arm64 debug APK is the deliverable for the owner to install; it is not a
-  release artifact.
+  emulator smoke. The emulator job now runs a native login and note sync
+  against a local Worker; its first CI run is pending. Still hardware-only: real
+  camera-app interop (the emulator has no camera), Gboard composition and
+  resize, OEM SAF and picker quirks, a native sign-in against the deployed
+  Worker on the phone, and Argon2id timing on a phone. This workspace has no
+  `/dev/kvm`, Android SDK or NDK, so no local device or emulator run is
+  possible, and the iQOO Z9 Turbo has not been used. The arm64 debug APK is the
+  deliverable for the owner to install; it is not a release artifact.
 - **Release execution**: `.github/workflows/release.yml` has not run. Android
   is now opt-in through `RELEASE_ANDROID=true`; enabling it needs the owner to
   create a keystore and set `ANDROID_KEYSTORE_BASE64`,
@@ -1056,9 +1071,11 @@ The Write-mode reading column is centered again on wide windows.
   browser transport are wired, a two-device browser run passes the P7 login,
   device, conflict and sign-out checks, and the deployed Worker now accepts a
   live browser sign-in. The human P5/P6/P7 check across a desktop and a phone
-  still waits on the remaining Android device work and a live native login. The native desktop
-  path is compile-checked and shares the engine tests, but this slice did not
-  drive its login/sync threads through the UI against a live Worker.
+  still waits on the remaining Android device work and a native sign-in against
+  the deployed Worker. The emulator job is wired to run the native login/sync
+  threads through the real UI against a local Worker; that run is pending. The
+  native desktop path is compile-checked and shares the engine tests, but this
+  slice did not drive it through the UI against a live Worker.
 ## Next
 
 1. P8 finish. Accessibility, the 100 KB note, the Linux warm cold-start budget,
@@ -1093,6 +1110,7 @@ The Write-mode reading column is centered again on wide windows.
    through an OEM file manager, Gboard composition and resize, Back from an
    overlay and the note screen, and a live native sign-in against the deployed
    Worker. Record phone Argon2id timing at the same time. The build, manifest
-   and emulator gates are green; these user-facing checks are not.
+   and emulator gates are green; the new emulator sync drill is wired but its
+   first run is pending; these user-facing hardware checks are not done.
 7. Measure an OPFS image write on 1,000 notes and 50 images; if it exceeds
    roughly 100 ms, schedule the worker-backed `SqliteStore` from ADR-0004.

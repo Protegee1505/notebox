@@ -71,6 +71,14 @@ crates? What can CI verify without a phone?
    if `CAMERA`, `READ_EXTERNAL_STORAGE`, `WRITE_EXTERNAL_STORAGE` or
    `MANAGE_EXTERNAL_STORAGE` appears. The emulator job checks the provider is
    registered at runtime.
+8. **The emulator drives the real UI for login and sync.** Debug builds call
+   `WebView.setWebContentsDebuggingEnabled(true)` in `onWebViewCreate`. The
+   emulator job then runs `scripts/android-sync.mjs`: a local Worker on 8788, a
+   loopback proxy on 8787 that bootstraps the account from the app-derived login
+   key, and `adb reverse tcp:8787`. CDP fills the sign-in form, waits for
+   `Synced`, creates a note, runs Sync now and reads `files/session.json`. A
+   second `e2e-reader` device then logs in with the same key and pulls the note
+   update from the Worker. The hook is inert in release builds.
 
 ## Evidence
 
@@ -85,6 +93,9 @@ crates? What can CI verify without a phone?
   relaunch 700 ms, `dumpsys activity providers` listed
   `app.notebox.cameraout`, and the packaged manifest kept the provider, both
   `<queries>` intents and only `INTERNET` as a permission.
+- The emulator native login/sync drill is wired into the same job. Its first
+  workflow run is recorded after the change is pushed; until then the local
+  Worker, proxy and CDP path are unverified in CI.
 
 Not verified, and deliberately not claimed:
 
@@ -92,8 +103,9 @@ Not verified, and deliberately not claimed:
   EXIF themselves. The CI emulator has no camera.
 - Gboard and other IME resize behavior on the owner's phone.
 - OEM-specific SAF and photo-picker quirks.
-- Live native login/sync, because there is one production account and no
-  in-app signup.
+- A native sign-in against the deployed Worker on the owner's phone. The
+  emulator drill proves the same login/sync path against a local Worker; the
+  production account and OEM network stack remain hardware checks.
 - Argon2id timing on a phone.
 
 ## Consequences
