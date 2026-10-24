@@ -62,7 +62,7 @@ start_and_wait() {
     attempt=0
     while [ "$attempt" -lt 30 ]; do
         if adb shell dumpsys activity activities \
-            | grep -F "mResumedActivity" \
+            | grep -E "mResumedActivity|topResumedActivity" \
             | grep -F "$PACKAGE" >/dev/null; then
             return 0
         fi
