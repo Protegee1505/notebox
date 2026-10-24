@@ -72,13 +72,16 @@ crates? What can CI verify without a phone?
    `MANAGE_EXTERNAL_STORAGE` appears. The emulator job checks the provider is
    registered at runtime.
 8. **The emulator drives the real UI for login and sync.** Debug builds call
-   `WebView.setWebContentsDebuggingEnabled(true)` in `onWebViewCreate`. The
-   emulator job then runs `scripts/android-sync.mjs`: a local Worker on 8788, a
-   loopback proxy on 8787 that bootstraps the account from the app-derived login
-   key, and `adb reverse tcp:8787`. CDP fills the sign-in form, waits for
-   `Synced`, creates a note, runs Sync now and reads `files/session.json`. A
-   second `e2e-reader` device then logs in with the same key and pulls the note
-   update from the Worker. The hook is inert in release builds.
+   `WebView.setWebContentsDebuggingEnabled(true)` in `onWebViewCreate`; wry
+   already enables DevTools in debug builds, and the explicit call keeps the
+   gate in this activity. The emulator job then runs
+   `scripts/android-sync.mjs`: a local Worker on 8788, a loopback proxy on 8787
+   that bootstraps the account from the app-derived login key, and
+   `adb reverse tcp:8787`. CDP fills the sign-in form, waits for `Synced`,
+   creates a note, runs Sync now and reads `files/session.json`. A second
+   `e2e-reader` device then logs in with the same key and pulls the note update
+   from the Worker. `BuildConfig.DEBUG` guards the call, so a release build
+   never enables the socket.
 
 ## Evidence
 
@@ -93,9 +96,18 @@ crates? What can CI verify without a phone?
   relaunch 700 ms, `dumpsys activity providers` listed
   `app.notebox.cameraout`, and the packaged manifest kept the provider, both
   `<queries>` intents and only `INTERNET` as a permission.
-- The emulator native login/sync drill is wired into the same job. Its first
-  workflow run is recorded after the change is pushed; until then the local
-  Worker, proxy and CDP path are unverified in CI.
+- Run [40086391951](https://github.com/Protegee1505/notebox/actions/runs/40086391951)
+  (`2259571`, 2026-10-24) passed arm64, x86_64 and the emulator job, and is the
+  first green native login/sync drill. `android-sync-report.json` records setup
+  200, app login 200, session `android-e2e` on device
+  `9f8d6e91-86cd-412b-96b6-d94b8d3de6ce`, 2/2 sync requests completed, and a
+  second `e2e-reader` device pulling 1 update at cursor 1 for note
+  `247cfee5-bbb7-494a-a422-2e75fab9fa3c`; the marker `android-sync-mvm9oojk`
+  remained in the editor. The emulator job took 3m59s; the x86_64 drill started
+  the app in 1146 ms. Arm64 APK 115,655,799 bytes (SHA-256
+  `12d202d0afd5934db4363158a5f7dfc009f61c9a0a1cf33dcf7591d57a6f009f`) and
+  x86_64 APK 118,815,832 bytes (SHA-256
+  `bdbfa60980d54de5ff1a3c1e972c66de4865259ae4075146a2b6bbc8c901c040`).
 
 Not verified, and deliberately not claimed:
 
