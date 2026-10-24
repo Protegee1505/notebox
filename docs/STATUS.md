@@ -1,6 +1,6 @@
 # Status
 
-Updated: 2026-10-23
+Updated: 2026-10-24
 Phase: 8 (polish and performance, in progress); P1–P7 complete except the
 owner-only release execution. The app can now restore a backup in Settings or
 from the command palette, and export format v2 carries each note's Loro history,
@@ -35,11 +35,15 @@ tint.
 A 100 KB note opens in a median under 50 ms in the web UI and typing drops no
 frames; Linux desktop cold start is 555 ms warm. The installer budget now
 measures the `.deb` (9.9 MB), not the self-contained AppImage. The free Worker
-is deployed and a fresh browser signed in and synced. S3 now has production
+is deployed and a fresh browser signed in and synced. The CI-built Android debug
+APK now carries private storage, SAF backup export/restore, camera and photo
+picker images, Back handling and a pause save; the hardware-only checks still
+wait on the owner's phone. S3 now has production
 analytics and a 100-request tail probe: 156 production invocations, zero
 errors, and no error 1102, with the CPU-budget nuance recorded in ADR-0003.
-The full wipe/pull/history drill against the deployed Worker, the Windows and
-Android runtime checks, and the v0.1.0 release remain; the search fixes are
+The full wipe/pull/history drill against the deployed Worker, the Windows
+runtime check, the remaining Android device checks and the v0.1.0 release
+remain; the search fixes are
 deployed as 1e6bfdf, the image-card and desktop-chrome fixes as e11a0f5, the
 session, confirm-delete and theme fixes as 71e0b72, the avatar account
 panel as 2582101, and the Firefox Write-mode link fix as c07cdad, all after
@@ -61,6 +65,62 @@ Ctrl+Enter or a footer chip opens them, with a tap-then-chip path on phones.
 The Write-mode reading column is centered again on wide windows.
 
 ## Shipped
+
+- `feat(android)`: **the native runtime is complete: private storage, SAF
+  backup export/restore, camera capture and the system photo picker**. The
+  activity sets `NOTEBOX_DATA_DIR` and `NOTEBOX_CACHE_DIR` before Rust starts, so
+  the SQLite database and attachments stay in app-private storage and
+  auto-backup stays off. The image action opens a native chooser: Android 13+
+  uses `ACTION_PICK_IMAGES`, older releases fall back to `ACTION_OPEN_DOCUMENT`,
+  and camera output goes through `CameraOutputProvider`
+  (`${applicationId}.cameraout`, not exported, one URI grant per capture), so
+  the app needs no `CAMERA` permission and no storage permission; `INTERNET` is
+  the only one. The provider resolves names only inside `cacheDir/camera`, image
+  copies stop at 25 MiB before the cache (`images::ingest` still enforces the
+  same limit), and `save` refuses paths outside the cache. The Android workflow
+  now fails if `CAMERA`, `READ_EXTERNAL_STORAGE`, `WRITE_EXTERNAL_STORAGE` or
+  `MANAGE_EXTERNAL_STORAGE` is packaged, and the emulator asserts the provider
+  is registered. A custom activity must also restore Dioxus's `BuildConfig`
+  typealias or the generated `Logger.kt` does not compile. Run 40070186351
+  (`f1dc52d`): arm64, x86_64 and emulator jobs green; arm64 APK 115,655,819
+  bytes (110.3 MiB), SHA-256
+  `6cb33509e2b9eb40e34d2d63a2e5feb491fc888f6b9f068d3f8aa71706144f2c`, cold
+  launch 1190 ms and relaunch 700 ms. ADR-0023. No Worker, D1, sync protocol or
+  schema change.
+
+- `test(android)`: **the emulator job exercises native login and sync end to
+  end**. Run 40086391951 (`2259571`) passed arm64, x86_64 and the emulator job
+  (drill 3m59s): setup 200, app login 200, session user `android-e2e` on device
+  `9f8d6e91-86cd-412b-96b6-d94b8d3de6ce`, 2/2 sync requests completed, and a
+  second `e2e-reader` device pulled 1 update at cursor 1 for note
+  `247cfee5-bbb7-494a-a422-2e75fab9fa3c`; the marker `android-sync-mvm9oojk`
+  stayed in the editor. `scripts/android-sync.mjs` starts a local Worker on
+  8788, a loopback proxy on 8787 and `adb reverse`, then drives the real UI
+  over CDP. The proxy bootstraps the account from the app-derived login key, so
+  the host never derives Argon2id. The drill fills the sign-in form, waits for
+  `Synced`, creates a note, runs Sync now, reads `files/session.json` through
+  `run-as`, and signs in the reader through the same proxy. A debug-only
+  `WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)` call in the
+  activity makes the DevTools gate explicit (wry already enables DevTools in
+  debug builds) and never runs in release. Hardware still covers OEM behavior
+  and phone Argon2id timing. No Worker, D1, sync protocol or schema change.
+
+- `ci(android)`: **the full Android app builds and boots without a local SDK**.
+  A new `Android` workflow (ADR-0022) builds arm64-v8a and x86_64 debug APKs on
+  standard GitHub-hosted Ubuntu runners with the preinstalled SDK, JDK 17,
+  platform 34, build-tools 34.0.0, NDK r27c and `dx` 0.7.10. It caches a
+  stable debug keystore so debug APKs update across runs, verifies package,
+  ABI and debuggable status with `aapt`/`apksigner`, and uploads both APKs.
+  A separate KVM job boots an API 34 AOSP emulator, installs the x86_64 APK,
+  checks the resumed activity and logcat, force-stops and relaunches it. The
+  arm64 APK is 111 MiB and the x86_64 APK 114 MiB, both debug-symbol builds.
+  Run 40058399384 passed in 5m44s; the app rendered the welcome screen, wrote
+  `files/profileInstalled` in its private data directory, and a cold launch
+  took 1534 ms (relaunch 897 ms). A `google_apis` attempt was discarded because
+  its GMS process crashed during boot and killed the app through the fonts
+  provider. `android-actions/setup-android@v3` was also replaced with the
+  runner's preinstalled SDK because its default `tools` package no longer
+  exists. No Worker, D1, schema or release-signing change.
 
 - `notes-app`: **light-mode note colours are visible and the menu previews the
   real tint**. The seven light `--note-*` tints were only 0.037–0.059 OKLab
@@ -946,6 +1006,9 @@ The Write-mode reading column is centered again on wide windows.
 | Linux desktop boot (CI) | stayed up 20 s under Xvfb; P4 local build also stayed up 20 s (`exit 124`) |
 | Windows desktop build (CI) | `notebox.exe` built and uploaded |
 | Android headless compile (CI) | NDK r27c, four crates |
+| Android debug build (CI) | run 40086391951: arm64 job 3m20s, x86_64 job 3m29s; arm64 APK 115,655,799 bytes (110.3 MiB), SHA-256 `12d202d0afd5934db4363158a5f7dfc009f61c9a0a1cf33dcf7591d57a6f009f`; x86_64 APK 118,815,832 bytes (113.3 MiB), SHA-256 `bdbfa60980d54de5ff1a3c1e972c66de4865259ae4075146a2b6bbc8c901c040`; AOSP API 34 cold launch 1252 ms, relaunch 973 ms, zero fatal exceptions |
+| Android runtime (CI) | provider `app.notebox.cameraout` registered on the emulator; packaged manifest keeps both `<queries>` intents; only `INTERNET` permission |
+| Android native sync (CI) | run 40086391951: setup 200, app login 200, session `android-e2e` on device `9f8d6e91-86cd-412b-96b6-d94b8d3de6ce`, 2/2 sync requests completed, second device pulled 1 update at cursor 1 for note `247cfee5-bbb7-494a-a422-2e75fab9fa3c`, marker intact |
 
 ## Blocked
 
@@ -960,12 +1023,17 @@ The Write-mode reading column is centered again on wide windows.
   the last restart. A controlled full-VM reboot is still needed to prove the
   boot path; the first-shell `BASH_ENV` restore and a manual `--force` restore
   are proven. `--force` now refuses while a build is running.
-- **Android runtime**: no `/dev/kvm` and no Android SDK, so S2/S5 cannot be run
-  on a device or emulator locally, and the P4/P6 Android screenshot, camera and
-  boot checks are still missing. The local `aarch64-linux-android` check also
-  lacks `aarch64-linux-android-clang`; CI still compiles the four crates with
-  NDK r27c. The full Android app has not been built, and the Argon2id timing on
-  a mid-range phone is not measured.
+- **Android hardware checks**: private storage, SAF backup export/restore,
+  camera capture, the Android 13+ photo picker, Back handling and the pause save
+  are implemented and pass the CI build, manifest assertions and AOSP API 34
+  emulator smoke. The emulator job runs a native login and note sync against a
+  local Worker; run 40086391951 passed. Still hardware-only: real
+  camera-app interop (the emulator has no camera), Gboard composition and
+  resize, OEM SAF and picker quirks, a native sign-in against the deployed
+  Worker on the phone, and Argon2id timing on a phone. This workspace has no
+  `/dev/kvm`, Android SDK or NDK, so no local device or emulator run is
+  possible, and the iQOO Z9 Turbo has not been used. The arm64 debug APK is the
+  deliverable for the owner to install; it is not a release artifact.
 - **Release execution**: `.github/workflows/release.yml` has not run. Android
   is now opt-in through `RELEASE_ANDROID=true`; enabling it needs the owner to
   create a keystore and set `ANDROID_KEYSTORE_BASE64`,
@@ -999,16 +1067,19 @@ The Write-mode reading column is centered again on wide windows.
   gate and automatic seeding was removed, so the first run needs a fresh
   measurement. A 102,415-byte note opens with a median of 11.1 ms and typing
   drops no frames (p95 9.7 ms, max 20.2 ms); earlier opens reached 54.7 ms.
-  Windows is build-only and Android has no boot or cold-start number. The 20 MB
+  Windows is build-only. The Android CI cold launch is 1534 ms on an AOSP
+  emulator; a phone number is still missing. The 20 MB
   installer budget now measures the `.deb` (9.9 MB); the 89.6 MB AppImage is an
   optional self-contained fallback under ADR-0015.
 - **Human cross-device acceptance**: the app-side account, sync loop and
   browser transport are wired, a two-device browser run passes the P7 login,
   device, conflict and sign-out checks, and the deployed Worker now accepts a
   live browser sign-in. The human P5/P6/P7 check across a desktop and a phone
-  still waits on an Android runtime and a live native login. The native desktop
-  path is compile-checked and shares the engine tests, but this slice did not
-  drive its login/sync threads through the UI against a live Worker.
+  still waits on the remaining Android device work and a native sign-in against
+  the deployed Worker. The emulator job has run the native login/sync threads
+  through the real UI against a local Worker (run 40086391951). The native
+  desktop path is compile-checked and shares the engine tests, but this
+  slice did not drive it through the UI against a live Worker.
 ## Next
 
 1. P8 finish. Accessibility, the 100 KB note, the Linux warm cold-start budget,
@@ -1038,8 +1109,12 @@ The Write-mode reading column is centered again on wide windows.
    photo, a version restore and an installed PWA update. S3's desktop and
    browser CPU and Argon2 evidence is closed; the phone Argon2 number comes with
    the Android runtime work below.
-6. Run S2/S5/P6/P7 on an Android emulator with `/dev/kvm` (CI or a physical
-   device) to close the runtime gap, including Gboard composition, the camera
-   picker and the in-app login/sync loop.
+6. Install the CI arm64 debug APK on the iQOO Z9 Turbo and run the hardware
+   checks that CI cannot: camera and gallery insert, backup export and restore
+   through an OEM file manager, Gboard composition and resize, Back from an
+   overlay and the note screen, and a live native sign-in against the deployed
+   Worker. Record phone Argon2id timing at the same time. The build, manifest
+   and emulator gates are green; the emulator sync drill passed in run
+   40086391951; these user-facing hardware checks are not done.
 7. Measure an OPFS image write on 1,000 notes and 50 images; if it exceeds
    roughly 100 ms, schedule the worker-backed `SqliteStore` from ADR-0004.

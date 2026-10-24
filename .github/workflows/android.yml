@@ -1,0 +1,309 @@
+name: Android
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx4g -Dorg.gradle.daemon=false
+
+jobs:
+  debug-key:
+    name: Stable debug signing key
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # A fresh runner otherwise generates a new debug certificate on every
+      # run, so a debug APK from one run cannot update one from another. The
+      # key is not a secret; it is the standard Android debug identity.
+      - uses: actions/cache@v4
+        id: debug-key-cache
+        with:
+          path: debug.keystore
+          key: android-debug-keystore-v1
+
+      - name: Create the debug keystore
+        if: steps.debug-key-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          keytool -genkeypair \
+            -keystore debug.keystore \
+            -storepass android \
+            -alias androiddebugkey \
+            -keypass android \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-keystore
+          path: debug.keystore
+          retention-days: 1
+
+  build:
+    name: Debug APK (${{ matrix.abi }})
+    needs: debug-key
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: arm64-v8a
+            target: aarch64-linux-android
+          - abi: x86_64
+            target: x86_64-linux-android
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # The runner image already ships the SDK. setup-android v3 now fails
+      # because its default `sdkmanager tools` package no longer exists.
+      - name: Locate the preinstalled Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${ANDROID_HOME:-}" ]; then
+            for candidate in "$HOME/Android/Sdk" /usr/local/lib/android/sdk; do
+              if [ -d "$candidate" ]; then
+                ANDROID_HOME="$candidate"
+                break
+              fi
+            done
+          fi
+          test -n "${ANDROID_HOME:-}"
+          test -d "$ANDROID_HOME"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "Using Android SDK at $ANDROID_HOME"
+
+      - name: Install the Android 34 platform and build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager="$(command -v sdkmanager || true)"
+          if [ -z "$sdkmanager" ]; then
+            sdkmanager="$(find "$ANDROID_HOME/cmdline-tools" \
+              -path '*/bin/sdkmanager' -type f | sort -V | tail -1)"
+          fi
+          test -x "$sdkmanager"
+          yes | "$sdkmanager" --licenses >/dev/null || true
+          "$sdkmanager" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27c
+          add-to-path: true
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: false
+          key: android-${{ matrix.abi }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-0.7.10-v1
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-debug-keystore
+          path: .android-debug
+
+      - name: Install the stable debug key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.android"
+          install -m 600 .android-debug/debug.keystore "$HOME/.android/debug.keystore"
+          keytool -list -v \
+            -keystore "$HOME/.android/debug.keystore" \
+            -storepass android \
+            -alias androiddebugkey | grep -E "SHA256:|Alias name:"
+
+      - name: Install dx 0.7.10
+        run: |
+          curl -sSL https://dioxus.dev/install.sh | bash -s v0.7.10
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Build the debug APK
+        shell: bash
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
+          NBX_BUILD_ID: ${{ github.run_number }}
+          NBX_GIT_SHA: ${{ github.sha }}
+          NBX_SERVER_URL: ${{ vars.NBX_SERVER_URL }}
+        run: |
+          set -euo pipefail
+          dx bundle -p notes-app --platform android --features mobile \
+            --package-types apk --target "${{ matrix.target }}"
+
+      - name: Verify and collect the debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="$(find target/dx/notebox -type f -name 'app-debug.apk' -print -quit)"
+          if [ -z "$apk" ]; then
+            echo "::error::dx did not produce app-debug.apk."
+            find target/dx/notebox -type f -name '*.apk' -print || true
+            exit 1
+          fi
+
+          build_tools="$(find "$ANDROID_HOME/build-tools" -maxdepth 1 -mindepth 1 -type d | sort -V | tail -1)"
+          apksigner="$build_tools/apksigner"
+          aapt="$build_tools/aapt"
+          test -x "$apksigner"
+          test -x "$aapt"
+
+          "$apksigner" verify --verbose --print-certs "$apk"
+          "$aapt" dump badging "$apk" | tee android-badging.txt
+          grep -q "package: name='app.notebox'" android-badging.txt
+          grep -q "native-code:.*'${{ matrix.abi }}'" android-badging.txt
+          grep -q 'application-debuggable' android-badging.txt
+
+          # Notebox uses the system picker and a camera app, so it must never
+          # ship a camera or storage permission.
+          "$aapt" dump permissions "$apk" | tee android-permissions.txt
+          grep -q "android.permission.INTERNET" android-permissions.txt
+          if grep -Eq \
+            "android.permission.(CAMERA|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|MANAGE_EXTERNAL_STORAGE)" \
+            android-permissions.txt; then
+            echo "::error::The APK asks for a camera or storage permission."
+            exit 1
+          fi
+
+          # The camera provider and the package-visibility queries are the
+          # parts Dioxus has to preserve from the custom manifest.
+          aapt2="$build_tools/aapt2"
+          test -x "$aapt2"
+          "$aapt2" dump xmltree --file AndroidManifest.xml "$apk" > android-manifest.txt
+          grep -q "dev.dioxus.main.CameraOutputProvider" android-manifest.txt
+          grep -q "app.notebox.cameraout" android-manifest.txt
+          grep -q "grantUriPermissions" android-manifest.txt
+          grep -q "android.media.action.IMAGE_CAPTURE" android-manifest.txt
+          grep -q "android.provider.action.PICK_IMAGES" android-manifest.txt
+
+          mkdir -p dist/android
+          cp "$apk" "dist/android/notebox-debug-${{ matrix.abi }}.apk"
+          sha256sum "dist/android/notebox-debug-${{ matrix.abi }}.apk"
+          du -h "dist/android/notebox-debug-${{ matrix.abi }}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notebox-debug-${{ matrix.abi }}
+          path: dist/android/notebox-debug-${{ matrix.abi }}.apk
+          retention-days: 7
+
+  smoke:
+    name: Emulator smoke and sync drill
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cache worker-build
+        id: worker-build-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/worker-build
+            ~/.cargo/bin/worker-codegen
+          key: worker-build-0.8.7-${{ runner.os }}
+
+      - name: Install worker-build
+        if: steps.worker-build-cache.outputs.cache-hit != 'true'
+        run: cargo install worker-build --version 0.8.7 --locked
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: notebox-debug-x86_64
+          path: dist/android
+
+      - name: Enable KVM
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Boot, install, smoke and sync
+        uses: ReactiveCircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          # AOSP, not google_apis: GMS crashed on the google_apis image during
+          # boot and Android killed the app through the GMS fonts provider.
+          target: default
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: >-
+            -no-window -no-audio -no-boot-anim -no-snapshot
+            -gpu swiftshader_indirect -camera-back none -camera-front none
+          # One line so a failed smoke test stops the job before the drill.
+          script: bash scripts/android-smoke.sh && APK=dist/android/notebox-debug-x86_64.apk node scripts/android-sync.mjs
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-smoke-evidence
+          path: |
+            android-smoke.png
+            android-smoke-launch.png
+            android-smoke-relaunch.png
+            android-activities.txt
+            android-files.txt
+            android-providers.txt
+            android-logcat.txt
+            android-sync.png
+            android-sync-logcat.txt
+            android-sync-report.json
+            android-sync-proxy.log
+            android-sync-worker.log
+            android-sync.log
+          if-no-files-found: ignore
+          retention-days: 7

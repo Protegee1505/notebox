@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      Images come from the system photo picker or a camera app; Notebox never
+      opens the camera itself. Declaring the hardware as optional keeps the app
+      installable on tablets without one, and no CAMERA permission is needed
+      because another app takes the photo.
+    -->
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.camera.any"
+        android:required="false" />
+
+    <!--
+      Android 11+ hides other apps unless they are declared. Both are only used
+      with resolveActivity, to fall back to the document picker when the photo
+      picker or a camera app is missing.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
+        <intent>
+            <action android:name="android.provider.action.PICK_IMAGES" />
+        </intent>
+    </queries>
+
+    <!--
+      Notebox keeps its database in app-private files. Android's auto-backup
+      would copy that database without the matching attachment rows and expose
+      notes to another transport, so it is explicitly off. Exports and restores
+      go through the Storage Access Framework instead.
+    -->
+    <application
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:hasCode="true"
+        android:supportsRtl="true"
+        android:icon="@mipmap/ic_launcher"
+        android:extractNativeLibs="true"
+        android:allowNativeHeapPointerTagging="false"
+        android:label="@string/app_name"
+        android:theme="@style/AppTheme"
+        android:enableOnBackInvokedCallback="false"
+        android:networkSecurityConfig="@xml/network_security_config">
+        <activity
+            android:configChanges="orientation|screenLayout|screenSize|smallestScreenSize|keyboardHidden"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:name="dev.dioxus.main.MainActivity"
+            android:windowSoftInputMode="adjustResize">
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="main" />
+            <meta-data
+                android:name="android.app.func_name"
+                android:value="ANativeActivity_onCreate" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          Gives ACTION_IMAGE_CAPTURE a writable URI without a storage
+          permission. The camera app receives a grant for exactly one file, and
+          CameraOutputProvider refuses names outside cacheDir/camera.
+        -->
+        <provider
+            android:name="dev.dioxus.main.CameraOutputProvider"
+            android:authorities="${applicationId}.cameraout"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+    </application>
+</manifest>

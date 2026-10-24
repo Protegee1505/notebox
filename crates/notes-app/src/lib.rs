@@ -12,6 +12,8 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(target_os = "android")]
+mod android;
 mod app;
 #[cfg(target_arch = "wasm32")]
 mod browser_storage;
