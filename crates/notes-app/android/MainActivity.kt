@@ -15,6 +15,13 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
+ * Dioxus generates `Logger.kt` with an unqualified `BuildConfig` reference.
+ * Its own template activity provides this alias; a custom activity replaces
+ * that file, so the alias has to be restored here.
+ */
+typealias BuildConfig = app.notebox.BuildConfig
+
+/**
  * The Android shell around the Dioxus WebView.
  *
  * Android's Storage Access Framework is exposed to Rust as the
