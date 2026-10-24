@@ -237,37 +237,7 @@ jobs:
           emulator-options: >-
             -no-window -no-audio -no-boot-anim -no-snapshot
             -gpu swiftshader_indirect -camera-back none -camera-front none
-          script: |
-            # android-emulator-runner runs this script with /bin/sh, not bash.
-            set -eu
-            adb install -r dist/android/notebox-debug-x86_64.apk
-            adb shell am start -W \
-              -n app.notebox/dev.dioxus.main.MainActivity
-            sleep 20
-
-            pid="$(adb shell pidof app.notebox | tr -d '\r')"
-            test -n "$pid"
-            echo "app pid: $pid"
-            adb shell dumpsys activity activities \
-              | grep -E 'mResumedActivity.*app\.notebox' >/dev/null
-
-            adb shell run-as app.notebox ls -l files > android-files.txt 2>&1 || true
-            adb exec-out screencap -p > android-smoke.png
-            adb logcat -d > android-logcat.txt
-
-            if grep -q 'FATAL EXCEPTION' android-logcat.txt; then
-              echo "::error::The app crashed during the smoke test."
-              grep -B2 -A40 'FATAL EXCEPTION' android-logcat.txt || true
-              exit 1
-            fi
-
-            adb shell am force-stop app.notebox
-            sleep 2
-            adb shell am start -W \
-              -n app.notebox/dev.dioxus.main.MainActivity
-            sleep 15
-            test -n "$(adb shell pidof app.notebox | tr -d '\r')"
-            adb exec-out screencap -p > android-smoke-relaunch.png
+          script: bash scripts/android-smoke.sh
 
       - uses: actions/upload-artifact@v4
         if: always()
