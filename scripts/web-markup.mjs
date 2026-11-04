@@ -3,8 +3,9 @@
 //
 // Serves the release web build and proves that Write mode paints Markdown
 // links and images, that a bare web address is painted too, that the mirror
-// sits exactly over the textarea, that Ctrl+click and Ctrl+Enter open a link
-// in a new tab or an image in the viewer, and that the footer chip opens the
+// sits exactly over the textarea, that Write and Preview fill a wide pane,
+// that Ctrl+click and Ctrl+Enter open a link in a new tab or an image in the
+// viewer, and that the footer chip opens the
 // same token and returns focus after the viewer closes. A note with more
 // tokens than the scanner cap falls back to a plain textarea. A phone profile
 // repeats the tap-token-then-tap-chip path.
@@ -142,6 +143,23 @@ async function waitForTokens(page) {
     .waitFor({ state: "visible", timeout: 15_000 });
 }
 
+async function noteBounds(page, selector) {
+  return page.evaluate((selector) => {
+    const body = document.querySelector(".editor-body");
+    const note = document.querySelector(selector);
+    const pane = body.getBoundingClientRect();
+    const content = note.getBoundingClientRect();
+    return {
+      paneWidth: pane.width,
+      noteWidth: content.width,
+      leftGap: content.left - pane.left,
+      rightGap: pane.right - content.right,
+      scrollable: note.scrollHeight > note.clientHeight,
+      overflowY: getComputedStyle(note).overflowY,
+    };
+  }, selector);
+}
+
 async function placeCaret(page, needle, offset = 2) {
   await page.locator("#note-editor").focus();
   await page.evaluate(
@@ -191,6 +209,54 @@ try {
     `${title}\n\n[site](${target}) and https://example.org/page\n\n${filler}`,
   );
   await page.waitForTimeout(200);
+  await waitForTokens(page);
+
+  // A wide pane used to cap the textarea (and Preview) at 52rem. The native
+  // scrollbar then appeared in the middle of the pane, with unused space to
+  // its right. Exercise a window wider than that old cap, including Navigator.
+  await page.setViewportSize({ width: 1920, height: 900 });
+  const wideWrite = await noteBounds(page, "#note-editor");
+  results.push(
+    check(
+      "Write fills a wide pane and scrolls at its outer edge",
+      wideWrite.paneWidth > 900 &&
+        Math.abs(wideWrite.leftGap) < 2 &&
+        Math.abs(wideWrite.rightGap) < 2 &&
+        wideWrite.scrollable,
+      JSON.stringify(wideWrite),
+    ),
+  );
+
+  await page.getByRole("button", { name: "Hide navigation" }).click();
+  await page.locator(".workspace.nav-collapsed").waitFor();
+  const collapsedWrite = await noteBounds(page, "#note-editor");
+  results.push(
+    check(
+      "Write grows with the pane when Navigator is hidden",
+      collapsedWrite.paneWidth > wideWrite.paneWidth + 100 &&
+        Math.abs(collapsedWrite.leftGap) < 2 &&
+        Math.abs(collapsedWrite.rightGap) < 2,
+      JSON.stringify(collapsedWrite),
+    ),
+  );
+  await page.getByRole("button", { name: "Show navigation" }).click();
+  await page.locator(".sidebar").waitFor({ state: "visible" });
+
+  await page.getByRole("button", { name: "Preview" }).click();
+  await page.locator(".editor-preview").waitFor();
+  const widePreview = await noteBounds(page, ".editor-preview");
+  results.push(
+    check(
+      "Preview fills the same wide pane",
+      widePreview.paneWidth > 900 &&
+        Math.abs(widePreview.leftGap) < 2 &&
+        Math.abs(widePreview.rightGap) < 2 &&
+        widePreview.overflowY === "auto",
+      JSON.stringify(widePreview),
+    ),
+  );
+  await page.getByRole("button", { name: "Write" }).click();
+  await page.setViewportSize({ width: 1400, height: 900 });
   await waitForTokens(page);
 
   const linkTexts = await page.locator(".md-link-token").allInnerTexts();

@@ -1,6 +1,6 @@
 # Status
 
-Updated: 2026-10-24
+Updated: 2026-11-04
 Phase: 8 (polish and performance, in progress); P1–P7 complete except the
 owner-only release execution. The app can now restore a backup in Settings or
 from the command palette, and export format v2 carries each note's Loro history,
@@ -58,10 +58,23 @@ editor now keeps its add-tag field, its tag chips fold away while the note body
 scrolls, and no light row is left below the app when the keyboard opens.
 Write mode now tints and underlines links and images; Ctrl/Cmd+click,
 Ctrl+Enter or a footer chip opens them, with a tap-then-chip path on phones.
-The Write-mode reading column is centered again on wide windows.
+Write and Preview now fill the available note pane on wide windows, with the
+note scrollbar at the pane's outer edge rather than beside a narrow column.
 
 ## Shipped
 
+- `notes-app`: **Write and Preview use the whole note pane**. The old 52 rem
+  width cap applied to the scrolling textarea and preview article themselves,
+  leaving wide empty margins and a scrollbar in the middle of the pane. Both
+  now grow to the pane edge while retaining their responsive text padding;
+  history's reading preview keeps its own cap and its outer scrollbar. The
+  highlight mirror still tracks the textarea width. `web-markup.mjs` now checks
+  wide Write, collapsed Navigator, and Preview geometry. A headless Chromium
+  fixture using the production CSS reproduces the old width bug and passes
+  after the fix (see Measurements). `node --check`, `git diff --check` and
+  static `scripts/budget-check` pass. The Rust gates and full app Playwright run still
+  need a toolchain and web build in this checkout (see Blocked). No persistence,
+  Worker, auth, schema or sync change.
 - `notes-app`: **a card menu offers Select text instead of a competing native
   highlight**. On a touch screen a long-press on a note card now opens only the
   actions menu: under `@media (hover: none)` cards suppress native text
@@ -901,6 +914,7 @@ The Write-mode reading column is centered again on wide windows.
 
 | Check | Result |
 | --- | --- |
+| Editor pane width (headless Chromium fixture using production CSS) | Before: 832 px textarea in a 1328 px pane at a 1920 px viewport, with 248 px unused on each side. After: Write and Preview both 1328/1328 px; Write 1568/1568 px with Navigator collapsed; Preview 608/608 px at 960 px and 390/390 px on a phone. Write scrolls vertically in the full-width textarea. Full-app Playwright run still pending. |
 | Cloud Shell seeds and restore | base 460 MiB + target 1000 MiB (6046 MiB uncompressed); both SHA-256 verified; base+target restore 1m21s; `/home` free 1860 MiB; a real VM restart restored through the boot hook/`BASH_ENV` in 1m19s |
 | Cloud Shell worktree guard | settings worktree target 2.8 GiB (2.0 GiB debug/deps, 352 MiB incremental) moved to `/tmp/opencode/notebox-target-settings`; worker-build 360 MiB and Yarn global 282 MiB caches relocated; `/home` 4.0 GiB free before seeds; `disk-guard --check` and `budget-check` pass |
 | First build after a restore | `cargo nextest run --workspace` 53s (3.6s compile, 51.4s tests) with the target seed; `./scripts/web-build.sh` 23s when `clang` is present. Base only: nextest 4m13s, web build 6m41s. Real restart: nextest 36s, first web build 84s including on-demand `clang`, later 21s |
@@ -968,6 +982,11 @@ The Write-mode reading column is centered again on wide windows.
 
 ## Blocked
 
+- **Editor-width verification in this checkout**: Rust (`cargo`, `rustc`, `dx`)
+  and a built web app are not installed here, so the Rust gates and the updated
+  `web-markup.mjs` integration flow cannot run locally. The browser CSS layout
+  check, Node syntax and static budget gate pass; run the full gates and the
+  Playwright flow in a toolchain-equipped environment before release.
 - **Owner sign-in**: the Worker, both D1 databases and the single account exist,
   the setup secret is gone and `NBX_SERVER_URL` is set. The owner still has to
   save the generated username and password outside the repository and sign in
@@ -1029,7 +1048,12 @@ The Write-mode reading column is centered again on wide windows.
   still waits on an Android runtime and a live native login. The native desktop
   path is compile-checked and shares the engine tests, but this slice did not
   drive its login/sync threads through the UI against a live Worker.
+
 ## Next
+
+With Rust/Dioxus and a web build available, run the full gates and
+`scripts/web-markup.mjs` for the editor-width regression (wide Write/Preview
+and Navigator collapse).
 
 1. P8 finish. Accessibility, the 100 KB note, the Linux warm cold-start budget,
    the installer decision (ADR-0015) and S3 (ADR-0003) pass, and so does the
