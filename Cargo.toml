@@ -47,7 +47,7 @@ sqlite-wasm-rs = "0.5.1"
 argon2 = { version = "0.6.0", default-features = false, features = ["alloc"] }
 # The native HTTP client. rustls is the default backend, never OpenSSL.
 ureq = { version = "3.4.2", features = ["json"] }
-pulldown-cmark = "0.13.4"
+pulldown-cmark = "0.13.6"
 similar = "3.2.0"
 # P6 image ingest: pure-Rust decoding and lossy WebP encoding, so native,
 # wasm32 and Android share one code path with no C toolchain. See ADR-0008.

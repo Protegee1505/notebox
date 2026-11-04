@@ -63,6 +63,13 @@ note scrollbar at the pane's outer edge rather than beside a narrow column.
 
 ## Shipped
 
+- Workspace / `notes-core`: **patch the Markdown parser for RustSec advisories**
+  (ADR-0022). The first PR CI run (41782885170) passed the web layout checks,
+  formatting, Clippy and tests but failed `cargo deny check` on the locked
+  parser. `pulldown-cmark` is now required and locked at 0.13.6, which fixes
+  RUSTSEC-2026-0414 and RUSTSEC-2026-0433. Notebox does not enable the affected
+  wikilink option, and there are no parser-option or data changes. Re-run the
+  full CI gate before merge; no D1, auth, sync or Worker change.
 - `notes-app`: **Write and Preview use the whole note pane**. The old 52 rem
   width cap applied to the scrolling textarea and preview article themselves,
   leaving wide empty margins and a scrollbar in the middle of the pane. Both
@@ -914,6 +921,7 @@ note scrollbar at the pane's outer edge rather than beside a narrow column.
 
 | Check | Result |
 | --- | --- |
+| Editor width PR CI (run 41782885170) | Web build and `web-markup.mjs` layout check green; formatting, Clippy and native tests green; `cargo deny check` failed on an old Markdown parser. ADR-0022 patches it; rerun pending. |
 | Editor pane width (headless Chromium fixture using production CSS) | Before: 832 px textarea in a 1328 px pane at a 1920 px viewport, with 248 px unused on each side. After: Write and Preview both 1328/1328 px; Write 1568/1568 px with Navigator collapsed; Preview 608/608 px at 960 px and 390/390 px on a phone. Write scrolls vertically in the full-width textarea. Full-app Playwright run still pending. |
 | Cloud Shell seeds and restore | base 460 MiB + target 1000 MiB (6046 MiB uncompressed); both SHA-256 verified; base+target restore 1m21s; `/home` free 1860 MiB; a real VM restart restored through the boot hook/`BASH_ENV` in 1m19s |
 | Cloud Shell worktree guard | settings worktree target 2.8 GiB (2.0 GiB debug/deps, 352 MiB incremental) moved to `/tmp/opencode/notebox-target-settings`; worker-build 360 MiB and Yarn global 282 MiB caches relocated; `/home` 4.0 GiB free before seeds; `disk-guard --check` and `budget-check` pass |
@@ -982,11 +990,11 @@ note scrollbar at the pane's outer edge rather than beside a narrow column.
 
 ## Blocked
 
-- **Editor-width verification in this checkout**: Rust (`cargo`, `rustc`, `dx`)
-  and a built web app are not installed here, so the Rust gates and the updated
-  `web-markup.mjs` integration flow cannot run locally. The browser CSS layout
-  check, Node syntax and static budget gate pass; run the full gates and the
-  Playwright flow in a toolchain-equipped environment before release.
+- **Release verification in this checkout**: Rust (`cargo`, `rustc`, `dx`)
+  and a built web app are not installed here, so the Rust gates cannot run
+  locally. The PR's first CI run passed the web layout test, but its advisory
+  gate failed on `pulldown-cmark` 0.13.4. ADR-0022 documents the patch to
+  0.13.6; the full CI rerun must pass before merge or deploy.
 - **Owner sign-in**: the Worker, both D1 databases and the single account exist,
   the setup secret is gone and `NBX_SERVER_URL` is set. The owner still has to
   save the generated username and password outside the repository and sign in
@@ -1051,9 +1059,10 @@ note scrollbar at the pane's outer edge rather than beside a narrow column.
 
 ## Next
 
-With Rust/Dioxus and a web build available, run the full gates and
-`scripts/web-markup.mjs` for the editor-width regression (wide Write/Preview
-and Navigator collapse).
+Verify the patched Markdown dependency with all CI gates, including
+`cargo deny check`, and rerun `scripts/web-markup.mjs` for the editor-width
+regression (wide Write/Preview and Navigator collapse). Merge only after CI is
+green; deploy through the guarded script from a clean main checkout.
 
 1. P8 finish. Accessibility, the 100 KB note, the Linux warm cold-start budget,
    the installer decision (ADR-0015) and S3 (ADR-0003) pass, and so does the
